@@ -1,8 +1,8 @@
 <template>
   <n-space vertical :size="20">
-    <n-card embedded class="hero-card" content-style="padding: 14px 18px">
+    <n-card embedded class="hero-card" content-style="padding: 12px 18px">
       <n-flex justify="space-between" align="center" wrap>
-        <n-space align="center" :size="12">
+        <n-space align="center" :size="14">
           <div class="brand-mark">
             <img class="brand-icon" :src="aetusMarkUrl" alt="" />
           </div>
@@ -441,18 +441,18 @@ onMounted(() => {
 }
 
 .brand-mark {
-  width: 42px;
-  height: 42px;
+  width: 64px;
+  height: 56px;
   border-radius: 8px;
   display: grid;
   place-items: center;
-  background: #f2ecff;
+  background: #f6f2ff;
   border: 1px solid rgba(126, 87, 194, 0.18);
 }
 
 .brand-icon {
-  width: 32px;
-  height: 32px;
+  width: 56px;
+  height: 50px;
   object-fit: contain;
 }
 
