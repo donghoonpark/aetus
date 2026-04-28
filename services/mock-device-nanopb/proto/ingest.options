@@ -1,0 +1,8 @@
+aetus.ingest.v1.IngestEvent.device_id max_size:32
+aetus.ingest.v1.IngestEvent.boot_id max_size:32
+aetus.ingest.v1.Metric.key max_size:24
+aetus.ingest.v1.Metric.unit max_size:16
+aetus.ingest.v1.TelemetryPayload.metrics max_count:8
+aetus.ingest.v1.StatusPayload.reboot_reason max_size:24
+aetus.ingest.v1.AlertPayload.code max_size:24
+aetus.ingest.v1.AlertPayload.message max_size:80

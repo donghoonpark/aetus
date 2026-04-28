@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package aetus.ingest.v1;
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_TELEMETRY = 1;
+  EVENT_TYPE_STATUS = 2;
+  EVENT_TYPE_ALERT = 3;
+}
+
+enum DeviceStatus {
+  DEVICE_STATUS_UNSPECIFIED = 0;
+  DEVICE_STATUS_ONLINE = 1;
+  DEVICE_STATUS_DEGRADED = 2;
+  DEVICE_STATUS_OFFLINE = 3;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARN = 2;
+  SEVERITY_ERROR = 3;
+  SEVERITY_CRITICAL = 4;
+}
+
+message IngestEvent {
+  uint32 schema_version = 1;
+  string device_id = 2;
+  uint64 sequence = 3;
+  EventType event_type = 4;
+  string boot_id = 5;
+  uint32 firmware_version = 6;
+  uint64 uptime_ms = 7;
+  uint64 timestamp_ns = 8;
+
+  oneof body {
+    TelemetryPayload telemetry = 10;
+    StatusPayload status = 11;
+    AlertPayload alert = 12;
+  }
+}
+
+message TelemetryPayload {
+  repeated Metric metrics = 1;
+}
+
+message Metric {
+  string key = 1;
+
+  oneof value {
+    sint64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+    string string_value = 5;
+    bytes bytes_value = 6;
+  }
+
+  string unit = 7;
+}
+
+message StatusPayload {
+  DeviceStatus status = 1;
+  sint32 rssi = 2;
+  uint32 free_heap = 3;
+  string reboot_reason = 4;
+}
+
+message AlertPayload {
+  string code = 1;
+  Severity severity = 2;
+  string message = 3;
+}
