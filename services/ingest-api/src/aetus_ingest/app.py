@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Header, HTTPException, Request, Response, status
+from fastapi import FastAPI, Form, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -15,6 +16,8 @@ from aetus_ingest.normalize import normalize_event
 from aetus_ingest.publisher import InMemoryEventPublisher, KafkaEventPublisher
 from aetus_ingest.rate_limit import InMemoryRateLimiter, RateLimitPlan
 from aetus_ingest.schemas import ProvisionRequest, ProvisionResponse
+
+ADMIN_PAGE_SIZE = 10
 
 
 def create_app(
@@ -36,6 +39,42 @@ def create_app(
     else:
         app.state.publisher = InMemoryEventPublisher()
     app.state.rate_limiter = rate_limiter or InMemoryRateLimiter()
+
+    async def render_admin_devices_page(
+        request: Request,
+        *,
+        flash_message: str | None,
+        issued_device: DeviceRecord | None,
+        page: int,
+    ) -> HTMLResponse:
+        settings: Settings = app.state.settings
+        control_db: ControlDB = app.state.control_db
+        current_page = max(page, 1)
+        total_devices = await control_db.count_devices_readonly()
+        total_pages = max(ceil(total_devices / ADMIN_PAGE_SIZE), 1)
+        if current_page > total_pages:
+            current_page = total_pages
+        offset = (current_page - 1) * ADMIN_PAGE_SIZE
+        devices = await control_db.list_devices_readonly(limit=ADMIN_PAGE_SIZE, offset=offset)
+        return templates.TemplateResponse(
+            request,
+            "admin_devices.html",
+            {
+                "devices": devices,
+                "flash_message": flash_message,
+                "issued_device": issued_device,
+                "control_db_path": settings.control_db_path,
+                "allowed_source_cidrs": ", ".join(str(network) for network in settings.allowed_source_cidrs),
+                "current_page": current_page,
+                "page_size": ADMIN_PAGE_SIZE,
+                "total_devices": total_devices,
+                "total_pages": total_pages,
+                "has_previous": current_page > 1,
+                "has_next": current_page < total_pages,
+                "previous_page": current_page - 1,
+                "next_page": current_page + 1,
+            },
+        )
 
     @app.get("/v1/healthz")
     async def healthz() -> dict[str, str]:
@@ -162,20 +201,8 @@ def create_app(
         )
 
     @app.get("/admin/devices", response_class=HTMLResponse)
-    async def admin_devices(request: Request) -> HTMLResponse:
-        settings: Settings = app.state.settings
-        control_db: ControlDB = app.state.control_db
-        return templates.TemplateResponse(
-            request,
-            "admin_devices.html",
-            {
-                "devices": await control_db.list_devices_readonly(),
-                "flash_message": None,
-                "issued_device": None,
-                "control_db_path": settings.control_db_path,
-                "allowed_source_cidrs": ", ".join(str(network) for network in settings.allowed_source_cidrs),
-            },
-        )
+    async def admin_devices(request: Request, page: int = Query(1, ge=1)) -> HTMLResponse:
+        return await render_admin_devices_page(request, flash_message=None, issued_device=None, page=page)
 
     @app.post("/admin/devices/issue", response_class=HTMLResponse)
     async def admin_issue_device(
@@ -184,8 +211,8 @@ def create_app(
         model: str = Form("esp32-c5"),
         firmware_version: int | None = Form(None),
         site_code: str | None = Form(None),
+        page: int = Form(1),
     ) -> HTMLResponse:
-        settings: Settings = app.state.settings
         control_db: ControlDB = app.state.control_db
         issued = await control_db.issue_device_token(
             hardware_id=hardware_id,
@@ -193,16 +220,11 @@ def create_app(
             firmware_version=firmware_version,
             site_code=site_code,
         )
-        return templates.TemplateResponse(
+        return await render_admin_devices_page(
             request,
-            "admin_devices.html",
-            {
-                "devices": await control_db.list_devices_readonly(),
-                "flash_message": "Device token has been issued successfully.",
-                "issued_device": issued,
-                "control_db_path": settings.control_db_path,
-                "allowed_source_cidrs": ", ".join(str(network) for network in settings.allowed_source_cidrs),
-            },
+            flash_message="Device token has been issued successfully.",
+            issued_device=issued,
+            page=page,
         )
 
     return app

@@ -116,7 +116,15 @@ class ControlDB:
             row = await cursor.fetchone()
             return row is not None
 
-    async def list_devices_readonly(self) -> list[DeviceRecord]:
+    async def count_devices_readonly(self) -> int:
+        async with aiosqlite.connect(self._readonly_uri(), uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            await self._configure_connection_async(conn, readonly=True)
+            cursor = await conn.execute("SELECT COUNT(*) AS count FROM devices")
+            row = await cursor.fetchone()
+        return 0 if row is None else int(row["count"])
+
+    async def list_devices_readonly(self, *, limit: int = 20, offset: int = 0) -> list[DeviceRecord]:
         async with aiosqlite.connect(self._readonly_uri(), uri=True) as conn:
             conn.row_factory = sqlite3.Row
             await self._configure_connection_async(conn, readonly=True)
@@ -125,7 +133,9 @@ class ControlDB:
                 SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
                 FROM devices
                 ORDER BY created_at DESC, device_id DESC
-                """
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
             )
             rows = await cursor.fetchall()
         return [self._row_to_record(row) for row in rows]

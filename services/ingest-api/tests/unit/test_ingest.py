@@ -97,5 +97,34 @@ def test_admin_page_renders_bootstrap_and_fontawesome() -> None:
     response = client.get("/admin/devices")
 
     assert response.status_code == 200
-    assert "bootstrap" in response.text.lower()
+    assert "aetus flight control" in response.text.lower()
     assert "font-awesome" in response.text.lower()
+    assert "page 1 / 1" in response.text.lower()
+
+
+def test_admin_page_supports_pagination() -> None:
+    client, _ = make_client()
+
+    for index in range(11):
+        response = client.post(
+            "/admin/devices/issue",
+            data={
+                "hardware_id": f"esp32c5-a1b2c3d4e{index:02d}",
+                "model": "esp32-c5",
+                "firmware_version": "1002003",
+                "site_code": f"factory-{index}",
+                "page": "1",
+            },
+        )
+        assert response.status_code == 200
+
+    page_one = client.get("/admin/devices?page=1")
+    page_two = client.get("/admin/devices?page=2")
+
+    assert page_one.status_code == 200
+    assert page_two.status_code == 200
+    assert "page 1 / 2" in page_one.text.lower()
+    assert "page 2 / 2" in page_two.text.lower()
+    assert "esp32c5-012" in page_one.text
+    assert "esp32c5-002" not in page_one.text
+    assert "esp32c5-002" in page_two.text
