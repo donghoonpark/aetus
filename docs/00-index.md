@@ -9,7 +9,8 @@
 5. [[05-examples]]
 6. [[06-embedded-architecture]]
 7. [[06-1-event-driven-low-power-system-implementation-plan]]
-8. [[open-decisions]]
+8. [[07-implementation-status]]
+9. [[open-decisions]]
 
 ## 문서 맵
 
@@ -20,6 +21,7 @@
 - [[05-examples]]: FastAPI 예제 코드, nanopb 예제 코드, `.options` 예시
 - [[06-embedded-architecture]]: ESP32-C5 임베디드 구조, task 분리, 큐잉, FlashDB, nanopb
 - [[06-1-event-driven-low-power-system-implementation-plan]]: OPT3001 기반 이벤트 구동 저전력 전략, 전력 예산, 배터리 수명 계산
+- [[07-implementation-status]]: 현재 코드 구현 범위, 테스트 커버리지, 운영 제약, 다음 작업 포인트
 - [[open-decisions]]: 아직 합의가 필요한 기술 결정사항
 
 ## 빠른 요약
