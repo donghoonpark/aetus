@@ -95,6 +95,26 @@ def test_ingest_to_postgres_pipeline() -> None:
         assert provision_response.status_code == 201, provision_response.text
         provision_body = provision_response.json()
 
+        control_devices_response = httpx.get(
+            "http://127.0.0.1:18000/v1/control/devices?q=factory-a",
+            timeout=10.0,
+        )
+        assert control_devices_response.status_code == 200, control_devices_response.text
+        control_devices = control_devices_response.json()
+        assert any(item["device_id"] == provision_body["device_id"] for item in control_devices["items"])
+
+        control_status_response = httpx.get(
+            "http://127.0.0.1:18000/v1/control/status",
+            timeout=10.0,
+        )
+        assert control_status_response.status_code == 200, control_status_response.text
+        control_status = {item["name"]: item for item in control_status_response.json()["components"]}
+        assert control_status["api"]["state"] == "healthy"
+        assert control_status["control_db"]["state"] == "healthy"
+        assert control_status["kafka"]["state"] == "healthy"
+        assert control_status["kafka_connect"]["state"] == "healthy"
+        assert control_status["postgres"]["state"] == "healthy"
+
         device = NanopbMockDevice(
             device_id=provision_body["device_id"],
             token=provision_body["access_token"],

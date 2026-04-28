@@ -57,6 +57,9 @@ services/
 - `GET /v1/readyz`
 - `POST /v1/ingest`
 - `POST /v1/provision`
+- `GET /v1/control/status`
+- `GET /v1/control/devices`
+- `POST /v1/control/devices/issue`
 - `GET /admin/devices`
 - `POST /admin/devices/issue`
 
@@ -96,6 +99,7 @@ services/
 - device token 저장
 - provisioning 시 신규 token 발급
 - admin page용 device list 조회
+- control panel용 JSON API 제공
 
 ### SQLite 사용 방식
 
@@ -141,6 +145,43 @@ services/
 - 현재 admin page는 인증이 없다.
 - 분리망 내부 운영 도구라는 전제를 둔 상태다.
 - 외부 노출 환경으로 가면 별도 보호장치가 필요하다.
+
+## 3-1. Portable Vue Control Panel
+
+구현 위치:
+
+- [[../frontend/ingest-control-panel/src/IngestControlPanel.vue]]
+- [[../frontend/ingest-control-panel/src/index.ts]]
+- [[../frontend/ingest-control-panel/src/demo/App.vue]]
+- [[../frontend/ingest-control-panel/package.json]]
+
+현재 방향:
+
+- `Vue 3 + Naive UI`
+- 단일 컴포넌트 export
+- `serverUrl` prop 기반
+- 다른 admin shell에 이식 가능한 구조
+
+현재 지원 기능:
+
+- 상태 카드
+  - API
+  - Control DB
+  - Kafka
+  - Kafka Connect
+  - PostgreSQL
+- 장치 검색
+- 장치 목록 pagination
+- token 발급
+- token copy
+
+로컬 빌드:
+
+```bash
+cd frontend/ingest-control-panel
+npm install
+npm run build
+```
 
 ## 4. Kafka / Kafka Connect / PostgreSQL
 
@@ -236,7 +277,7 @@ uv run pytest -q
 
 현재 통과 기준:
 
-- `10 passed`
+- `12 passed`
 
 ### unit coverage
 
@@ -246,6 +287,8 @@ uv run pytest -q
 - 정상 reboot status 업로드
 - invalid token 거부
 - provisioning 후 발급 token으로 ingest 가능
+- control JSON API 기반 token 발급/조회
+- control status endpoint component state 확인
 - `timestamp_ns` normalize 보존
 - out-of-order `sequence` 허용
 - admin page 브랜딩 렌더
@@ -258,14 +301,16 @@ uv run pytest -q
 
 1. docker compose로 전체 스택 기동
 2. `POST /v1/provision`으로 device token 발급
-3. 발급된 token으로 protobuf ingest
-4. Kafka publish
-5. Kafka Connect sink
-6. PostgreSQL row 적재 확인
-7. `timestamp_ns` 보존 확인
-8. `received_at`이 서버 수신 시각으로 별도 기록되는지 확인
-9. `sequence`가 `2 -> 1 -> 0`처럼 꼬여 들어와도 각 row가 적재되는지 확인
-10. `source_ip`가 유효한 IP 문자열로 저장되는지 확인
+3. `GET /v1/control/devices`에서 발급 장치 조회 가능 확인
+4. `GET /v1/control/status`에서 API/Kafka/Connect/PostgreSQL 상태가 `healthy`로 보이는지 확인
+5. 발급된 token으로 protobuf ingest
+6. Kafka publish
+7. Kafka Connect sink
+8. PostgreSQL row 적재 확인
+9. `timestamp_ns` 보존 확인
+10. `received_at`이 서버 수신 시각으로 별도 기록되는지 확인
+11. `sequence`가 `2 -> 1 -> 0`처럼 꼬여 들어와도 각 row가 적재되는지 확인
+12. `source_ip`가 유효한 IP 문자열로 저장되는지 확인
 
 ## 중요 구현 이력
 
@@ -277,12 +322,15 @@ uv run pytest -q
 - `eb48551` `Add SQLite-backed provisioning and async auth reads`
 - `672f834` `Polish admin console with pagination and AETUS branding`
 - `fd86ec7` `Expand admin tooling and ingest edge-case coverage`
+- `HEAD` 이후: Vue/Naive UI control panel, control status API, JSON device APIs 추가
 
 ## 알려진 제약 / 주의사항
 
 ## 1. Admin 인증 없음
 
 현재 `/admin/devices`는 내부망 운영 도구 전제다.
+
+`/v1/control/*` JSON API도 현재 같은 전제다.
 
 필요시 다음 중 하나를 추가해야 한다.
 
@@ -339,18 +387,20 @@ uv run pytest -q
 
 - [[../services/ingest-api/src/aetus_ingest/app.py]]
 - [[../services/ingest-api/src/aetus_ingest/control_db.py]]
+- [[../services/ingest-api/src/aetus_ingest/control_status.py]]
 - [[../services/ingest-api/src/aetus_ingest/publisher.py]]
 - [[../services/ingest-api/src/aetus_ingest/normalize.py]]
 - [[../services/ingest-api/tests/unit/test_ingest.py]]
 - [[../services/ingest-api/tests/e2e/test_postgres_pipeline.py]]
 - [[../services/ingest-api/tests/helpers/nanopb_mock_device.py]]
 - [[../services/mock-device-nanopb/src/mock_device_core.c]]
+- [[../frontend/ingest-control-panel/src/IngestControlPanel.vue]]
 - [[../compose/e2e-compose.yml]]
 
 ## 추천 다음 작업
 
 - admin page 보호 방식 결정
 - control DB backend abstraction
+- control panel 인증/배포 방식 결정
 - provisioning audit log 추가
 - duplicate resend (`same device_id + boot_id + sequence`) E2E 추가
-- admin search/filter API 분리 여부 검토

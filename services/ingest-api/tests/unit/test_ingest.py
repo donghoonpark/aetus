@@ -20,6 +20,10 @@ def make_client() -> tuple[TestClient, InMemoryEventPublisher]:
         allowlist_device_ids=set(),
         allowed_hardware_ids={"esp32c5-a1b2c3d4e5f6"},
         bootstrap_token="bootstrap_shared_token",
+        kafka_bootstrap_servers="127.0.0.1:65530",
+        kafka_connect_url="http://127.0.0.1:65531",
+        postgres_dsn="postgresql://aetus:aetus@127.0.0.1:65532/aetus",
+        status_timeout_seconds=0.2,
         control_db_path=control_db_path,
     )
     publisher = InMemoryEventPublisher()
@@ -100,6 +104,44 @@ def test_provisioning_issues_token_and_ingest_reads_from_sqlite() -> None:
 
     assert upload_response.status_code == 202
     assert publisher.events[-1]["device_id"] == device_id
+
+
+def test_control_devices_json_endpoints_work() -> None:
+    client, _ = make_client()
+
+    issue_response = client.post(
+        "/v1/control/devices/issue",
+        json={
+            "hardware_id": "esp32c5-aaaaaaaaaaaa",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+            "site_code": "control-lab",
+        },
+    )
+    assert issue_response.status_code == 201
+    issued = issue_response.json()
+    assert issued["device_id"].startswith("esp32c5-")
+
+    list_response = client.get("/v1/control/devices?q=control")
+    assert list_response.status_code == 200
+    body = list_response.json()
+    assert body["total_items"] >= 1
+    assert any(item["site_code"] == "control-lab" for item in body["items"])
+
+
+def test_control_status_endpoint_returns_component_states() -> None:
+    client, _ = make_client()
+
+    response = client.get("/v1/control/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    components = {item["name"]: item for item in body["components"]}
+    assert components["api"]["state"] == "healthy"
+    assert components["control_db"]["state"] == "healthy"
+    assert components["kafka"]["state"] == "down"
+    assert components["kafka_connect"]["state"] == "down"
+    assert components["postgres"]["state"] == "down"
 
 
 def test_ingest_accepts_out_of_order_sequence_values() -> None:

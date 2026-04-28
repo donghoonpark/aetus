@@ -49,6 +49,9 @@ class Settings:
     bootstrap_window_seconds: float = 10.0
     kafka_bootstrap_servers: str = "localhost:9092"
     kafka_topic: str = "device.raw.v1"
+    kafka_connect_url: str = "http://localhost:8083"
+    postgres_dsn: str = "postgresql://aetus:aetus@localhost:5432/aetus"
+    status_timeout_seconds: float = 2.0
     control_db_path: str = "data/control.db"
     host: str = "0.0.0.0"
     port: int = 8000
@@ -75,6 +78,9 @@ class Settings:
             bootstrap_window_seconds=float(os.getenv("AETUS_BOOTSTRAP_WINDOW_SECONDS", "10")),
             kafka_bootstrap_servers=os.getenv("AETUS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
             kafka_topic=os.getenv("AETUS_KAFKA_TOPIC", "device.raw.v1"),
+            kafka_connect_url=os.getenv("AETUS_KAFKA_CONNECT_URL", "http://localhost:8083"),
+            postgres_dsn=os.getenv("AETUS_POSTGRES_DSN", "postgresql://aetus:aetus@localhost:5432/aetus"),
+            status_timeout_seconds=float(os.getenv("AETUS_STATUS_TIMEOUT_SECONDS", "2")),
             control_db_path=os.getenv("AETUS_CONTROL_DB_PATH", "data/control.db"),
             host=os.getenv("AETUS_HOST", "0.0.0.0"),
             port=int(os.getenv("AETUS_PORT", "8000")),

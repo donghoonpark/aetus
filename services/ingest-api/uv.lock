@@ -9,9 +9,11 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "kafka-python-ng" },
     { name = "protobuf" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "python-multipart" },
     { name = "uvicorn" },
 ]
@@ -19,8 +21,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "grpcio-tools" },
-    { name = "httpx" },
-    { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
 ]
 
@@ -28,9 +28,11 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
     { name = "fastapi", specifier = ">=0.116.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "kafka-python-ng", specifier = ">=2.2.3" },
     { name = "protobuf", specifier = ">=6.30.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.9" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "uvicorn", specifier = ">=0.35.0" },
 ]
@@ -38,8 +40,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "grpcio-tools", specifier = ">=1.74.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.9" },
     { name = "pytest", specifier = ">=8.4.1" },
 ]
 

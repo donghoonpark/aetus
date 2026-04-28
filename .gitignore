@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 services/mock-device-nanopb/build/
+node_modules/
+dist/
+.vite/

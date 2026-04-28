@@ -11,13 +11,34 @@ from fastapi.templating import Jinja2Templates
 from aetus_ingest.auth import extract_bearer_token, is_source_ip_allowed, verify_device_token
 from aetus_ingest.config import Settings
 from aetus_ingest.control_db import ControlDB, DeviceRecord
+from aetus_ingest.control_status import build_control_status
 from aetus_ingest.generated import ingest_pb2
 from aetus_ingest.normalize import normalize_event
 from aetus_ingest.publisher import InMemoryEventPublisher, KafkaEventPublisher
 from aetus_ingest.rate_limit import InMemoryRateLimiter, RateLimitPlan
-from aetus_ingest.schemas import ProvisionRequest, ProvisionResponse
+from aetus_ingest.schemas import (
+    ControlStatusResponse,
+    DeviceIssueRequest,
+    DeviceListResponse,
+    DeviceSummary,
+    ProvisionRequest,
+    ProvisionResponse,
+)
 
 ADMIN_PAGE_SIZE = 10
+
+
+def _to_device_summary(record: DeviceRecord) -> DeviceSummary:
+    return DeviceSummary(
+        device_id=record.device_id,
+        hardware_id=record.hardware_id,
+        token=record.token,
+        model=record.model,
+        firmware_version=record.firmware_version,
+        site_code=record.site_code,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
 
 
 def create_app(
@@ -85,6 +106,45 @@ def create_app(
     @app.get("/v1/readyz")
     async def readyz() -> dict[str, str]:
         return {"status": "ready"}
+
+    @app.get("/v1/control/status", response_model=ControlStatusResponse)
+    async def control_status() -> ControlStatusResponse:
+        settings: Settings = app.state.settings
+        return await build_control_status(settings)
+
+    @app.get("/v1/control/devices", response_model=DeviceListResponse)
+    async def control_devices(
+        page: int = Query(1, ge=1),
+        page_size: int = Query(10, ge=1, le=50),
+        q: str = Query("", max_length=100),
+    ) -> DeviceListResponse:
+        control_db: ControlDB = app.state.control_db
+        current_page = max(page, 1)
+        total_items = await control_db.count_devices_readonly(query=q)
+        total_pages = max(ceil(total_items / page_size), 1)
+        if current_page > total_pages:
+            current_page = total_pages
+        offset = (current_page - 1) * page_size
+        items = await control_db.list_devices_readonly(limit=page_size, offset=offset, query=q)
+        return DeviceListResponse(
+            items=[_to_device_summary(item) for item in items],
+            page=current_page,
+            page_size=page_size,
+            total_items=total_items,
+            total_pages=total_pages,
+            query=q,
+        )
+
+    @app.post("/v1/control/devices/issue", response_model=DeviceSummary, status_code=status.HTTP_201_CREATED)
+    async def control_issue_device(payload: DeviceIssueRequest) -> DeviceSummary:
+        control_db: ControlDB = app.state.control_db
+        issued = await control_db.issue_device_token(
+            hardware_id=payload.hardware_id,
+            model=payload.model,
+            firmware_version=payload.firmware_version,
+            site_code=payload.site_code,
+        )
+        return _to_device_summary(issued)
 
     @app.post("/v1/ingest", status_code=status.HTTP_202_ACCEPTED)
     async def ingest(
