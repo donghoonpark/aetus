@@ -45,6 +45,17 @@ def test_virtual_device_can_upload_telemetry() -> None:
     assert event["sequence"] == 0
     assert event["event_type"] == "telemetry"
     assert event["payload"]["metrics"][0]["key"] == "temperature"
+    assert event["timestamp_ns"] is None
+
+
+def test_virtual_device_preserves_timestamp_ns() -> None:
+    client, publisher = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    response = device.upload(client, device.build_telemetry(timestamp_ns=1_712_345_678_901_234_567))
+
+    assert response.status_code == 202
+    assert publisher.events[0]["timestamp_ns"] == 1_712_345_678_901_234_567
 
 
 def test_virtual_device_can_upload_reboot_status() -> None:
@@ -91,6 +102,19 @@ def test_provisioning_issues_token_and_ingest_reads_from_sqlite() -> None:
     assert publisher.events[-1]["device_id"] == device_id
 
 
+def test_ingest_accepts_out_of_order_sequence_values() -> None:
+    client, publisher = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+    device.sequence = 2
+    response_one = device.upload(client, device.build_telemetry())
+    device.sequence = 0
+    response_two = device.upload(client, device.build_telemetry())
+
+    assert response_one.status_code == 202
+    assert response_two.status_code == 202
+    assert [event["sequence"] for event in publisher.events] == [2, 0]
+
+
 def test_admin_page_renders_bootstrap_and_fontawesome() -> None:
     client, _ = make_client()
 
@@ -128,3 +152,34 @@ def test_admin_page_supports_pagination() -> None:
     assert "esp32c5-012" in page_one.text
     assert "esp32c5-002" not in page_one.text
     assert "esp32c5-002" in page_two.text
+
+
+def test_admin_page_supports_search_and_copy_controls() -> None:
+    client, _ = make_client()
+    client.post(
+        "/admin/devices/issue",
+        data={
+            "hardware_id": "esp32c5-bbbbbbbbbbbb",
+            "model": "esp32-c5",
+            "firmware_version": "1002003",
+            "site_code": "alpha-lab",
+            "page": "1",
+        },
+    )
+    client.post(
+        "/admin/devices/issue",
+        data={
+            "hardware_id": "esp32c5-cccccccccccc",
+            "model": "esp32-c5",
+            "firmware_version": "1002003",
+            "site_code": "beta-lab",
+            "page": "1",
+        },
+    )
+
+    response = client.get("/admin/devices?q=alpha")
+
+    assert response.status_code == 200
+    assert "alpha-lab" in response.text
+    assert "beta-lab" not in response.text
+    assert "data-copy-token" in response.text

@@ -116,26 +116,38 @@ class ControlDB:
             row = await cursor.fetchone()
             return row is not None
 
-    async def count_devices_readonly(self) -> int:
+    async def count_devices_readonly(self, *, query: str | None = None) -> int:
         async with aiosqlite.connect(self._readonly_uri(), uri=True) as conn:
             conn.row_factory = sqlite3.Row
             await self._configure_connection_async(conn, readonly=True)
-            cursor = await conn.execute("SELECT COUNT(*) AS count FROM devices")
+            where_clause, params = self._search_clause(query)
+            cursor = await conn.execute(
+                f"SELECT COUNT(*) AS count FROM devices{where_clause}",
+                params,
+            )
             row = await cursor.fetchone()
         return 0 if row is None else int(row["count"])
 
-    async def list_devices_readonly(self, *, limit: int = 20, offset: int = 0) -> list[DeviceRecord]:
+    async def list_devices_readonly(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        query: str | None = None,
+    ) -> list[DeviceRecord]:
         async with aiosqlite.connect(self._readonly_uri(), uri=True) as conn:
             conn.row_factory = sqlite3.Row
             await self._configure_connection_async(conn, readonly=True)
+            where_clause, params = self._search_clause(query)
             cursor = await conn.execute(
-                """
+                f"""
                 SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
                 FROM devices
+                {where_clause}
                 ORDER BY created_at DESC, device_id DESC
                 LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
+                (*params, limit, offset),
             )
             rows = await cursor.fetchall()
         return [self._row_to_record(row) for row in rows]
@@ -236,6 +248,22 @@ class ControlDB:
 
     def _readonly_uri(self) -> str:
         return f"file:{self.path}?mode=ro&cache=shared"
+
+    @staticmethod
+    def _search_clause(query: str | None) -> tuple[str, tuple[str, ...]]:
+        if not query:
+            return "", ()
+        needle = f"%{query.strip().lower()}%"
+        return (
+            """
+            WHERE
+                lower(device_id) LIKE ?
+                OR lower(hardware_id) LIKE ?
+                OR lower(COALESCE(model, '')) LIKE ?
+                OR lower(COALESCE(site_code, '')) LIKE ?
+            """,
+            (needle, needle, needle, needle),
+        )
 
     @staticmethod
     def _configure_connection(conn: sqlite3.Connection) -> None:

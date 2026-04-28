@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import ipaddress
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -39,7 +41,7 @@ def _wait_for_http(url: str, timeout: float = 120.0) -> None:
     raise RuntimeError(f"Timed out waiting for {url}: {last_error}")
 
 
-def _wait_for_row(device_id: str, timeout: float = 120.0) -> tuple[str, str, int, str]:
+def _wait_for_rows(device_id: str, expected_count: int, timeout: float = 120.0) -> list[tuple]:
     deadline = time.time() + timeout
     dsn = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
     while time.time() < deadline:
@@ -47,19 +49,26 @@ def _wait_for_row(device_id: str, timeout: float = 120.0) -> tuple[str, str, int
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT device_id, boot_id, sequence, event_type
+                    SELECT
+                        device_id,
+                        boot_id,
+                        sequence,
+                        event_type,
+                        timestamp_ns,
+                        received_at,
+                        source_ip,
+                        payload_json
                     FROM raw_device_events
                     WHERE device_id = %s
-                    ORDER BY created_at DESC
-                    LIMIT 1
+                    ORDER BY sequence DESC, created_at DESC
                     """,
                     (device_id,),
                 )
-                row = cur.fetchone()
-                if row is not None:
-                    return row
+                rows = cur.fetchall()
+                if len(rows) >= expected_count:
+                    return rows
         time.sleep(2)
-    raise RuntimeError("Timed out waiting for PostgreSQL row")
+    raise RuntimeError("Timed out waiting for PostgreSQL rows")
 
 
 @pytest.mark.e2e
@@ -91,21 +100,49 @@ def test_ingest_to_postgres_pipeline() -> None:
             token=provision_body["access_token"],
             boot_id="boot-e2e-0001",
         )
-        payload = device.build_telemetry()
+        headers = {
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": provision_body["device_id"],
+            "Authorization": f"Bearer {provision_body['access_token']}",
+        }
 
-        response = httpx.post(
+        response_first = httpx.post(
             "http://127.0.0.1:18000/v1/ingest",
-            content=payload,
-            headers={
-                "Content-Type": "application/x-protobuf",
-                "X-Device-Id": provision_body["device_id"],
-                "Authorization": f"Bearer {provision_body['access_token']}",
-            },
+            content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_567),
+            headers=headers,
             timeout=10.0,
         )
-        assert response.status_code == 202, response.text
+        assert response_first.status_code == 202, response_first.text
 
-        row = _wait_for_row(provision_body["device_id"])
-        assert row == (provision_body["device_id"], "boot-e2e-0001", 0, "telemetry")
+        device.sequence = 2
+        response_second = httpx.post(
+            "http://127.0.0.1:18000/v1/ingest",
+            content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_890),
+            headers=headers,
+            timeout=10.0,
+        )
+        assert response_second.status_code == 202, response_second.text
+
+        device.sequence = 1
+        response_third = httpx.post(
+            "http://127.0.0.1:18000/v1/ingest",
+            content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_891),
+            headers=headers,
+            timeout=10.0,
+        )
+        assert response_third.status_code == 202, response_third.text
+
+        rows = _wait_for_rows(provision_body["device_id"], expected_count=3)
+        assert rows[0][0:4] == (provision_body["device_id"], "boot-e2e-0001", 2, "telemetry")
+        assert rows[1][0:4] == (provision_body["device_id"], "boot-e2e-0001", 1, "telemetry")
+        assert rows[2][0:4] == (provision_body["device_id"], "boot-e2e-0001", 0, "telemetry")
+        assert rows[0][4] == 1_712_345_678_901_234_890
+        assert rows[1][4] == 1_712_345_678_901_234_891
+        assert rows[2][4] == 1_712_345_678_901_234_567
+        ipaddress.ip_address(rows[0][6])
+        assert '"metrics"' in rows[0][7]
+        parsed_received_at = datetime.fromisoformat(rows[2][5])
+        assert parsed_received_at.tzinfo is not None
+        assert parsed_received_at.year >= 2026
     finally:
         _docker_compose("down", "-v")

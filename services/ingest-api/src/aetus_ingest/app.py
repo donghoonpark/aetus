@@ -46,16 +46,17 @@ def create_app(
         flash_message: str | None,
         issued_device: DeviceRecord | None,
         page: int,
+        query: str = "",
     ) -> HTMLResponse:
         settings: Settings = app.state.settings
         control_db: ControlDB = app.state.control_db
         current_page = max(page, 1)
-        total_devices = await control_db.count_devices_readonly()
+        total_devices = await control_db.count_devices_readonly(query=query)
         total_pages = max(ceil(total_devices / ADMIN_PAGE_SIZE), 1)
         if current_page > total_pages:
             current_page = total_pages
         offset = (current_page - 1) * ADMIN_PAGE_SIZE
-        devices = await control_db.list_devices_readonly(limit=ADMIN_PAGE_SIZE, offset=offset)
+        devices = await control_db.list_devices_readonly(limit=ADMIN_PAGE_SIZE, offset=offset, query=query)
         return templates.TemplateResponse(
             request,
             "admin_devices.html",
@@ -73,6 +74,7 @@ def create_app(
                 "has_next": current_page < total_pages,
                 "previous_page": current_page - 1,
                 "next_page": current_page + 1,
+                "search_query": query,
             },
         )
 
@@ -201,8 +203,12 @@ def create_app(
         )
 
     @app.get("/admin/devices", response_class=HTMLResponse)
-    async def admin_devices(request: Request, page: int = Query(1, ge=1)) -> HTMLResponse:
-        return await render_admin_devices_page(request, flash_message=None, issued_device=None, page=page)
+    async def admin_devices(
+        request: Request,
+        page: int = Query(1, ge=1),
+        q: str = Query("", max_length=100),
+    ) -> HTMLResponse:
+        return await render_admin_devices_page(request, flash_message=None, issued_device=None, page=page, query=q)
 
     @app.post("/admin/devices/issue", response_class=HTMLResponse)
     async def admin_issue_device(
@@ -212,6 +218,7 @@ def create_app(
         firmware_version: int | None = Form(None),
         site_code: str | None = Form(None),
         page: int = Form(1),
+        search_query: str = Form(""),
     ) -> HTMLResponse:
         control_db: ControlDB = app.state.control_db
         issued = await control_db.issue_device_token(
@@ -225,6 +232,7 @@ def create_app(
             flash_message="Device token has been issued successfully.",
             issued_device=issued,
             page=page,
+            query=search_query,
         )
 
     return app

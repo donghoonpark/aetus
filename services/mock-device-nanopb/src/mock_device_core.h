@@ -10,7 +10,8 @@ bool encode_telemetry_event(
     size_t *encoded_size,
     const char *device_id,
     const char *boot_id,
-    uint64_t sequence
+    uint64_t sequence,
+    uint64_t timestamp_ns
 );
 
 bool encode_status_event(
@@ -20,5 +21,6 @@ bool encode_status_event(
     const char *device_id,
     const char *boot_id,
     uint64_t sequence,
-    const char *reboot_reason
+    const char *reboot_reason,
+    uint64_t timestamp_ns
 );

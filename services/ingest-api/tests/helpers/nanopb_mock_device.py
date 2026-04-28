@@ -49,16 +49,22 @@ class NanopbMockDevice:
         self.sequence = 0
         self.module = ensure_mock_device_module_built()
 
-    def _build(self, mode: str, *extra: str) -> bytes:
+    def _build(self, mode: str, *extra: str, timestamp_ns: int = 0) -> bytes:
         if mode == "telemetry":
-            return self.module.encode_telemetry(self.device_id, self.boot_id, self.sequence)
-        return self.module.encode_status(self.device_id, self.boot_id, self.sequence, extra[0] if extra else "power_on")
+            return self.module.encode_telemetry(self.device_id, self.boot_id, self.sequence, timestamp_ns)
+        return self.module.encode_status(
+            self.device_id,
+            self.boot_id,
+            self.sequence,
+            extra[0] if extra else "power_on",
+            timestamp_ns,
+        )
 
-    def build_telemetry(self) -> bytes:
-        return self._build("telemetry")
+    def build_telemetry(self, *, timestamp_ns: int = 0) -> bytes:
+        return self._build("telemetry", timestamp_ns=timestamp_ns)
 
-    def build_status(self, reboot_reason: str) -> bytes:
-        return self._build("status", reboot_reason)
+    def build_status(self, reboot_reason: str, *, timestamp_ns: int = 0) -> bytes:
+        return self._build("status", reboot_reason, timestamp_ns=timestamp_ns)
 
     def upload(self, client: TestClient, payload: bytes):
         response = client.post(

@@ -7,13 +7,20 @@
 
 #include "ingest.pb.h"
 
-static void fill_common(aetus_ingest_v1_IngestEvent *event, const char *device_id, const char *boot_id, uint64_t sequence) {
+static void fill_common(
+    aetus_ingest_v1_IngestEvent *event,
+    const char *device_id,
+    const char *boot_id,
+    uint64_t sequence,
+    uint64_t timestamp_ns
+) {
     event->schema_version = 1;
     strncpy(event->device_id, device_id, sizeof(event->device_id) - 1);
     strncpy(event->boot_id, boot_id, sizeof(event->boot_id) - 1);
     event->sequence = sequence;
     event->firmware_version = 1002003;
     event->uptime_ms = 1234;
+    event->timestamp_ns = timestamp_ns;
 }
 
 bool encode_telemetry_event(
@@ -22,10 +29,11 @@ bool encode_telemetry_event(
     size_t *encoded_size,
     const char *device_id,
     const char *boot_id,
-    uint64_t sequence
+    uint64_t sequence,
+    uint64_t timestamp_ns
 ) {
     aetus_ingest_v1_IngestEvent event = aetus_ingest_v1_IngestEvent_init_zero;
-    fill_common(&event, device_id, boot_id, sequence);
+    fill_common(&event, device_id, boot_id, sequence, timestamp_ns);
     event.event_type = aetus_ingest_v1_EventType_EVENT_TYPE_TELEMETRY;
     event.which_body = aetus_ingest_v1_IngestEvent_telemetry_tag;
     event.body.telemetry.metrics_count = 1;
@@ -52,10 +60,11 @@ bool encode_status_event(
     const char *device_id,
     const char *boot_id,
     uint64_t sequence,
-    const char *reboot_reason
+    const char *reboot_reason,
+    uint64_t timestamp_ns
 ) {
     aetus_ingest_v1_IngestEvent event = aetus_ingest_v1_IngestEvent_init_zero;
-    fill_common(&event, device_id, boot_id, sequence);
+    fill_common(&event, device_id, boot_id, sequence, timestamp_ns);
     event.event_type = aetus_ingest_v1_EventType_EVENT_TYPE_STATUS;
     event.which_body = aetus_ingest_v1_IngestEvent_status_tag;
     event.body.status.status = aetus_ingest_v1_DeviceStatus_DEVICE_STATUS_ONLINE;

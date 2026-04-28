@@ -8,7 +8,11 @@
 
 int main(int argc, char **argv) {
     if (argc < 5) {
-        fprintf(stderr, "usage: %s <telemetry|status> <device_id> <boot_id> <sequence> [reboot_reason]\n", argv[0]);
+        fprintf(
+            stderr,
+            "usage: %s <telemetry|status> <device_id> <boot_id> <sequence> [reboot_reason] [timestamp_ns]\n",
+            argv[0]
+        );
         return 1;
     }
 
@@ -22,10 +26,21 @@ int main(int argc, char **argv) {
     bool ok = false;
 
     if (strcmp(mode, "telemetry") == 0) {
-        ok = encode_telemetry_event(buffer, sizeof(buffer), &encoded_size, device_id, boot_id, sequence);
+        uint64_t timestamp_ns = argc >= 6 ? strtoull(argv[5], NULL, 10) : 0;
+        ok = encode_telemetry_event(buffer, sizeof(buffer), &encoded_size, device_id, boot_id, sequence, timestamp_ns);
     } else if (strcmp(mode, "status") == 0) {
         const char *reboot_reason = argc >= 6 ? argv[5] : "power_on";
-        ok = encode_status_event(buffer, sizeof(buffer), &encoded_size, device_id, boot_id, sequence, reboot_reason);
+        uint64_t timestamp_ns = argc >= 7 ? strtoull(argv[6], NULL, 10) : 0;
+        ok = encode_status_event(
+            buffer,
+            sizeof(buffer),
+            &encoded_size,
+            device_id,
+            boot_id,
+            sequence,
+            reboot_reason,
+            timestamp_ns
+        );
     } else {
         fprintf(stderr, "unknown mode: %s\n", mode);
         return 2;

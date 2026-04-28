@@ -12,10 +12,23 @@ namespace py = pybind11;
 
 namespace {
 
-py::bytes encode_telemetry(const std::string &device_id, const std::string &boot_id, std::uint64_t sequence) {
+py::bytes encode_telemetry(
+    const std::string &device_id,
+    const std::string &boot_id,
+    std::uint64_t sequence,
+    std::uint64_t timestamp_ns
+) {
     std::vector<std::uint8_t> buffer(512);
     std::size_t encoded_size = 0;
-    if (!encode_telemetry_event(buffer.data(), buffer.size(), &encoded_size, device_id.c_str(), boot_id.c_str(), sequence)) {
+    if (!encode_telemetry_event(
+            buffer.data(),
+            buffer.size(),
+            &encoded_size,
+            device_id.c_str(),
+            boot_id.c_str(),
+            sequence,
+            timestamp_ns
+        )) {
         throw std::runtime_error("nanopb telemetry encoding failed");
     }
 
@@ -26,7 +39,8 @@ py::bytes encode_status(
     const std::string &device_id,
     const std::string &boot_id,
     std::uint64_t sequence,
-    const std::string &reboot_reason
+    const std::string &reboot_reason,
+    std::uint64_t timestamp_ns
 ) {
     std::vector<std::uint8_t> buffer(512);
     std::size_t encoded_size = 0;
@@ -37,7 +51,8 @@ py::bytes encode_status(
             device_id.c_str(),
             boot_id.c_str(),
             sequence,
-            reboot_reason.c_str()
+            reboot_reason.c_str(),
+            timestamp_ns
         )) {
         throw std::runtime_error("nanopb status encoding failed");
     }
@@ -49,13 +64,21 @@ py::bytes encode_status(
 
 PYBIND11_MODULE(mock_device_py, m) {
     m.doc() = "Nanopb-based mock device encoder";
-    m.def("encode_telemetry", &encode_telemetry, py::arg("device_id"), py::arg("boot_id"), py::arg("sequence"));
+    m.def(
+        "encode_telemetry",
+        &encode_telemetry,
+        py::arg("device_id"),
+        py::arg("boot_id"),
+        py::arg("sequence"),
+        py::arg("timestamp_ns") = 0
+    );
     m.def(
         "encode_status",
         &encode_status,
         py::arg("device_id"),
         py::arg("boot_id"),
         py::arg("sequence"),
-        py::arg("reboot_reason") = "power_on"
+        py::arg("reboot_reason") = "power_on",
+        py::arg("timestamp_ns") = 0
     );
 }
