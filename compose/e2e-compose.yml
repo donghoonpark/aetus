@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: aetus
       POSTGRES_PASSWORD: aetus
     ports:
-      - "5432:5432"
+      - "15432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aetus -d aetus"]
       interval: 5s
@@ -18,7 +18,7 @@ services:
     build:
       context: ../services/kafka
     ports:
-      - "9092:9092"
+      - "19092:9092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -48,7 +48,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8083:8083"
+      - "18083:8083"
     environment:
       CONNECT_BOOTSTRAP_SERVERS: kafka:9092
       CONNECT_GROUP_ID: aetus-connect
@@ -60,7 +60,7 @@ services:
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
       CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "true"
       CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
       CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components
     healthcheck:
@@ -101,4 +101,4 @@ services:
       AETUS_HOST: 0.0.0.0
       AETUS_PORT: 8000
     ports:
-      - "8000:8000"
+      - "18000:8000"

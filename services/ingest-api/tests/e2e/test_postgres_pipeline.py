@@ -41,7 +41,7 @@ def _wait_for_http(url: str, timeout: float = 120.0) -> None:
 
 def _wait_for_row(timeout: float = 120.0) -> tuple[str, str, int, str]:
     deadline = time.time() + timeout
-    dsn = "postgresql://aetus:aetus@127.0.0.1:5432/aetus"
+    dsn = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
     while time.time() < deadline:
         with psycopg.connect(dsn) as conn:
             with conn.cursor() as cur:
@@ -68,8 +68,8 @@ def test_ingest_to_postgres_pipeline() -> None:
 
     _docker_compose("up", "-d", "--build")
     try:
-        _wait_for_http("http://127.0.0.1:8000/v1/healthz")
-        _wait_for_http("http://127.0.0.1:8083/")
+        _wait_for_http("http://127.0.0.1:18000/v1/healthz")
+        _wait_for_http("http://127.0.0.1:18083/")
 
         device = NanopbMockDevice(
             device_id="esp32c5-test-001",
@@ -79,7 +79,7 @@ def test_ingest_to_postgres_pipeline() -> None:
         payload = device.build_telemetry()
 
         response = httpx.post(
-            "http://127.0.0.1:8000/v1/ingest",
+            "http://127.0.0.1:18000/v1/ingest",
             content=payload,
             headers={
                 "Content-Type": "application/x-protobuf",

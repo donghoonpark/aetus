@@ -8,8 +8,29 @@ from kafka import KafkaProducer
 from aetus_ingest.config import Settings
 
 
+RAW_EVENT_SCHEMA = {
+    "type": "struct",
+    "optional": False,
+    "name": "aetus.device.raw.v1.RawDeviceEvent",
+    "fields": [
+        {"type": "string", "optional": False, "field": "request_id"},
+        {"type": "string", "optional": False, "field": "received_at"},
+        {"type": "string", "optional": False, "field": "source_ip"},
+        {"type": "int32", "optional": False, "field": "schema_version"},
+        {"type": "string", "optional": False, "field": "device_id"},
+        {"type": "string", "optional": False, "field": "boot_id"},
+        {"type": "int64", "optional": False, "field": "sequence"},
+        {"type": "string", "optional": False, "field": "event_type"},
+        {"type": "int32", "optional": True, "field": "firmware_version"},
+        {"type": "int64", "optional": True, "field": "uptime_ms"},
+        {"type": "int64", "optional": True, "field": "timestamp_ns"},
+        {"type": "string", "optional": False, "field": "payload_json"},
+    ],
+}
+
+
 def build_sink_record(event: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "request_id": event["request_id"],
         "received_at": event["received_at"],
         "source_ip": event["source_ip"],
@@ -22,6 +43,10 @@ def build_sink_record(event: dict[str, Any]) -> dict[str, Any]:
         "uptime_ms": event["uptime_ms"],
         "timestamp_ns": event["timestamp_ns"],
         "payload_json": event["payload_json"],
+    }
+    return {
+        "schema": RAW_EVENT_SCHEMA,
+        "payload": payload,
     }
 
 
