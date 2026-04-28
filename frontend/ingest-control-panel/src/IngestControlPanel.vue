@@ -441,18 +441,16 @@ onMounted(() => {
 }
 
 .brand-mark {
-  width: 64px;
-  height: 56px;
-  border-radius: 8px;
+  width: 104px;
+  height: 72px;
   display: grid;
   place-items: center;
-  background: #f6f2ff;
-  border: 1px solid rgba(126, 87, 194, 0.18);
+  background: transparent;
 }
 
 .brand-icon {
-  width: 56px;
-  height: 50px;
+  width: 100px;
+  height: 70px;
   object-fit: contain;
 }
 
