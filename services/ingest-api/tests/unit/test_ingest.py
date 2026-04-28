@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
+
 from fastapi.testclient import TestClient
 
 from aetus_ingest.app import create_app
@@ -9,14 +12,21 @@ from ..helpers.nanopb_mock_device import NanopbMockDevice
 
 
 def make_client() -> tuple[TestClient, InMemoryEventPublisher]:
+    tmpdir = tempfile.TemporaryDirectory()
+    control_db_path = str(Path(tmpdir.name) / "control.db")
     settings = Settings(
         device_tokens={"esp32c5-test-001": "devtok_test_001"},
         allowed_source_cidrs=Settings.from_env().allowed_source_cidrs,
         allowlist_device_ids=set(),
+        allowed_hardware_ids={"esp32c5-a1b2c3d4e5f6"},
+        bootstrap_token="bootstrap_shared_token",
+        control_db_path=control_db_path,
     )
     publisher = InMemoryEventPublisher()
     app = create_app(settings=settings, publisher=publisher)
-    return TestClient(app, client=("127.0.0.1", 50000)), publisher
+    client = TestClient(app, client=("127.0.0.1", 50000))
+    client._tmpdir = tmpdir  # type: ignore[attr-defined]
+    return client, publisher
 
 
 def test_virtual_device_can_upload_telemetry() -> None:
@@ -55,3 +65,37 @@ def test_ingest_rejects_invalid_token() -> None:
     response = device.upload(client, device.build_telemetry())
 
     assert response.status_code == 401
+
+
+def test_provisioning_issues_token_and_ingest_reads_from_sqlite() -> None:
+    client, publisher = make_client()
+    provision_response = client.post(
+        "/v1/provision",
+        json={
+            "hardware_id": "esp32c5-a1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+            "site_code": "factory-a",
+        },
+        headers={"Authorization": "Bearer bootstrap_shared_token"},
+    )
+    assert provision_response.status_code == 201
+    provision_body = provision_response.json()
+    issued_token = provision_body["access_token"]
+    device_id = provision_body["device_id"]
+
+    device = NanopbMockDevice(device_id=device_id, token=issued_token)
+    upload_response = device.upload(client, device.build_telemetry())
+
+    assert upload_response.status_code == 202
+    assert publisher.events[-1]["device_id"] == device_id
+
+
+def test_admin_page_renders_bootstrap_and_fontawesome() -> None:
+    client, _ = make_client()
+
+    response = client.get("/admin/devices")
+
+    assert response.status_code == 200
+    assert "bootstrap" in response.text.lower()
+    assert "font-awesome" in response.text.lower()

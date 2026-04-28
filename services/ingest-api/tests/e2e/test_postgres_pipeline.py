@@ -39,7 +39,7 @@ def _wait_for_http(url: str, timeout: float = 120.0) -> None:
     raise RuntimeError(f"Timed out waiting for {url}: {last_error}")
 
 
-def _wait_for_row(timeout: float = 120.0) -> tuple[str, str, int, str]:
+def _wait_for_row(device_id: str, timeout: float = 120.0) -> tuple[str, str, int, str]:
     deadline = time.time() + timeout
     dsn = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
     while time.time() < deadline:
@@ -49,10 +49,11 @@ def _wait_for_row(timeout: float = 120.0) -> tuple[str, str, int, str]:
                     """
                     SELECT device_id, boot_id, sequence, event_type
                     FROM raw_device_events
-                    WHERE device_id = 'esp32c5-test-001'
+                    WHERE device_id = %s
                     ORDER BY created_at DESC
                     LIMIT 1
-                    """
+                    """,
+                    (device_id,),
                 )
                 row = cur.fetchone()
                 if row is not None:
@@ -71,9 +72,23 @@ def test_ingest_to_postgres_pipeline() -> None:
         _wait_for_http("http://127.0.0.1:18000/v1/healthz")
         _wait_for_http("http://127.0.0.1:18083/")
 
+        provision_response = httpx.post(
+            "http://127.0.0.1:18000/v1/provision",
+            json={
+                "hardware_id": "esp32c5-a1b2c3d4e5f6",
+                "model": "esp32-c5",
+                "firmware_version": 1002003,
+                "site_code": "factory-a",
+            },
+            headers={"Authorization": "Bearer bootstrap_shared_token"},
+            timeout=10.0,
+        )
+        assert provision_response.status_code == 201, provision_response.text
+        provision_body = provision_response.json()
+
         device = NanopbMockDevice(
-            device_id="esp32c5-test-001",
-            token="devtok_test_001",
+            device_id=provision_body["device_id"],
+            token=provision_body["access_token"],
             boot_id="boot-e2e-0001",
         )
         payload = device.build_telemetry()
@@ -83,14 +98,14 @@ def test_ingest_to_postgres_pipeline() -> None:
             content=payload,
             headers={
                 "Content-Type": "application/x-protobuf",
-                "X-Device-Id": "esp32c5-test-001",
-                "Authorization": "Bearer devtok_test_001",
+                "X-Device-Id": provision_body["device_id"],
+                "Authorization": f"Bearer {provision_body['access_token']}",
             },
             timeout=10.0,
         )
         assert response.status_code == 202, response.text
 
-        row = _wait_for_row()
-        assert row == ("esp32c5-test-001", "boot-e2e-0001", 0, "telemetry")
+        row = _wait_for_row(provision_body["device_id"])
+        assert row == (provision_body["device_id"], "boot-e2e-0001", 0, "telemetry")
     finally:
         _docker_compose("down", "-v")

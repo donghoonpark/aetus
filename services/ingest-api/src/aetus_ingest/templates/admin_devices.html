@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AETUS Device Provisioning</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+    <style>
+      body {
+        background:
+          radial-gradient(circle at top left, rgba(13, 110, 253, 0.16), transparent 28%),
+          linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
+        min-height: 100vh;
+      }
+      .hero-card {
+        border: 0;
+        box-shadow: 0 18px 42px rgba(31, 41, 55, 0.12);
+        border-radius: 1.5rem;
+      }
+      .glass-panel {
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(10px);
+      }
+      .token-box {
+        font-family: "SFMono-Regular", Menlo, monospace;
+        word-break: break-all;
+      }
+      .badge-soft {
+        background: rgba(13, 110, 253, 0.12);
+        color: #0d6efd;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container py-5">
+      <div class="hero-card glass-panel p-4 p-lg-5">
+        <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3 mb-4">
+          <div>
+            <div class="d-inline-flex align-items-center gap-2 badge rounded-pill badge-soft px-3 py-2 mb-3">
+              <i class="fa-solid fa-satellite-dish"></i>
+              <span>Provisioning Console</span>
+            </div>
+            <h1 class="display-6 fw-semibold mb-2">Device Token Issuer</h1>
+            <p class="text-secondary mb-0">Generate or reissue device tokens into SQLite control DB for ESP32-C5 devices.</p>
+          </div>
+          <div class="text-secondary small">
+            <div><i class="fa-solid fa-database me-2"></i>{{ control_db_path }}</div>
+            <div><i class="fa-solid fa-network-wired me-2"></i>{{ allowed_source_cidrs }}</div>
+          </div>
+        </div>
+
+        {% if flash_message %}
+        <div class="alert alert-success border-0 shadow-sm">
+          <div class="d-flex align-items-start gap-3">
+            <i class="fa-solid fa-circle-check fs-4 mt-1"></i>
+            <div>
+              <div class="fw-semibold mb-1">{{ flash_message }}</div>
+              {% if issued_device %}
+              <div class="small text-secondary mb-2">Device ID: <span class="fw-semibold text-dark">{{ issued_device.device_id }}</span></div>
+              <div class="token-box bg-light rounded-3 px-3 py-2 border">{{ issued_device.token }}</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="row g-4">
+          <div class="col-lg-5">
+            <div class="card border-0 shadow-sm h-100">
+              <div class="card-body p-4">
+                <h2 class="h4 mb-3"><i class="fa-solid fa-key me-2 text-primary"></i>Issue Token</h2>
+                <form method="post" action="/admin/devices/issue" class="row g-3">
+                  <div class="col-12">
+                    <label class="form-label">Hardware ID</label>
+                    <input name="hardware_id" class="form-control form-control-lg" placeholder="esp32c5-a1b2c3d4e5f6" required>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">Model</label>
+                    <input name="model" class="form-control" value="esp32-c5">
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">Firmware Version</label>
+                    <input name="firmware_version" class="form-control" type="number" placeholder="1002003">
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label">Site Code</label>
+                    <input name="site_code" class="form-control" placeholder="factory-a">
+                  </div>
+                  <div class="col-12 d-grid">
+                    <button type="submit" class="btn btn-primary btn-lg">
+                      <i class="fa-solid fa-wand-magic-sparkles me-2"></i>Issue Device Token
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-7">
+            <div class="card border-0 shadow-sm h-100">
+              <div class="card-body p-4">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                  <h2 class="h4 mb-0"><i class="fa-solid fa-microchip me-2 text-primary"></i>Issued Devices</h2>
+                  <span class="badge text-bg-dark">{{ devices|length }} devices</span>
+                </div>
+                <div class="table-responsive">
+                  <table class="table align-middle">
+                    <thead>
+                      <tr>
+                        <th>Device</th>
+                        <th>Hardware ID</th>
+                        <th>Site</th>
+                        <th>Updated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for device in devices %}
+                      <tr>
+                        <td>
+                          <div class="fw-semibold">{{ device.device_id }}</div>
+                          <div class="small text-secondary">
+                            <i class="fa-solid fa-tag me-1"></i>{{ device.model or "-" }}
+                          </div>
+                        </td>
+                        <td class="small">{{ device.hardware_id }}</td>
+                        <td>{{ device.site_code or "-" }}</td>
+                        <td class="small text-secondary">{{ device.updated_at }}</td>
+                      </tr>
+                      {% else %}
+                      <tr>
+                        <td colspan="4" class="text-center text-secondary py-4">
+                          <i class="fa-regular fa-folder-open fa-2x mb-2 d-block"></i>
+                          No device tokens have been issued yet.
+                        </td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+  </html>
