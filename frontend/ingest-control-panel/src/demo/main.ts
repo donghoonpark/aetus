@@ -1,14 +1,10 @@
-import { createApp } from "vue";
+import { createApp, h } from "vue";
 import { NConfigProvider } from "naive-ui";
 import App from "./App.vue";
 
 const app = createApp({
   components: { App, NConfigProvider },
-  template: `
-    <n-config-provider>
-      <App />
-    </n-config-provider>
-  `,
+  render: () => h(NConfigProvider, null, { default: () => h(App) }),
 });
 
 app.mount("#app");

@@ -1,15 +1,14 @@
 <template>
   <n-space vertical :size="20">
-    <n-card embedded class="hero-card">
+    <n-card embedded class="hero-card" content-style="padding: 14px 18px">
       <n-flex justify="space-between" align="center" wrap>
-        <n-space align="center" :size="16">
+        <n-space align="center" :size="12">
           <div class="brand-mark">
-            <span class="brand-icon">🦅</span>
+            <img class="brand-icon" :src="aetusMarkUrl" alt="" />
           </div>
           <div>
             <n-tag round type="warning" size="small">AETUS Flight Control</n-tag>
             <h1 class="hero-title">{{ title }}</h1>
-            <p class="hero-subtitle">Portable Vue + Naive UI control panel for ingest operations.</p>
           </div>
         </n-space>
         <n-space vertical :size="4" align="end">
@@ -63,9 +62,28 @@
               <n-alert v-if="issuedDevice" type="success" title="Issued successfully">
                 <n-space vertical :size="8">
                   <n-text><strong>{{ issuedDevice.device_id }}</strong> for {{ issuedDevice.hardware_id }}</n-text>
-                  <n-flex justify="space-between" align="center">
-                    <code class="token-code">{{ issuedDevice.token }}</code>
-                    <n-button size="small" secondary @click="copyToken(issuedDevice.token)">Copy</n-button>
+                  <n-flex justify="space-between" align="center" class="token-cell">
+                    <code class="token-code">{{ displayToken(issuedDevice.token, isTokenVisible(issuedDevice.device_id)) }}</code>
+                    <n-space :size="2" class="token-actions">
+                      <n-button
+                        size="medium"
+                        secondary
+                        circle
+                        :title="isTokenVisible(issuedDevice.device_id) ? 'Hide token' : 'Show token'"
+                        @click="toggleTokenVisibility(issuedDevice.device_id)"
+                      >
+                        <n-icon :component="isTokenVisible(issuedDevice.device_id) ? EyeOff : Eye" />
+                      </n-button>
+                      <n-button
+                        size="medium"
+                        secondary
+                        circle
+                        title="Copy token"
+                        @click="copyToken(issuedDevice.token)"
+                      >
+                        <n-icon :component="Copy" />
+                      </n-button>
+                    </n-space>
                   </n-flex>
                 </n-space>
               </n-alert>
@@ -122,6 +140,8 @@
 
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref } from "vue";
+import { Copy, Eye, EyeOff } from "lucide-vue-next";
+import aetusMarkUrl from "./assets/aetus-mark.png";
 import {
   NAlert,
   NButton,
@@ -133,6 +153,7 @@ import {
   NFormItem,
   NGrid,
   NGridItem,
+  NIcon,
   NInput,
   NInputNumber,
   NPagination,
@@ -171,6 +192,8 @@ interface DeviceListResponse {
   query: string;
 }
 
+const SERVICE_ORDER = ["api", "control_db", "kafka", "kafka_connect", "postgres"] as const;
+
 const props = withDefaults(
   defineProps<{
     serverUrl: string;
@@ -178,16 +201,17 @@ const props = withDefaults(
     pageSize?: number;
   }>(),
   {
-    title: "Ingest Control Panel",
+    title: "AETUS Control Panel",
     pageSize: 10,
   },
 );
 
 const { message } = createDiscreteApi(["message"]);
 const normalizedServerUrl = computed(() => props.serverUrl.replace(/\/$/, ""));
-const statuses = ref<ComponentStatus[]>([]);
+const statuses = ref<ComponentStatus[]>(defaultStatuses("unknown", "Waiting for status check"));
 const devices = ref<DeviceSummary[]>([]);
 const issuedDevice = ref<DeviceSummary | null>(null);
+const visibleTokenIds = ref<Set<string>>(new Set());
 const query = ref("");
 const page = ref(1);
 const pageSize = ref(props.pageSize);
@@ -216,14 +240,44 @@ const columns = computed<DataTableColumns<DeviceSummary>>(() => [
     render: (row) =>
       h(
         NFlex,
-        { justify: "space-between", align: "center", size: 8, wrap: false },
+        { justify: "space-between", align: "center", size: 8, wrap: false, class: "token-cell" },
         {
           default: () => [
-            h("code", { class: "token-code token-inline" }, row.token),
+            h("code", { class: "token-code token-inline" }, displayToken(row.token, isTokenVisible(row.device_id))),
             h(
-              NButton,
-              { size: "tiny", secondary: true, onClick: () => copyToken(row.token) },
-              { default: () => "Copy" },
+              NSpace,
+              { size: 2, class: "token-actions" },
+              {
+                default: () => [
+                  h(
+                    NButton,
+                    {
+                      size: "small",
+                      secondary: true,
+                      circle: true,
+                      title: isTokenVisible(row.device_id) ? "Hide token" : "Show token",
+                      onClick: () => toggleTokenVisibility(row.device_id),
+                    },
+                    {
+                      default: () =>
+                        h(NIcon, null, {
+                          default: () => h(isTokenVisible(row.device_id) ? EyeOff : Eye),
+                        }),
+                    },
+                  ),
+                  h(
+                    NButton,
+                    {
+                      size: "small",
+                      secondary: true,
+                      circle: true,
+                      title: "Copy token",
+                      onClick: () => copyToken(row.token),
+                    },
+                    { default: () => h(NIcon, null, { default: () => h(Copy) }) },
+                  ),
+                ],
+              },
             ),
           ],
         },
@@ -250,8 +304,9 @@ async function fetchStatus() {
   loading.status = true;
   try {
     const response = await fetchJson<{ components: ComponentStatus[] }>("/v1/control/status");
-    statuses.value = response.components;
+    statuses.value = mergeStatuses(response.components);
   } catch (error) {
+    statuses.value = defaultStatuses("down", `Status API unavailable: ${(error as Error).message}`);
     message.error(`Failed to load status: ${(error as Error).message}`);
   } finally {
     loading.status = false;
@@ -309,6 +364,27 @@ async function copyToken(token: string) {
   message.success("Token copied");
 }
 
+function displayToken(token: string, visible: boolean): string {
+  if (visible) {
+    return token;
+  }
+  return "••••••";
+}
+
+function isTokenVisible(deviceId: string): boolean {
+  return visibleTokenIds.value.has(deviceId);
+}
+
+function toggleTokenVisibility(deviceId: string) {
+  const next = new Set(visibleTokenIds.value);
+  if (next.has(deviceId)) {
+    next.delete(deviceId);
+  } else {
+    next.add(deviceId);
+  }
+  visibleTokenIds.value = next;
+}
+
 function applyQuery() {
   page.value = 1;
   void fetchDevices();
@@ -326,6 +402,15 @@ function labelFor(name: string): string {
     kafka_connect: "Kafka Connect",
     postgres: "PostgreSQL",
   }[name] ?? name;
+}
+
+function defaultStatuses(state: StatusState, detail: string): ComponentStatus[] {
+  return SERVICE_ORDER.map((name) => ({ name, state, detail }));
+}
+
+function mergeStatuses(incoming: ComponentStatus[]): ComponentStatus[] {
+  const byName = new Map(incoming.map((status) => [status.name, status]));
+  return SERVICE_ORDER.map((name) => byName.get(name) ?? { name, state: "unknown", detail: "No status returned" });
 }
 
 function tagType(state: StatusState) {
@@ -349,36 +434,33 @@ onMounted(() => {
 
 <style scoped>
 .hero-card {
-  border-radius: 24px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.84);
   backdrop-filter: blur(10px);
-  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.1);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
 .brand-mark {
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
   display: grid;
   place-items: center;
-  background: linear-gradient(145deg, #12324a, #204e72);
-  box-shadow: 0 18px 28px rgba(18, 50, 74, 0.25);
+  background: #f2ecff;
+  border: 1px solid rgba(126, 87, 194, 0.18);
 }
 
 .brand-icon {
-  font-size: 28px;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 
 .hero-title {
-  margin: 10px 0 6px;
-  font-size: 28px;
+  margin: 6px 0 0;
+  font-size: 20px;
   font-weight: 700;
-  color: #17324a;
-}
-
-.hero-subtitle {
-  margin: 0;
-  color: #5f7287;
+  color: #33205f;
 }
 
 .signal-dot {
@@ -414,8 +496,17 @@ onMounted(() => {
   font-size: 12px;
 }
 
+.token-cell {
+  width: 100%;
+  min-width: 240px;
+}
+
+.token-actions {
+  margin-left: auto;
+}
+
 .token-inline {
-  max-width: 220px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -5,6 +5,7 @@ from math import ceil
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Header, HTTPException, Query, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -48,6 +49,13 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="AETUS Ingest Server", version="0.1.0")
     app.state.settings = settings or Settings.from_env()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(app.state.settings.cors_origins),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Device-Id"],
+    )
     app.state.control_db = ControlDB(app.state.settings.control_db_path)
     app.state.control_db.initialize()
     app.state.control_db.seed_hardware_allowlist(app.state.settings.allowed_hardware_ids)

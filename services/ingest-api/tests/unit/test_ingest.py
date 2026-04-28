@@ -144,6 +144,21 @@ def test_control_status_endpoint_returns_component_states() -> None:
     assert components["postgres"]["state"] == "down"
 
 
+def test_control_api_allows_vue_dev_origin() -> None:
+    client, _ = make_client()
+
+    response = client.options(
+        "/v1/control/status",
+        headers={
+            "Origin": "http://127.0.0.1:4173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:4173"
+
+
 def test_ingest_accepts_out_of_order_sequence_values() -> None:
     client, publisher = make_client()
     device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")

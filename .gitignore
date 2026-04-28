@@ -7,3 +7,7 @@ services/mock-device-nanopb/build/
 node_modules/
 dist/
 .vite/
+.playwright-cli/
+.uv-cache/
+services/ingest-api/data/
+frontend/ingest-control-panel/panel*.png

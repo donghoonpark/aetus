@@ -22,6 +22,10 @@ def _parse_list(raw: str) -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+def _parse_origin_list(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 def _parse_cidrs(raw: str) -> tuple[ipaddress._BaseNetwork, ...]:
     networks = []
     for item in raw.split(","):
@@ -47,11 +51,12 @@ class Settings:
     allowlist_burst: int = 20
     bootstrap_requests_per_window: int = 1
     bootstrap_window_seconds: float = 10.0
-    kafka_bootstrap_servers: str = "localhost:9092"
+    kafka_bootstrap_servers: str = "127.0.0.1:19092"
     kafka_topic: str = "device.raw.v1"
-    kafka_connect_url: str = "http://localhost:8083"
-    postgres_dsn: str = "postgresql://aetus:aetus@localhost:5432/aetus"
+    kafka_connect_url: str = "http://127.0.0.1:18083"
+    postgres_dsn: str = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
     status_timeout_seconds: float = 2.0
+    cors_origins: tuple[str, ...] = ("http://127.0.0.1:4173", "http://localhost:4173")
     control_db_path: str = "data/control.db"
     host: str = "0.0.0.0"
     port: int = 8000
@@ -76,11 +81,14 @@ class Settings:
             allowlist_burst=int(os.getenv("AETUS_ALLOWLIST_INGEST_BURST", "20")),
             bootstrap_requests_per_window=int(os.getenv("AETUS_BOOTSTRAP_REQUESTS_PER_WINDOW", "1")),
             bootstrap_window_seconds=float(os.getenv("AETUS_BOOTSTRAP_WINDOW_SECONDS", "10")),
-            kafka_bootstrap_servers=os.getenv("AETUS_KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+            kafka_bootstrap_servers=os.getenv("AETUS_KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:19092"),
             kafka_topic=os.getenv("AETUS_KAFKA_TOPIC", "device.raw.v1"),
-            kafka_connect_url=os.getenv("AETUS_KAFKA_CONNECT_URL", "http://localhost:8083"),
-            postgres_dsn=os.getenv("AETUS_POSTGRES_DSN", "postgresql://aetus:aetus@localhost:5432/aetus"),
+            kafka_connect_url=os.getenv("AETUS_KAFKA_CONNECT_URL", "http://127.0.0.1:18083"),
+            postgres_dsn=os.getenv("AETUS_POSTGRES_DSN", "postgresql://aetus:aetus@127.0.0.1:15432/aetus"),
             status_timeout_seconds=float(os.getenv("AETUS_STATUS_TIMEOUT_SECONDS", "2")),
+            cors_origins=_parse_origin_list(
+                os.getenv("AETUS_CORS_ORIGINS", "http://127.0.0.1:4173,http://localhost:4173")
+            ),
             control_db_path=os.getenv("AETUS_CONTROL_DB_PATH", "data/control.db"),
             host=os.getenv("AETUS_HOST", "0.0.0.0"),
             port=int(os.getenv("AETUS_PORT", "8000")),
