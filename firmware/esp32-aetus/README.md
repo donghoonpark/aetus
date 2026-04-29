@@ -17,7 +17,8 @@ firmware/esp32-aetus/
     aetus/      # Thread-safe upload API, uploader task, nanopb encode, HTTP client
     nanopb/     # Minimal nanopb runtime used by the aetus component
   examples/
-    cpp-basic/  # Standalone ESP-IDF app showing the C++20 wrapper API
+    cpp-basic/        # Standalone ESP-IDF app showing the C++20 wrapper API
+    cpp-light-sleep/  # C++20 app with ESP-IDF PM, tickless idle, and auto light sleep enabled
 ```
 
 ## Add To An ESP-IDF App
@@ -283,7 +284,6 @@ extern "C" void app_main(void)
 
 - Queue persistence is in memory only.
 - FlashDB durable backlog integration is the next firmware slice.
-- NimBLE provisioning or diagnostics is not included in this component yet.
 - The component owns Wi-Fi station startup. If an app already owns Wi-Fi, split the connectivity adapter before productizing.
 
 ## Current Consumer
@@ -292,9 +292,10 @@ extern "C" void app_main(void)
 
 ## Example Apps
 
-This package includes a local C++ example:
+This package includes local C++ examples:
 
 - `firmware/esp32-aetus/examples/cpp-basic`: standalone ESP-IDF app using the C++20 wrapper, RTC sync, status event, telemetry metrics, and immediate flush.
+- `firmware/esp32-aetus/examples/cpp-light-sleep`: standalone ESP-IDF app with `CONFIG_PM_ENABLE`, FreeRTOS tickless idle, Wi-Fi power save, and automatic light sleep enabled. It registers ESP-IDF light-sleep callbacks and logs `light_sleep_stats` so HIL runs can confirm that the idle windows are actually entering light sleep.
 
 The example reads Wi-Fi/API credentials from environment variables at CMake configure time. For local HIL testing, keep those values in the untracked repository-level `.env.hil` file and build it with:
 
@@ -307,6 +308,29 @@ idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 reconfigure
 ```
 
 Set `AETUS_WIFI_AUTH=peap` and `AETUS_WIFI_ID=<id>` to build the same example for WPA2-Enterprise PEAP. If `AETUS_WIFI_AUTH` is omitted, the example uses the normal PSK path. Use `reconfigure` after changing these environment variables because CMake does not always notice environment-only changes.
+
+For the light-sleep example, use the same environment variables. `AETUS_UPLOAD_INTERVAL_MS` defaults to `60000` and `AETUS_SAMPLE_INTERVAL_MS` defaults to `30000` so the device has obvious idle windows between sample production and upload work.
+
+```bash
+set -a
+source .env.hil
+set +a
+source "$IDF_PATH/export.sh"
+idf.py -C firmware/esp32-aetus/examples/cpp-light-sleep set-target esp32c5 reconfigure build
+idf.py -C firmware/esp32-aetus/examples/cpp-light-sleep -p /dev/cu.usbmodem1101 flash monitor
+```
+
+Expected boot logs include:
+
+```text
+auto light sleep enabled max_freq=240MHz min_freq=40MHz tickless=1
+light sleep entry/exit callbacks registered
+light_sleep_stats entries=<n> exits=<n> last_ms=<ms> total_ms=<ms>
+```
+
+On ESP32-C5 boards using the native USB-Serial/JTAG console, successful light sleep can disconnect the monitor with an error such as `Device not configured`. That is expected for low-power HIL runs unless the board is wired to a separate UART console or the application explicitly keeps USB awake. For current/power measurements, prefer an external meter and treat the callback counters as best-effort diagnostics when the console remains available.
+
+The example intentionally does not start BLE provisioning by default. Continuous BLE advertising or a connected central can hold radio/PM locks and make light-sleep behavior harder to observe. Keep provisioning in `cpp-basic`, and use `cpp-light-sleep` when measuring idle power behavior.
 
 The repository-level `firmware/examples` directory also contains standalone ESP-IDF apps that validate the intended developer experience:
 
