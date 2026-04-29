@@ -215,6 +215,9 @@ static int write_text(struct os_mbuf *om, char *target, size_t target_size)
     if (rc != 0) {
         return BLE_ATT_ERR_UNLIKELY;
     }
+    while (len > 0 && (target[len - 1] == '\n' || target[len - 1] == '\r')) {
+        len--;
+    }
     target[len] = '\0';
     return 0;
 }
@@ -309,13 +312,29 @@ static int provisioning_write(aetus_provisioning_field_t field, struct os_mbuf *
 
     switch (field) {
     case AETUS_PROV_FIELD_WIFI_SSID:
-        return write_text(om, s_prov.wifi_ssid, sizeof(s_prov.wifi_ssid));
+        rc = write_text(om, s_prov.wifi_ssid, sizeof(s_prov.wifi_ssid));
+        if (rc == 0) {
+            ESP_LOGI(TAG, "provisioning write wifi_ssid len=%u", (unsigned)strlen(s_prov.wifi_ssid));
+        }
+        return rc;
     case AETUS_PROV_FIELD_WIFI_AUTH:
-        return read_auth_from_mbuf(om, &s_prov.config.wifi_auth);
+        rc = read_auth_from_mbuf(om, &s_prov.config.wifi_auth);
+        if (rc == 0) {
+            ESP_LOGI(TAG, "provisioning write wifi_auth=%s", s_prov.config.wifi_auth == AETUS_WIFI_AUTH_PEAP ? "peap" : "psk");
+        }
+        return rc;
     case AETUS_PROV_FIELD_WIFI_ID:
-        return write_text(om, s_prov.wifi_identity, sizeof(s_prov.wifi_identity));
+        rc = write_text(om, s_prov.wifi_identity, sizeof(s_prov.wifi_identity));
+        if (rc == 0) {
+            ESP_LOGI(TAG, "provisioning write wifi_id len=%u", (unsigned)strlen(s_prov.wifi_identity));
+        }
+        return rc;
     case AETUS_PROV_FIELD_WIFI_PASSWORD:
-        return write_text(om, s_prov.wifi_password, sizeof(s_prov.wifi_password));
+        rc = write_text(om, s_prov.wifi_password, sizeof(s_prov.wifi_password));
+        if (rc == 0) {
+            ESP_LOGI(TAG, "provisioning write wifi_password len=%u", (unsigned)strlen(s_prov.wifi_password));
+        }
+        return rc;
     case AETUS_PROV_FIELD_INGEST_URL:
         return write_text(om, s_prov.ingest_url, sizeof(s_prov.ingest_url));
     case AETUS_PROV_FIELD_TIME_URL:
@@ -343,11 +362,19 @@ static int provisioning_write(aetus_provisioning_field_t field, struct os_mbuf *
         s_prov.config.connected_led_gpio = (int)number;
         return rc;
     case AETUS_PROV_FIELD_APPLY:
+        ESP_LOGI(
+            TAG,
+            "provisioning apply ssid=%s auth=%s password_len=%u",
+            s_prov.wifi_ssid,
+            s_prov.config.wifi_auth == AETUS_WIFI_AUTH_PEAP ? "peap" : "psk",
+            (unsigned)strlen(s_prov.wifi_password)
+        );
         rc = aetus_update_config(&s_prov.config);
         if (rc != ESP_OK) {
             ESP_LOGE(TAG, "config apply failed: %s", esp_err_to_name(rc));
             return BLE_ATT_ERR_UNLIKELY;
         }
+        ESP_LOGI(TAG, "provisioning apply complete");
         if (s_prov.config_changed_cb != NULL) {
             s_prov.config_changed_cb(&s_prov.config, s_prov.user_ctx);
         }

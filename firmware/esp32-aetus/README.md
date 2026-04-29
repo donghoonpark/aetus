@@ -92,6 +92,8 @@ void app_main(void)
 
 `aetus_start_provisioning()` starts a NimBLE GATT server that can receive Wi-Fi and upload configuration at runtime. The provisioning service keeps a pending config buffer; writes update the pending values, and writing any value to the `apply` characteristic calls `aetus_update_config()`.
 
+When testing with generic tools such as nRF Connect, remember that writing `wifi_password` only updates the pending password. The device does not reconnect until the client also writes any value, for example `1`, to the `apply` characteristic.
+
 ```c
 static void on_connection_check(
     uint16_t conn_handle,

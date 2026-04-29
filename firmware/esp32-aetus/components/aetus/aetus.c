@@ -74,6 +74,7 @@ typedef struct {
     uint64_t sequence;
     char boot_id[32];
     bool wifi_started;
+    bool wifi_reconfiguring;
 } aetus_ctx_t;
 
 static aetus_ctx_t s_ctx;
@@ -174,6 +175,10 @@ static void wifi_event_handler(
         if (ctx->config.connected_led_enabled) {
             gpio_set_level((gpio_num_t)ctx->config.connected_led_gpio, 0);
         }
+        if (ctx->wifi_reconfiguring) {
+            ESP_LOGI(TAG, "wifi disconnected during config update; reconnect deferred");
+            return;
+        }
         ESP_LOGW(TAG, "wifi disconnected, reconnecting");
         esp_wifi_connect();
         return;
@@ -263,6 +268,13 @@ static esp_err_t wifi_apply_sta_config(aetus_ctx_t *ctx)
     if (ctx->config.wifi_auth == AETUS_WIFI_AUTH_PEAP) {
         ESP_RETURN_ON_ERROR(wifi_configure_peap(&ctx->config), TAG, "wifi peap config failed");
     }
+    ESP_LOGI(
+        TAG,
+        "wifi config applied ssid=%s auth=%s password_len=%u",
+        ctx->config.wifi_ssid,
+        ctx->config.wifi_auth == AETUS_WIFI_AUTH_PEAP ? "peap" : "psk",
+        (unsigned)strlen(ctx->config.wifi_password)
+    );
     return ESP_OK;
 }
 
@@ -1003,13 +1015,19 @@ esp_err_t aetus_update_config(const aetus_config_t *config)
         xTimerChangePeriod(s_ctx.upload_timer, pdMS_TO_TICKS(s_ctx.config.upload_interval_ms), 0);
     }
     if (s_ctx.wifi_started) {
+        esp_err_t err = ESP_OK;
         xEventGroupClearBits(s_ctx.events, AETUS_WIFI_CONNECTED_BIT);
         if (s_ctx.config.connected_led_enabled) {
             gpio_set_level((gpio_num_t)s_ctx.config.connected_led_gpio, 0);
         }
-        ESP_RETURN_ON_ERROR(wifi_apply_sta_config(&s_ctx), TAG, "wifi config update failed");
-        esp_wifi_disconnect();
-        esp_wifi_connect();
+        s_ctx.wifi_reconfiguring = true;
+        (void)esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(250));
+        err = wifi_apply_sta_config(&s_ctx);
+        s_ctx.wifi_reconfiguring = false;
+        ESP_RETURN_ON_ERROR(err, TAG, "wifi config update failed");
+        ESP_LOGI(TAG, "wifi reconnect after config update");
+        ESP_RETURN_ON_ERROR(esp_wifi_connect(), TAG, "wifi reconnect after config update failed");
     }
     return ESP_OK;
 }
