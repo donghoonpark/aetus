@@ -1,6 +1,7 @@
 #include <array>
 
 #include "aetus.hpp"
+#include "aetus_config.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -28,14 +29,15 @@ static void attach_rtc_timestamp_if_available(aetus::Telemetry &telemetry)
 extern "C" void app_main(void)
 {
     const aetus::Config config = aetus::Config()
-                                     .wifi("CHANGE_ME", "CHANGE_ME")
-                                     .ingest_url("http://ingest.internal/v1/ingest")
-                                     .time_url("http://ingest.internal/v1/time")
-                                     .device("esp32c5-cpp-basic", "devtok_example")
+                                     .wifi(AETUS_WIFI_SSID, AETUS_WIFI_PASSWORD)
+                                     .ingest_url(AETUS_INGEST_URL)
+                                     .time_url(AETUS_TIME_URL)
+                                     .device(AETUS_DEVICE_ID, AETUS_DEVICE_TOKEN)
                                      .firmware_version(1002003)
-                                     .upload_interval_ms(AETUS_UPLOAD_DEFAULT_INTERVAL_MS)
+                                     .upload_interval_ms(AETUS_UPLOAD_INTERVAL_MS)
                                      .queue_depth(16);
 
+    ESP_LOGI(TAG, "starting C++ example ingest_url=%s interval_ms=%u", AETUS_INGEST_URL, AETUS_UPLOAD_INTERVAL_MS);
     ESP_ERROR_CHECK(config.start());
 
     const esp_err_t rtc_err = aetus::sync_rtc(pdMS_TO_TICKS(30000));

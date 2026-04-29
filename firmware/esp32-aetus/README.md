@@ -164,9 +164,12 @@ This package includes a local C++ example:
 
 - `firmware/esp32-aetus/examples/cpp-basic`: standalone ESP-IDF app using the C++20 wrapper, RTC sync, status event, telemetry metrics, and immediate flush.
 
-Build it with:
+The example reads Wi-Fi/API credentials from environment variables at CMake configure time. For local HIL testing, keep those values in the untracked repository-level `.env.hil` file and build it with:
 
 ```bash
+set -a
+source .env.hil
+set +a
 source "$IDF_PATH/export.sh"
 idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 build
 ```
