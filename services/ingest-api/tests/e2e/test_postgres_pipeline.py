@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import os
 import ipaddress
+import os
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import psycopg
@@ -14,8 +16,27 @@ import pytest
 from ..helpers.nanopb_mock_device import NanopbMockDevice
 
 
+pytestmark = pytest.mark.e2e
+
 ROOT_DIR = Path(__file__).resolve().parents[4]
 COMPOSE_FILE = ROOT_DIR / "compose" / "e2e-compose.yml"
+INGEST_API_URL = "http://127.0.0.1:18000"
+KAFKA_CONNECT_URL = "http://127.0.0.1:18083"
+POSTGRES_DSN = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
+
+
+@dataclass(slots=True)
+class ProvisioningResult:
+    response: httpx.Response
+    rate_limited_response: httpx.Response
+    body: dict[str, Any]
+
+
+@dataclass(slots=True)
+class IngestResult:
+    responses: list[httpx.Response]
+    rows: list[tuple]
+    provisioned_device: dict[str, Any]
 
 
 def _docker_compose(*args: str) -> subprocess.CompletedProcess[str]:
@@ -43,9 +64,8 @@ def _wait_for_http(url: str, timeout: float = 120.0) -> None:
 
 def _wait_for_rows(device_id: str, expected_count: int, timeout: float = 120.0) -> list[tuple]:
     deadline = time.time() + timeout
-    dsn = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
     while time.time() < deadline:
-        with psycopg.connect(dsn) as conn:
+        with psycopg.connect(POSTGRES_DSN) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -71,112 +91,179 @@ def _wait_for_rows(device_id: str, expected_count: int, timeout: float = 120.0) 
     raise RuntimeError("Timed out waiting for PostgreSQL rows")
 
 
-@pytest.mark.e2e
-def test_ingest_to_postgres_pipeline() -> None:
+@pytest.fixture(scope="module")
+def e2e_stack() -> None:
     if os.getenv("AETUS_SKIP_E2E") == "1":
         pytest.skip("E2E disabled by environment")
 
     _docker_compose("up", "-d", "--build")
     try:
-        _wait_for_http("http://127.0.0.1:18000/v1/healthz")
-        _wait_for_http("http://127.0.0.1:18083/")
-
-        provision_response = httpx.post(
-            "http://127.0.0.1:18000/v1/provision",
-            json={
-                "hardware_id": "esp32c5-a1b2c3d4e5f6",
-                "model": "esp32-c5",
-                "firmware_version": 1002003,
-                "site_code": "factory-a",
-            },
-            headers={"Authorization": "Bearer bootstrap_shared_token"},
-            timeout=10.0,
-        )
-        assert provision_response.status_code == 201, provision_response.text
-        provision_body = provision_response.json()
-
-        provision_rate_limited_response = httpx.post(
-            "http://127.0.0.1:18000/v1/provision",
-            json={
-                "hardware_id": "esp32c5-a1b2c3d4e5f6",
-                "model": "esp32-c5",
-                "firmware_version": 1002003,
-                "site_code": "factory-a",
-            },
-            headers={"Authorization": "Bearer bootstrap_shared_token"},
-            timeout=10.0,
-        )
-        assert provision_rate_limited_response.status_code == 429, provision_rate_limited_response.text
-        assert provision_rate_limited_response.headers["retry-after"] == "10"
-
-        control_devices_response = httpx.get(
-            "http://127.0.0.1:18000/v1/control/devices?q=factory-a",
-            timeout=10.0,
-        )
-        assert control_devices_response.status_code == 200, control_devices_response.text
-        control_devices = control_devices_response.json()
-        assert any(item["device_id"] == provision_body["device_id"] for item in control_devices["items"])
-
-        control_status_response = httpx.get(
-            "http://127.0.0.1:18000/v1/control/status",
-            timeout=10.0,
-        )
-        assert control_status_response.status_code == 200, control_status_response.text
-        control_status = {item["name"]: item for item in control_status_response.json()["components"]}
-        assert control_status["api"]["state"] == "healthy"
-        assert control_status["control_db"]["state"] == "healthy"
-        assert control_status["kafka"]["state"] == "healthy"
-        assert control_status["kafka_connect"]["state"] == "healthy"
-        assert control_status["postgres"]["state"] == "healthy"
-
-        device = NanopbMockDevice(
-            device_id=provision_body["device_id"],
-            token=provision_body["access_token"],
-            boot_id="boot-e2e-0001",
-        )
-        headers = {
-            "Content-Type": "application/x-protobuf",
-            "X-Device-Id": provision_body["device_id"],
-            "Authorization": f"Bearer {provision_body['access_token']}",
-        }
-
-        response_first = httpx.post(
-            "http://127.0.0.1:18000/v1/ingest",
-            content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_567),
-            headers=headers,
-            timeout=10.0,
-        )
-        assert response_first.status_code == 202, response_first.text
-
-        device.sequence = 2
-        response_second = httpx.post(
-            "http://127.0.0.1:18000/v1/ingest",
-            content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_890),
-            headers=headers,
-            timeout=10.0,
-        )
-        assert response_second.status_code == 202, response_second.text
-
-        device.sequence = 1
-        response_third = httpx.post(
-            "http://127.0.0.1:18000/v1/ingest",
-            content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_891),
-            headers=headers,
-            timeout=10.0,
-        )
-        assert response_third.status_code == 202, response_third.text
-
-        rows = _wait_for_rows(provision_body["device_id"], expected_count=3)
-        assert rows[0][0:4] == (provision_body["device_id"], "boot-e2e-0001", 2, "telemetry")
-        assert rows[1][0:4] == (provision_body["device_id"], "boot-e2e-0001", 1, "telemetry")
-        assert rows[2][0:4] == (provision_body["device_id"], "boot-e2e-0001", 0, "telemetry")
-        assert rows[0][4] == 1_712_345_678_901_234_890
-        assert rows[1][4] == 1_712_345_678_901_234_891
-        assert rows[2][4] == 1_712_345_678_901_234_567
-        ipaddress.ip_address(rows[0][6])
-        assert '"metrics"' in rows[0][7]
-        parsed_received_at = datetime.fromisoformat(rows[2][5])
-        assert parsed_received_at.tzinfo is not None
-        assert parsed_received_at.year >= 2026
+        _wait_for_http(f"{INGEST_API_URL}/v1/healthz")
+        _wait_for_http(f"{KAFKA_CONNECT_URL}/")
+        yield
     finally:
         _docker_compose("down", "-v")
+
+
+@pytest.fixture(scope="module")
+def provisioning_result(e2e_stack: None) -> ProvisioningResult:
+    del e2e_stack
+    provision_response = httpx.post(
+        f"{INGEST_API_URL}/v1/provision",
+        json={
+            "hardware_id": "esp32c5-a1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+            "site_code": "factory-a",
+        },
+        headers={"Authorization": "Bearer bootstrap_shared_token"},
+        timeout=10.0,
+    )
+    body = provision_response.json() if provision_response.status_code == 201 else {}
+
+    rate_limited_response = httpx.post(
+        f"{INGEST_API_URL}/v1/provision",
+        json={
+            "hardware_id": "esp32c5-a1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+            "site_code": "factory-a",
+        },
+        headers={"Authorization": "Bearer bootstrap_shared_token"},
+        timeout=10.0,
+    )
+
+    return ProvisioningResult(
+        response=provision_response,
+        rate_limited_response=rate_limited_response,
+        body=body,
+    )
+
+
+@pytest.fixture(scope="module")
+def ingest_result(provisioning_result: ProvisioningResult) -> IngestResult:
+    provision_body = provisioning_result.body
+    device = NanopbMockDevice(
+        device_id=provision_body["device_id"],
+        token=provision_body["access_token"],
+        boot_id="boot-e2e-0001",
+    )
+    headers = {
+        "Content-Type": "application/x-protobuf",
+        "X-Device-Id": provision_body["device_id"],
+        "Authorization": f"Bearer {provision_body['access_token']}",
+    }
+
+    response_first = httpx.post(
+        f"{INGEST_API_URL}/v1/ingest",
+        content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_567),
+        headers=headers,
+        timeout=10.0,
+    )
+
+    device.sequence = 2
+    response_second = httpx.post(
+        f"{INGEST_API_URL}/v1/ingest",
+        content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_890),
+        headers=headers,
+        timeout=10.0,
+    )
+
+    device.sequence = 1
+    response_third = httpx.post(
+        f"{INGEST_API_URL}/v1/ingest",
+        content=device.build_telemetry(timestamp_ns=1_712_345_678_901_234_891),
+        headers=headers,
+        timeout=10.0,
+    )
+
+    rows = _wait_for_rows(provision_body["device_id"], expected_count=3)
+    return IngestResult(
+        responses=[response_first, response_second, response_third],
+        rows=rows,
+        provisioned_device=provision_body,
+    )
+
+
+def test_stack_readiness_endpoints_are_available(e2e_stack: None) -> None:
+    del e2e_stack
+
+    health_response = httpx.get(f"{INGEST_API_URL}/v1/healthz", timeout=10.0)
+    connect_response = httpx.get(f"{KAFKA_CONNECT_URL}/", timeout=10.0)
+
+    assert health_response.status_code == 200
+    assert connect_response.status_code == 200
+
+
+def test_provisioning_issues_device_token(provisioning_result: ProvisioningResult) -> None:
+    assert provisioning_result.response.status_code == 201, provisioning_result.response.text
+    assert provisioning_result.body["device_id"].startswith("esp32c5-")
+    assert provisioning_result.body["token_type"] == "Bearer"
+    assert provisioning_result.body["access_token"].startswith("devtok_")
+
+
+def test_bootstrap_rate_limit_returns_retry_after(provisioning_result: ProvisioningResult) -> None:
+    assert provisioning_result.rate_limited_response.status_code == 429
+    assert provisioning_result.rate_limited_response.headers["retry-after"] == "10"
+
+
+def test_control_devices_lists_issued_device(provisioning_result: ProvisioningResult) -> None:
+    control_devices_response = httpx.get(
+        f"{INGEST_API_URL}/v1/control/devices?q=factory-a",
+        timeout=10.0,
+    )
+    assert control_devices_response.status_code == 200, control_devices_response.text
+    control_devices = control_devices_response.json()
+    assert any(item["device_id"] == provisioning_result.body["device_id"] for item in control_devices["items"])
+
+
+def test_control_status_reports_all_dependencies_healthy(e2e_stack: None) -> None:
+    del e2e_stack
+
+    control_status_response = httpx.get(
+        f"{INGEST_API_URL}/v1/control/status",
+        timeout=10.0,
+    )
+    assert control_status_response.status_code == 200, control_status_response.text
+    control_status = {item["name"]: item for item in control_status_response.json()["components"]}
+    assert control_status["api"]["state"] == "healthy"
+    assert control_status["control_db"]["state"] == "healthy"
+    assert control_status["kafka"]["state"] == "healthy"
+    assert control_status["kafka_connect"]["state"] == "healthy"
+    assert control_status["postgres"]["state"] == "healthy"
+
+
+def test_nanopb_ingest_accepts_provisioned_device_token(ingest_result: IngestResult) -> None:
+    assert [response.status_code for response in ingest_result.responses] == [202, 202, 202]
+
+
+def test_kafka_connect_persists_ingest_events_to_postgres(ingest_result: IngestResult) -> None:
+    assert len(ingest_result.rows) >= 3
+    assert {row[0] for row in ingest_result.rows[:3]} == {ingest_result.provisioned_device["device_id"]}
+
+
+def test_out_of_order_sequences_are_persisted(ingest_result: IngestResult) -> None:
+    rows = ingest_result.rows
+
+    assert rows[0][0:4] == (ingest_result.provisioned_device["device_id"], "boot-e2e-0001", 2, "telemetry")
+    assert rows[1][0:4] == (ingest_result.provisioned_device["device_id"], "boot-e2e-0001", 1, "telemetry")
+    assert rows[2][0:4] == (ingest_result.provisioned_device["device_id"], "boot-e2e-0001", 0, "telemetry")
+
+
+def test_timestamp_ns_is_persisted(ingest_result: IngestResult) -> None:
+    rows = ingest_result.rows
+
+    assert rows[0][4] == 1_712_345_678_901_234_890
+    assert rows[1][4] == 1_712_345_678_901_234_891
+    assert rows[2][4] == 1_712_345_678_901_234_567
+
+
+def test_payload_and_metadata_are_persisted(ingest_result: IngestResult) -> None:
+    latest_row = ingest_result.rows[0]
+    oldest_row = ingest_result.rows[2]
+
+    ipaddress.ip_address(latest_row[6])
+    assert '"metrics"' in latest_row[7]
+    parsed_received_at = datetime.fromisoformat(oldest_row[5])
+    assert parsed_received_at.tzinfo is not None
+    assert parsed_received_at.year >= 2026
