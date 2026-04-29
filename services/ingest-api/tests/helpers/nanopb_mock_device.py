@@ -33,7 +33,10 @@ def ensure_mock_device_module_built():
         ],
         check=True,
     )
-    subprocess.run(["cmake", "--build", str(MOCK_BUILD_DIR)], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(MOCK_BUILD_DIR), "--target", "mock_device", "mock_device_py"],
+        check=True,
+    )
 
     sys.path.insert(0, str(PYTHON_MODULE_DIR))
     _LOADED_MODULE = importlib.import_module("mock_device_py")

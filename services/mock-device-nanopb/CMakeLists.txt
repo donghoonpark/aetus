@@ -2,8 +2,11 @@ cmake_minimum_required(VERSION 3.24)
 
 project(mock_device_nanopb C CXX)
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 include(FetchContent)
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(PYBIND11_FINDPYTHON ON)
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
 
 set(INGEST_PROTO "" CACHE FILEPATH "Path to ingest.proto")
 if(NOT INGEST_PROTO)
@@ -30,14 +33,22 @@ file(MAKE_DIRECTORY ${GENERATED_DIR})
 
 get_filename_component(INGEST_PROTO_DIR ${INGEST_PROTO} DIRECTORY)
 set(NANOPB_PLUGIN ${nanopb_SOURCE_DIR}/generator/protoc-gen-nanopb)
+set(NANOPB_PLUGIN_WRAPPER ${CMAKE_BINARY_DIR}/protoc-gen-nanopb)
 set(NANOPB_OPTIONS ${CMAKE_CURRENT_SOURCE_DIR}/proto/ingest.options)
+
+file(WRITE ${NANOPB_PLUGIN_WRAPPER}
+    "#!/bin/sh\nexec \"${Python3_EXECUTABLE}\" \"${NANOPB_PLUGIN}\" \"$@\"\n"
+)
+file(CHMOD ${NANOPB_PLUGIN_WRAPPER}
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
 
 add_custom_command(
     OUTPUT ${GENERATED_DIR}/ingest.pb.c ${GENERATED_DIR}/ingest.pb.h
     COMMAND ${Python3_EXECUTABLE} -m grpc_tools.protoc
         -I ${CMAKE_CURRENT_SOURCE_DIR}/proto
         -I ${INGEST_PROTO_DIR}
-        --plugin=protoc-gen-nanopb=${NANOPB_PLUGIN}
+        --plugin=protoc-gen-nanopb=${NANOPB_PLUGIN_WRAPPER}
         --nanopb_out=-f${NANOPB_OPTIONS}:${GENERATED_DIR}
         ${INGEST_PROTO}
     DEPENDS ${INGEST_PROTO} ${NANOPB_OPTIONS}
