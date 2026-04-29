@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "aetus_uploader.c"
+        "ingest.pb.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_event
+        esp_http_client
+        esp_netif
+        esp_timer
+        esp_wifi
+        nanopb
+        nvs_flash
+)
