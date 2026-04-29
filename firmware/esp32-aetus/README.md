@@ -145,6 +145,8 @@ The provisioning GATT service exposes these characteristics:
 - `led_gpio`: read/write decimal GPIO number.
 - `apply`: write-only trigger; commits all pending values to the running AETUS stack.
 
+Bluetooth SIG does not define adopted GATT characteristics for writing Wi-Fi credentials such as SSID, passphrase, or Wi-Fi auth mode. AETUS therefore uses vendor-specific 128-bit UUIDs for the provisioning service and its characteristics, rather than reusing unrelated adopted services such as Internet Protocol Support (`0x1820`) or Transport Discovery (`0x1824`).
+
 Each characteristic also includes a `0x2901` Characteristic User Description descriptor with the same snake_case name, so tools such as nRF Connect can display readable labels instead of only raw UUIDs.
 
 When the central updates BLE connection parameters, AETUS calls `connection_check_cb` with the current connection interval, latency, and supervision timeout. This gives the application a single hook for logging, policy checks, or disconnect decisions.
