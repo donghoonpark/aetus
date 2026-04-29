@@ -283,5 +283,6 @@ typedef struct {
 
 ## 이후 확장 포인트
 
+- 표준 업로드 컴포넌트 구현 상세는 [[06-2-standard-embedded-upload-stack]]에서 관리한다.
 - 임베디드 섹션 하위에 `boot sequence`, `FlashDB schema`, `upload retry policy`, `BLE provisioning flow` 문서를 별도 분리 가능
 - [[06-1-event-driven-low-power-system-implementation-plan]]에서 `OPT3001` 기반 이벤트 구동 저전력 동작 계획을 상세화

@@ -1,9 +1,10 @@
-# AETUS ESP32-C5 Upload Smoke Firmware
+# AETUS ESP32-C5 HIL Upload Firmware
 
-This ESP-IDF 6.0 firmware is for local HIL/lab validation only. It keeps business logic separate from upload transport:
+This ESP-IDF 6.0 firmware is for local HIL/lab validation. It consumes the portable stack in `../esp32-aetus` and keeps business logic separate from upload transport:
 
 - `main` creates sample telemetry messages and enqueues them.
-- `aetus_uploader` owns the FreeRTOS queue, upload timer, WiFi connection, nanopb encoding, and HTTP POST to `/v1/ingest`.
+- `aetus` owns the FreeRTOS queue, upload timer, Wi-Fi connection, nanopb encoding, and HTTP POST to `/v1/ingest`.
+- The sample payload covers status, double, int64, bool, and string metric values.
 
 Configuration is read from environment variables at CMake configure time. Keep secrets in the untracked repository-level `.env.hil` file.
 

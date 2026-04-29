@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS
-        "aetus_uploader.c"
+        "aetus.c"
         "ingest.pb.c"
     INCLUDE_DIRS
         "include"

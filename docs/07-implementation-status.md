@@ -39,6 +39,10 @@ services/
   - CMake + FetchContent + nanopb + pybind11 기반 mock device
 - `firmware/esp32-qemu-telemetry`
   - ESP-IDF 6.0 + nanopb 기반 QEMU E2E 전용 firmware stream generator
+- `firmware/esp32-aetus`
+  - ESP-IDF portable upload stack component
+- `firmware/esp32c5-upload-smoke`
+  - `firmware/esp32-aetus`를 소비하는 ESP32-C5 HIL app
 - `compose/e2e-compose.yml`
   - 전체 파이프라인 E2E 실행용 compose
 
@@ -302,6 +306,45 @@ AETUS_QEMU_TARGET=esp32c3 \
 uv run pytest tests/qemu_e2e -q -s
 ```
 
+## 7. ESP32 AETUS Portable Upload Stack
+
+구현 위치:
+
+- [[../firmware/esp32-aetus]]
+- [[../firmware/esp32-aetus/components/aetus/include/aetus.h]]
+- [[../firmware/esp32c5-upload-smoke]]
+
+목적:
+
+- ESP32-C5 제품 firmware에서 공통으로 쓸 업로드 스택을 제공한다.
+- 유저 비즈니스 로직은 thread-safe enqueue API만 호출한다.
+- 별도 uploader task가 queue, upload timer, Wi-Fi, nanopb encode, HTTP POST를 담당한다.
+
+현재 공개 API:
+
+- `aetus_start`
+- `aetus_enqueue_telemetry`
+- `aetus_enqueue_status`
+- `aetus_flush`
+
+현재 구현된 runtime 동작:
+
+- boot ID 자동 생성
+- sequence 0부터 시작
+- 서버 2xx 수락 후 sequence 증가
+- telemetry/status event protobuf encode
+- double/int64/bool/string/bytes metric value encode
+- upload 실패 시 queue front requeue
+- `aetus_flush()` 완료 대기
+
+현재 미구현:
+
+- FlashDB durable backlog
+- NimBLE provisioning/diagnostics adapter
+- ISR-safe enqueue API
+- Wi-Fi ownership adapter
+- HTTPS certificate verification bypass option
+
 ## 테스트 현황
 
 테스트 실행 위치:
@@ -367,6 +410,21 @@ uv run pytest -q
 9. Kafka Connect sink
 10. PostgreSQL row 적재 확인
 11. `device_id`, `boot_id`, `sequence`, `timestamp_ns`, metric payload 보존 확인
+
+### hil firmware coverage
+
+현재 HIL firmware는 GitHub Actions 기본 테스트에 포함하지 않는다.
+
+로컬 실기기에서 확인한 범위:
+
+- ESP32-C5 build/flash/monitor
+- Wi-Fi 접속
+- portable `aetus` component 사용
+- startup status event enqueue
+- telemetry event enqueue
+- double/int64/bool/string metric value encode
+- `/v1/ingest` HTTP POST
+- backend E2E stack을 통한 PostgreSQL 적재
 
 ## 중요 구현 이력
 
@@ -452,6 +510,9 @@ uv run pytest -q
 - [[../services/ingest-api/tests/helpers/nanopb_mock_device.py]]
 - [[../services/mock-device-nanopb/src/mock_device_core.c]]
 - [[../firmware/esp32-qemu-telemetry/main/main.c]]
+- [[../firmware/esp32-aetus/components/aetus/include/aetus.h]]
+- [[../firmware/esp32-aetus/components/aetus/aetus.c]]
+- [[../firmware/esp32c5-upload-smoke/main/main.c]]
 - [[../frontend/ingest-control-panel/src/IngestControlPanel.vue]]
 - [[../compose/e2e-compose.yml]]
 
