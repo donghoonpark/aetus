@@ -1,0 +1,87 @@
+name: ESP32 QEMU E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: ESP-IDF target to build and run in QEMU
+        required: false
+        default: esp32c3
+
+concurrency:
+  group: qemu-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  IDF_PATH: ${{ github.workspace }}/.esp-idf/esp-idf
+  IDF_TOOLS_PATH: ${{ github.workspace }}/.esp-idf/tools
+  AETUS_RUN_QEMU_E2E: "1"
+  AETUS_QEMU_TARGET: ${{ inputs.target || 'esp32c3' }}
+
+jobs:
+  qemu-e2e:
+    name: Firmware stream to PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: services/ingest-api
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bison \
+            build-essential \
+            ccache \
+            cmake \
+            dfu-util \
+            flex \
+            gperf \
+            libffi-dev \
+            libgcrypt20 \
+            libglib2.0-0 \
+            libpixman-1-0 \
+            libsdl2-2.0-0 \
+            libslirp0 \
+            libssl-dev \
+            libusb-1.0-0 \
+            ninja-build \
+            wget
+
+      - name: Install uv
+        run: python -m pip install uv==0.8.22
+
+      - name: Install Python dependencies
+        run: uv sync --locked --group dev
+
+      - name: Install ESP-IDF v6.0 and QEMU
+        working-directory: ${{ github.workspace }}
+        run: |
+          git clone --branch v6.0 --depth 1 --recursive --shallow-submodules \
+            https://github.com/espressif/esp-idf.git "$IDF_PATH"
+          "$IDF_PATH/install.sh" "$AETUS_QEMU_TARGET"
+          "$IDF_PATH/tools/idf_tools.py" install qemu-riscv32
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Run ESP32 QEMU e2e
+        run: uv run pytest tests/qemu_e2e -q -s
+
+      - name: Tear down e2e stack
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: docker compose -f compose/e2e-compose.yml down -v --remove-orphans

@@ -16,6 +16,7 @@
 ```text
 docs/
 compose/
+firmware/
 services/
   ingest-api/
   kafka/
@@ -36,6 +37,8 @@ services/
   - raw event 저장용 PostgreSQL
 - `services/mock-device-nanopb`
   - CMake + FetchContent + nanopb + pybind11 기반 mock device
+- `firmware/esp32-qemu-telemetry`
+  - ESP-IDF 6.0 + nanopb 기반 QEMU E2E 전용 firmware stream generator
 - `compose/e2e-compose.yml`
   - 전체 파이프라인 E2E 실행용 compose
 
@@ -263,6 +266,42 @@ npm run build
 - status
 - `timestamp_ns` 포함 telemetry/status
 
+## 6. ESP32 QEMU Firmware E2E
+
+구현 위치:
+
+- [[../firmware/esp32-qemu-telemetry]]
+- [[../services/ingest-api/tests/qemu_e2e/test_esp32_qemu_nanopb_pipeline.py]]
+- [[../.github/workflows/qemu-e2e.yml]]
+
+목적:
+
+- Python/host mock이 아니라 ESP-IDF로 실제 firmware binary를 빌드한다.
+- QEMU에서 firmware를 실행한다.
+- firmware가 UART로 출력한 nanopb protobuf byte stream을 테스트가 수집한다.
+- 수집한 byte stream을 `POST /v1/ingest`로 업로드한다.
+- Kafka/Kafka Connect를 거쳐 PostgreSQL에 적재되는지 검증한다.
+
+운영 방식:
+
+- 일반 CI에는 포함하지 않는다.
+- `qemu_e2e` pytest marker로 분리한다.
+- GitHub Actions에서는 `ESP32 QEMU E2E` workflow를 수동 실행한다.
+- 생산 표준 target은 `esp32c5`이지만, ESP-IDF 6.0 QEMU는 현재 `esp32c5` target을 지원하지 않는다.
+- QEMU E2E 기본 target은 `esp32c3`로 둔다.
+- 이 테스트는 RISC-V ESP32 firmware binary에서 동일 nanopb encode path가 동작하는지 검증한다.
+- C5 QEMU 지원이 열리면 `AETUS_QEMU_TARGET=esp32c5`로 바꿔 돌릴 수 있다.
+
+실행 예:
+
+```bash
+cd services/ingest-api
+IDF_PATH=/path/to/esp-idf \
+AETUS_RUN_QEMU_E2E=1 \
+AETUS_QEMU_TARGET=esp32c3 \
+uv run pytest tests/qemu_e2e -q -s
+```
+
 ## 테스트 현황
 
 테스트 실행 위치:
@@ -277,7 +316,8 @@ uv run pytest -q
 
 현재 통과 기준:
 
-- `12 passed`
+- 일반 unit/e2e: `35 passed`
+- QEMU e2e: 기본 실행에서는 skip, `AETUS_RUN_QEMU_E2E=1`일 때 별도 실행
 
 ### unit coverage
 
@@ -311,6 +351,22 @@ uv run pytest -q
 10. `received_at`이 서버 수신 시각으로 별도 기록되는지 확인
 11. `sequence`가 `2 -> 1 -> 0`처럼 꼬여 들어와도 각 row가 적재되는지 확인
 12. `source_ip`가 유효한 IP 문자열로 저장되는지 확인
+
+### qemu_e2e coverage
+
+현재 QEMU E2E는 다음을 커버한다.
+
+1. ESP-IDF 6.0 project `set-target`
+2. firmware build
+3. QEMU monitor 실행
+4. firmware 내부 nanopb encode 수행
+5. UART hex-framed protobuf stream 추출
+6. 추출한 bytes를 ingest API로 업로드
+7. seeded device token 인증
+8. Kafka publish
+9. Kafka Connect sink
+10. PostgreSQL row 적재 확인
+11. `device_id`, `boot_id`, `sequence`, `timestamp_ns`, metric payload 보존 확인
 
 ## 중요 구현 이력
 
@@ -392,8 +448,10 @@ uv run pytest -q
 - [[../services/ingest-api/src/aetus_ingest/normalize.py]]
 - [[../services/ingest-api/tests/unit/test_ingest.py]]
 - [[../services/ingest-api/tests/e2e/test_postgres_pipeline.py]]
+- [[../services/ingest-api/tests/qemu_e2e/test_esp32_qemu_nanopb_pipeline.py]]
 - [[../services/ingest-api/tests/helpers/nanopb_mock_device.py]]
 - [[../services/mock-device-nanopb/src/mock_device_core.c]]
+- [[../firmware/esp32-qemu-telemetry/main/main.c]]
 - [[../frontend/ingest-control-panel/src/IngestControlPanel.vue]]
 - [[../compose/e2e-compose.yml]]
 
