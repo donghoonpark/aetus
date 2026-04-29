@@ -364,7 +364,7 @@ uv run pytest tests/qemu_e2e -q -s
 현재 미구현:
 
 - FlashDB durable backlog
-- NimBLE provisioning/diagnostics adapter
+- 대형 payload용 pointer/blob queue API
 - ISR-safe enqueue API
 - Wi-Fi ownership adapter
 - HTTPS certificate verification bypass option

@@ -267,11 +267,13 @@ static void sensor_task(void *arg)
 아직 구현하지 않음:
 
 - FlashDB durable backlog
-- NimBLE 기반 현장 설정 또는 진단 API
+- 대형 payload용 pointer/blob queue API
 - ISR-safe enqueue API
 - Wi-Fi ownership 분리
 - HTTPS certificate verification bypass option
 - provisioning client
+
+대형 payload용 pointer/blob queue API는 1200B급 센서 샘플처럼 기존 `aetus_telemetry_t` 고정 배열에 담기 부담스러운 데이터를 위한 향후 기능이다. 기본 방향은 `aetus_enqueue_payload_copy()`와 `aetus_enqueue_payload_owned()`를 제공하고, 성공적으로 enqueue된 owned payload는 AETUS uploader task가 소유권을 가져가 업로드 성공 또는 최종 drop 시 release callback으로 해제하는 것이다. 이 기능을 구현할 때는 queue item에는 포인터와 크기만 저장하고, protobuf 인코딩은 가능하면 nanopb callback 또는 HTTP streaming 방식으로 처리해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
 
 ## FlashDB 통합 계획
 
