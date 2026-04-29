@@ -64,6 +64,7 @@ void app_main(void)
     aetus_config_t config = {
         .wifi_ssid = "ssidtest",
         .wifi_password = "********",
+        .wifi_auth = AETUS_WIFI_AUTH_PSK,
         .ingest_url = "http://ingest.internal/v1/ingest",
         .time_url = "http://ingest.internal/v1/time",
         .device_id = "esp32c5-001",
@@ -71,6 +72,8 @@ void app_main(void)
         .firmware_version = 1002003,
         .upload_interval_ms = AETUS_UPLOAD_DEFAULT_INTERVAL_MS,
         .queue_depth = 16,
+        .connected_led_enabled = true,
+        .connected_led_gpio = 27,
     };
 
     ESP_ERROR_CHECK(aetus_start(&config));
@@ -84,6 +87,127 @@ void app_main(void)
     ESP_ERROR_CHECK(aetus_enqueue_telemetry(&telemetry, pdMS_TO_TICKS(1000)));
 }
 ```
+
+## NimBLE Provisioning
+
+`aetus_start_provisioning()` starts a NimBLE GATT server that can receive Wi-Fi and upload configuration at runtime. The provisioning service keeps a pending config buffer; writes update the pending values, and writing any value to the `apply` characteristic calls `aetus_update_config()`.
+
+```c
+static void on_connection_check(
+    uint16_t conn_handle,
+    int status,
+    uint16_t interval,
+    uint16_t latency,
+    uint16_t supervision_timeout,
+    void *user_ctx
+)
+{
+    (void)user_ctx;
+    ESP_LOGI(
+        "app",
+        "BLE conn=%u status=%d interval=%u latency=%u timeout=%u",
+        conn_handle,
+        status,
+        interval,
+        latency,
+        supervision_timeout
+    );
+}
+
+void app_main(void)
+{
+    ESP_ERROR_CHECK(aetus_start(&config));
+
+    const aetus_provisioning_config_t provisioning = {
+        .device_name = "AETUS-C5",
+        .config_changed_cb = NULL,
+        .connection_check_cb = on_connection_check,
+        .user_ctx = NULL,
+    };
+    ESP_ERROR_CHECK(aetus_start_provisioning(&provisioning));
+}
+```
+
+The provisioning GATT service exposes these characteristics:
+
+- `wifi_ssid`: read/write UTF-8 text, max 32 bytes.
+- `wifi_auth`: read/write text, `psk` or `peap`.
+- `wifi_id`: read/write text, used as PEAP identity and username, max 127 bytes.
+- `wifi_password`: write-only text, max 64 bytes.
+- `ingest_url`: read/write text, max 159 bytes.
+- `time_url`: read/write text, max 159 bytes.
+- `device_id`: read/write text, max 63 bytes.
+- `device_token`: write-only text, max 127 bytes.
+- `firmware_version`: read/write decimal integer.
+- `upload_interval_ms`: read/write decimal integer.
+- `queue_depth`: read/write decimal integer. This affects future config snapshots; the existing FreeRTOS queue is not resized after startup.
+- `led_enabled`: read/write boolean text, `1`, `0`, `true`, `false`, `on`, or `off`.
+- `led_gpio`: read/write decimal GPIO number.
+- `apply`: write-only trigger; commits all pending values to the running AETUS stack.
+
+Each characteristic also includes a `0x2901` Characteristic User Description descriptor with the same snake_case name, so tools such as nRF Connect can display readable labels instead of only raw UUIDs.
+
+When the central updates BLE connection parameters, AETUS calls `connection_check_cb` with the current connection interval, latency, and supervision timeout. This gives the application a single hook for logging, policy checks, or disconnect decisions.
+
+The connected LED is optional. If enabled, AETUS configures the selected GPIO as output, drives it high after `IP_EVENT_STA_GOT_IP`, and drives it low on Wi-Fi disconnect. The bundled `cpp-basic` example enables GPIO27 by default.
+
+## WPA2-Enterprise PEAP
+
+The stack also has a WPA2-Enterprise PEAP path for sites where the device must join Wi-Fi with `SSID + ID + password` instead of a pre-shared key.
+
+This follows the ESP-IDF 6.0 `wifi_enterprise` example flow:
+
+- Configure station SSID.
+- Set PEAP identity.
+- Set PEAP username and password.
+- Restrict EAP method to `ESP_EAP_TYPE_PEAP`.
+- Enable Wi-Fi Enterprise mode before `esp_wifi_start()`.
+
+For the first implementation, AETUS intentionally keeps the public API simple and uses the same `id` value for both phase 1 identity and phase 2 username. If a site later requires anonymous outer identity plus a separate inner username, split `wifi_identity` into two fields.
+
+```c
+#include "aetus.h"
+
+void app_main(void)
+{
+    aetus_config_t config = {
+        .wifi_ssid = "enterprise-ssid",
+        .wifi_password = "enterprise-password",
+        .wifi_auth = AETUS_WIFI_AUTH_PEAP,
+        .wifi_identity = "device-or-user-id",
+        .ingest_url = "http://ingest.internal/v1/ingest",
+        .time_url = "http://ingest.internal/v1/time",
+        .device_id = "esp32c5-001",
+        .device_token = "devtok_xxxxx",
+        .firmware_version = 1002003,
+        .upload_interval_ms = AETUS_UPLOAD_DEFAULT_INTERVAL_MS,
+        .queue_depth = 16,
+    };
+
+    ESP_ERROR_CHECK(aetus_start(&config));
+}
+```
+
+```cpp
+const aetus::Config config = aetus::Config()
+                                 .wifi_peap("enterprise-ssid", "device-or-user-id", "enterprise-password")
+                                 .ingest_url("http://ingest.internal/v1/ingest")
+                                 .time_url("http://ingest.internal/v1/time")
+                                 .device("esp32c5-001", "devtok_xxxxx")
+                                 .firmware_version(1002003);
+```
+
+The local `cpp-basic` example can be configured for PEAP at build time:
+
+```bash
+export AETUS_WIFI_AUTH=peap
+export AETUS_WIFI_SSID=enterprise-ssid
+export AETUS_WIFI_ID=device-or-user-id
+export AETUS_WIFI_PASSWORD=enterprise-password
+idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 reconfigure build
+```
+
+PEAP has not been live-tested in this repository yet because no Enterprise AP/RADIUS environment is currently available. Treat it as a compile-verified integration path until HIL coverage is added.
 
 ## Minimal C++ Usage
 
@@ -105,9 +229,11 @@ extern "C" void app_main(void)
                                      .device("esp32c5-001", "devtok_xxxxx")
                                      .firmware_version(1002003)
                                      .upload_interval_ms(AETUS_UPLOAD_DEFAULT_INTERVAL_MS)
-                                     .queue_depth(16);
+                                     .queue_depth(16)
+                                     .connected_led(27);
 
     ESP_ERROR_CHECK(config.start());
+    ESP_ERROR_CHECK(aetus_start_provisioning(nullptr));
     ESP_ERROR_CHECK(aetus::sync_rtc(pdMS_TO_TICKS(30000)));
 
     auto status = aetus::Status::online()
@@ -171,8 +297,10 @@ set -a
 source .env.hil
 set +a
 source "$IDF_PATH/export.sh"
-idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 build
+idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 reconfigure build
 ```
+
+Set `AETUS_WIFI_AUTH=peap` and `AETUS_WIFI_ID=<id>` to build the same example for WPA2-Enterprise PEAP. If `AETUS_WIFI_AUTH` is omitted, the example uses the normal PSK path. Use `reconfigure` after changing these environment variables because CMake does not always notice environment-only changes.
 
 The repository-level `firmware/examples` directory also contains standalone ESP-IDF apps that validate the intended developer experience:
 

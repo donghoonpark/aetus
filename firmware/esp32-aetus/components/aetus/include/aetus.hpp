@@ -18,6 +18,17 @@ public:
     {
         value_.wifi_ssid = ssid;
         value_.wifi_password = password;
+        value_.wifi_auth = AETUS_WIFI_AUTH_PSK;
+        value_.wifi_identity = nullptr;
+        return *this;
+    }
+
+    constexpr Config &wifi_peap(const char *ssid, const char *identity, const char *password)
+    {
+        value_.wifi_ssid = ssid;
+        value_.wifi_password = password;
+        value_.wifi_auth = AETUS_WIFI_AUTH_PEAP;
+        value_.wifi_identity = identity;
         return *this;
     }
 
@@ -58,6 +69,20 @@ public:
         return *this;
     }
 
+    constexpr Config &connected_led(int gpio)
+    {
+        value_.connected_led_enabled = true;
+        value_.connected_led_gpio = gpio;
+        return *this;
+    }
+
+    constexpr Config &disable_connected_led()
+    {
+        value_.connected_led_enabled = false;
+        value_.connected_led_gpio = 0;
+        return *this;
+    }
+
     [[nodiscard]] const aetus_config_t &get() const
     {
         return value_;
@@ -66,6 +91,11 @@ public:
     [[nodiscard]] esp_err_t start() const
     {
         return aetus_start(&value_);
+    }
+
+    [[nodiscard]] esp_err_t apply() const
+    {
+        return aetus_update_config(&value_);
     }
 
 private:

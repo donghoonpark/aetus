@@ -15,6 +15,8 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_eap_client.h"
+#include "driver/gpio.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -91,6 +93,11 @@ static void copy_string(char *target, size_t target_size, const char *source)
     target[target_size - 1] = '\0';
 }
 
+static bool string_required_fits(const char *value, size_t max_len)
+{
+    return value != NULL && value[0] != '\0' && strlen(value) <= max_len;
+}
+
 static bool string_fits(const char *value, size_t target_size)
 {
     if (value == NULL) {
@@ -164,6 +171,9 @@ static void wifi_event_handler(
     }
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(ctx->events, AETUS_WIFI_CONNECTED_BIT);
+        if (ctx->config.connected_led_enabled) {
+            gpio_set_level((gpio_num_t)ctx->config.connected_led_gpio, 0);
+        }
         ESP_LOGW(TAG, "wifi disconnected, reconnecting");
         esp_wifi_connect();
         return;
@@ -172,12 +182,88 @@ static void wifi_event_handler(
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "wifi got ip " IPSTR, IP2STR(&event->ip_info.ip));
         xEventGroupSetBits(ctx->events, AETUS_WIFI_CONNECTED_BIT);
+        if (ctx->config.connected_led_enabled) {
+            gpio_set_level((gpio_num_t)ctx->config.connected_led_gpio, 1);
+        }
     }
 }
 
 static esp_err_t ok_if_already_initialized(esp_err_t err)
 {
     return err == ESP_ERR_INVALID_STATE ? ESP_OK : err;
+}
+
+static esp_err_t wifi_configure_peap(const aetus_config_t *config)
+{
+    const int identity_len = (int)strlen(config->wifi_identity);
+    const int password_len = (int)strlen(config->wifi_password);
+
+    ESP_RETURN_ON_ERROR(
+        esp_eap_client_set_identity((const unsigned char *)config->wifi_identity, identity_len),
+        TAG,
+        "wifi peap identity failed"
+    );
+    ESP_RETURN_ON_ERROR(
+        esp_eap_client_set_username((const unsigned char *)config->wifi_identity, identity_len),
+        TAG,
+        "wifi peap username failed"
+    );
+    ESP_RETURN_ON_ERROR(
+        esp_eap_client_set_password((const unsigned char *)config->wifi_password, password_len),
+        TAG,
+        "wifi peap password failed"
+    );
+    ESP_RETURN_ON_ERROR(
+        esp_eap_client_set_eap_methods(ESP_EAP_TYPE_PEAP),
+        TAG,
+        "wifi peap method failed"
+    );
+    ESP_RETURN_ON_ERROR(esp_wifi_sta_enterprise_enable(), TAG, "wifi peap enable failed");
+    ESP_LOGI(TAG, "wifi auth configured: PEAP");
+    return ESP_OK;
+}
+
+static esp_err_t configure_connected_led(aetus_ctx_t *ctx)
+{
+    if (!ctx->config.connected_led_enabled) {
+        return ESP_OK;
+    }
+
+    gpio_config_t io_config = {
+        .pin_bit_mask = 1ULL << ctx->config.connected_led_gpio,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&io_config), TAG, "connected led gpio config failed");
+
+    EventBits_t bits = ctx->events != NULL ? xEventGroupGetBits(ctx->events) : 0;
+    gpio_set_level(
+        (gpio_num_t)ctx->config.connected_led_gpio,
+        (bits & AETUS_WIFI_CONNECTED_BIT) ? 1 : 0
+    );
+    return ESP_OK;
+}
+
+static esp_err_t wifi_apply_sta_config(aetus_ctx_t *ctx)
+{
+    wifi_config_t wifi_config = {0};
+    copy_string((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), ctx->config.wifi_ssid);
+    if (ctx->config.wifi_auth == AETUS_WIFI_AUTH_PSK) {
+        copy_string((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), ctx->config.wifi_password);
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        wifi_config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+        esp_wifi_sta_enterprise_disable();
+    } else if (ctx->config.wifi_auth == AETUS_WIFI_AUTH_PEAP) {
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_ENTERPRISE;
+    }
+
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG, "wifi config failed");
+    if (ctx->config.wifi_auth == AETUS_WIFI_AUTH_PEAP) {
+        ESP_RETURN_ON_ERROR(wifi_configure_peap(&ctx->config), TAG, "wifi peap config failed");
+    }
+    return ESP_OK;
 }
 
 static esp_err_t wifi_start(aetus_ctx_t *ctx)
@@ -225,14 +311,9 @@ static esp_err_t wifi_start(aetus_ctx_t *ctx)
         "ip event handler failed"
     );
 
-    wifi_config_t wifi_config = {0};
-    copy_string((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), ctx->config.wifi_ssid);
-    copy_string((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), ctx->config.wifi_password);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    wifi_config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
-
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "wifi mode failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG, "wifi config failed");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "wifi storage failed");
+    ESP_RETURN_ON_ERROR(wifi_apply_sta_config(ctx), TAG, "wifi sta config failed");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start failed");
     ctx->wifi_started = true;
     return ESP_OK;
@@ -794,11 +875,37 @@ esp_err_t aetus_telemetry_add_bytes(
 esp_err_t aetus_start(const aetus_config_t *config)
 {
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config is required");
-    ESP_RETURN_ON_FALSE(config->wifi_ssid != NULL, ESP_ERR_INVALID_ARG, TAG, "wifi ssid is required");
-    ESP_RETURN_ON_FALSE(config->wifi_password != NULL, ESP_ERR_INVALID_ARG, TAG, "wifi password is required");
-    ESP_RETURN_ON_FALSE(config->ingest_url != NULL, ESP_ERR_INVALID_ARG, TAG, "ingest url is required");
-    ESP_RETURN_ON_FALSE(config->device_id != NULL, ESP_ERR_INVALID_ARG, TAG, "device id is required");
-    ESP_RETURN_ON_FALSE(config->device_token != NULL, ESP_ERR_INVALID_ARG, TAG, "device token is required");
+    ESP_RETURN_ON_FALSE(
+        string_required_fits(config->wifi_ssid, AETUS_WIFI_SSID_MAX),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "wifi ssid is required or too long"
+    );
+    ESP_RETURN_ON_FALSE(
+        string_required_fits(config->wifi_password, AETUS_WIFI_PASSWORD_MAX),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "wifi password is required or too long"
+    );
+    ESP_RETURN_ON_FALSE(
+        config->wifi_auth == AETUS_WIFI_AUTH_PSK || config->wifi_auth == AETUS_WIFI_AUTH_PEAP,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "unsupported wifi auth"
+    );
+    if (config->wifi_auth == AETUS_WIFI_AUTH_PEAP) {
+        ESP_RETURN_ON_FALSE(
+            string_required_fits(config->wifi_identity, AETUS_WIFI_IDENTITY_MAX),
+            ESP_ERR_INVALID_ARG,
+            TAG,
+            "wifi peap id is required or too long"
+        );
+        ESP_RETURN_ON_FALSE(config->wifi_password[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "wifi peap password is empty");
+    }
+    ESP_RETURN_ON_FALSE(string_required_fits(config->ingest_url, AETUS_URL_MAX), ESP_ERR_INVALID_ARG, TAG, "ingest url is required or too long");
+    ESP_RETURN_ON_FALSE(string_fits(config->time_url, AETUS_URL_MAX + 1), ESP_ERR_INVALID_ARG, TAG, "time url too long");
+    ESP_RETURN_ON_FALSE(string_required_fits(config->device_id, AETUS_DEVICE_ID_MAX), ESP_ERR_INVALID_ARG, TAG, "device id is required or too long");
+    ESP_RETURN_ON_FALSE(string_required_fits(config->device_token, AETUS_DEVICE_TOKEN_MAX), ESP_ERR_INVALID_ARG, TAG, "device token is required or too long");
     ESP_RETURN_ON_FALSE(s_ctx.queue == NULL, ESP_ERR_INVALID_STATE, TAG, "aetus already started");
 
     memset(&s_ctx, 0, sizeof(s_ctx));
@@ -815,6 +922,7 @@ esp_err_t aetus_start(const aetus_config_t *config)
     ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_NO_MEM, TAG, "queue allocation failed");
     s_ctx.events = xEventGroupCreate();
     ESP_RETURN_ON_FALSE(s_ctx.events != NULL, ESP_ERR_NO_MEM, TAG, "event group allocation failed");
+    ESP_RETURN_ON_ERROR(configure_connected_led(&s_ctx), TAG, "connected led setup failed");
     s_ctx.upload_timer = xTimerCreate(
         "aetus_upload_timer",
         pdMS_TO_TICKS(s_ctx.config.upload_interval_ms),
@@ -843,6 +951,74 @@ esp_err_t aetus_start(const aetus_config_t *config)
         (unsigned)s_ctx.config.upload_interval_ms,
         (unsigned)s_ctx.config.queue_depth
     );
+    return ESP_OK;
+}
+
+esp_err_t aetus_update_config(const aetus_config_t *config)
+{
+    ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
+    ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config is required");
+
+    aetus_config_t next = *config;
+    if (next.upload_interval_ms == 0) {
+        next.upload_interval_ms = AETUS_UPLOAD_DEFAULT_INTERVAL_MS;
+    }
+    if (next.queue_depth == 0) {
+        next.queue_depth = s_ctx.config.queue_depth;
+    }
+    ESP_RETURN_ON_FALSE(
+        string_required_fits(next.wifi_ssid, AETUS_WIFI_SSID_MAX),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "wifi ssid is required or too long"
+    );
+    ESP_RETURN_ON_FALSE(
+        string_required_fits(next.wifi_password, AETUS_WIFI_PASSWORD_MAX),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "wifi password is required or too long"
+    );
+    ESP_RETURN_ON_FALSE(
+        next.wifi_auth == AETUS_WIFI_AUTH_PSK || next.wifi_auth == AETUS_WIFI_AUTH_PEAP,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "unsupported wifi auth"
+    );
+    if (next.wifi_auth == AETUS_WIFI_AUTH_PEAP) {
+        ESP_RETURN_ON_FALSE(
+            string_required_fits(next.wifi_identity, AETUS_WIFI_IDENTITY_MAX),
+            ESP_ERR_INVALID_ARG,
+            TAG,
+            "wifi peap id is required or too long"
+        );
+    }
+    ESP_RETURN_ON_FALSE(string_required_fits(next.ingest_url, AETUS_URL_MAX), ESP_ERR_INVALID_ARG, TAG, "ingest url is required or too long");
+    ESP_RETURN_ON_FALSE(string_fits(next.time_url, AETUS_URL_MAX + 1), ESP_ERR_INVALID_ARG, TAG, "time url too long");
+    ESP_RETURN_ON_FALSE(string_required_fits(next.device_id, AETUS_DEVICE_ID_MAX), ESP_ERR_INVALID_ARG, TAG, "device id is required or too long");
+    ESP_RETURN_ON_FALSE(string_required_fits(next.device_token, AETUS_DEVICE_TOKEN_MAX), ESP_ERR_INVALID_ARG, TAG, "device token is required or too long");
+
+    s_ctx.config = next;
+    ESP_RETURN_ON_ERROR(configure_connected_led(&s_ctx), TAG, "connected led setup failed");
+    if (s_ctx.upload_timer != NULL) {
+        xTimerChangePeriod(s_ctx.upload_timer, pdMS_TO_TICKS(s_ctx.config.upload_interval_ms), 0);
+    }
+    if (s_ctx.wifi_started) {
+        xEventGroupClearBits(s_ctx.events, AETUS_WIFI_CONNECTED_BIT);
+        if (s_ctx.config.connected_led_enabled) {
+            gpio_set_level((gpio_num_t)s_ctx.config.connected_led_gpio, 0);
+        }
+        ESP_RETURN_ON_ERROR(wifi_apply_sta_config(&s_ctx), TAG, "wifi config update failed");
+        esp_wifi_disconnect();
+        esp_wifi_connect();
+    }
+    return ESP_OK;
+}
+
+esp_err_t aetus_get_config(aetus_config_t *config)
+{
+    ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config output is required");
+    ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
+    *config = s_ctx.config;
     return ESP_OK;
 }
 

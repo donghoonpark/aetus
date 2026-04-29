@@ -16,6 +16,12 @@ extern "C" {
 #define AETUS_METRIC_UNIT_MAX 16
 #define AETUS_METRIC_STRING_MAX 64
 #define AETUS_METRIC_BYTES_MAX 64
+#define AETUS_WIFI_SSID_MAX 32
+#define AETUS_WIFI_PASSWORD_MAX 64
+#define AETUS_WIFI_IDENTITY_MAX 127
+#define AETUS_URL_MAX 159
+#define AETUS_DEVICE_ID_MAX 63
+#define AETUS_DEVICE_TOKEN_MAX 127
 #define AETUS_UPLOAD_DEFAULT_INTERVAL_MS (10U * 60U * 1000U)
 #define AETUS_RTC_VALID_AFTER_UNIX_S 1577836800ULL
 
@@ -57,6 +63,11 @@ typedef enum {
     AETUS_DEVICE_STATUS_OFFLINE = 2,
 } aetus_device_status_t;
 
+typedef enum {
+    AETUS_WIFI_AUTH_PSK = 0,
+    AETUS_WIFI_AUTH_PEAP = 1,
+} aetus_wifi_auth_t;
+
 typedef struct {
     aetus_device_status_t status;
     int32_t rssi;
@@ -68,6 +79,8 @@ typedef struct {
 typedef struct {
     const char *wifi_ssid;
     const char *wifi_password;
+    aetus_wifi_auth_t wifi_auth;
+    const char *wifi_identity;
     const char *ingest_url;
     const char *time_url;
     const char *device_id;
@@ -75,7 +88,26 @@ typedef struct {
     uint32_t firmware_version;
     uint32_t upload_interval_ms;
     uint32_t queue_depth;
+    bool connected_led_enabled;
+    int connected_led_gpio;
 } aetus_config_t;
+
+typedef void (*aetus_provisioning_config_changed_cb_t)(const aetus_config_t *config, void *user_ctx);
+typedef void (*aetus_provisioning_connection_check_cb_t)(
+    uint16_t conn_handle,
+    int status,
+    uint16_t interval,
+    uint16_t latency,
+    uint16_t supervision_timeout,
+    void *user_ctx
+);
+
+typedef struct {
+    const char *device_name;
+    aetus_provisioning_config_changed_cb_t config_changed_cb;
+    aetus_provisioning_connection_check_cb_t connection_check_cb;
+    void *user_ctx;
+} aetus_provisioning_config_t;
 
 void aetus_telemetry_init(aetus_telemetry_t *telemetry);
 void aetus_status_init(aetus_status_t *status, aetus_device_status_t device_status);
@@ -115,6 +147,9 @@ esp_err_t aetus_telemetry_add_bytes(
     const char *unit
 );
 esp_err_t aetus_start(const aetus_config_t *config);
+esp_err_t aetus_update_config(const aetus_config_t *config);
+esp_err_t aetus_get_config(aetus_config_t *config);
+esp_err_t aetus_start_provisioning(const aetus_provisioning_config_t *config);
 esp_err_t aetus_sync_rtc(TickType_t timeout);
 esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t timeout);
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout);

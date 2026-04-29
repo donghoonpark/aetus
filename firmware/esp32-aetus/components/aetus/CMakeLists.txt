@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "aetus.c"
+        "aetus_provisioning.c"
         "ingest.pb.c"
     INCLUDE_DIRS
         "include"
@@ -10,6 +11,9 @@ idf_component_register(
         esp_netif
         esp_timer
         esp_wifi
+        bt
+        esp_driver_gpio
         nanopb
         nvs_flash
+        wpa_supplicant
 )
