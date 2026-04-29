@@ -51,6 +51,7 @@ void app_main(void)
         .wifi_ssid = "SilverPark5G",
         .wifi_password = "********",
         .ingest_url = "http://ingest.internal/v1/ingest",
+        .time_url = "http://ingest.internal/v1/time",
         .device_id = "esp32c5-001",
         .device_token = "devtok_xxxxx",
         .firmware_version = 1002003,
@@ -59,13 +60,12 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(aetus_start(&config));
+    ESP_ERROR_CHECK(aetus_sync_rtc(pdMS_TO_TICKS(30000)));
 
-    aetus_telemetry_t telemetry = {0};
-    telemetry.metric_count = 1;
-    strncpy(telemetry.metrics[0].key, "temperature", sizeof(telemetry.metrics[0].key) - 1);
-    telemetry.metrics[0].type = AETUS_METRIC_VALUE_DOUBLE;
-    telemetry.metrics[0].value.double_value = 22.5;
-    strncpy(telemetry.metrics[0].unit, "celsius", sizeof(telemetry.metrics[0].unit) - 1);
+    aetus_telemetry_t telemetry;
+    aetus_telemetry_init(&telemetry);
+    ESP_ERROR_CHECK(aetus_telemetry_set_timestamp_rtc(&telemetry));
+    ESP_ERROR_CHECK(aetus_telemetry_add_double(&telemetry, "temperature", 22.5, "celsius"));
 
     ESP_ERROR_CHECK(aetus_enqueue_telemetry(&telemetry, pdMS_TO_TICKS(1000)));
 }
@@ -74,6 +74,7 @@ void app_main(void)
 ## API Contract
 
 - `aetus_start()` must be called once before enqueue APIs.
+- `aetus_sync_rtc()` performs authenticated `GET /v1/time` and sets the ESP32 RTC from `unix_time_ns`.
 - `aetus_enqueue_telemetry()` and `aetus_enqueue_status()` are thread-safe from normal FreeRTOS task context.
 - Enqueue APIs copy the message into the internal queue, so callers may reuse stack-local structs after the call returns.
 - Enqueue APIs are not ISR-safe. Add `FromISR` variants later if an interrupt path needs direct event emission.
@@ -84,6 +85,7 @@ void app_main(void)
 - Boot ID is generated once at startup as `boot-xxxxxxxx`.
 - Sequence starts at `0` for each boot session.
 - Sequence increments only after the server accepts an event.
+- RTC timestamps are optional; call `aetus_sync_rtc()` first, then `aetus_telemetry_set_timestamp_rtc()` or `aetus_status_set_timestamp_rtc()`.
 - Failed HTTP upload requeues the failed event to the front of the memory queue.
 - The default upload interval is 10 minutes.
 - The default transport is HTTP. HTTPS certificate policy is intentionally not part of this first portable component.

@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -10,31 +9,15 @@
 
 static const char *TAG = "aetus_multitask_example";
 
-static void copy_string(char *target, size_t target_size, const char *source)
-{
-    if (target_size == 0) {
-        return;
-    }
-    strncpy(target, source, target_size - 1);
-    target[target_size - 1] = '\0';
-}
-
 static void sensor_producer_task(void *arg)
 {
     const char *sensor_name = (const char *)arg;
 
     for (int index = 0; index < 5; index++) {
-        aetus_telemetry_t telemetry = {0};
-        telemetry.metric_count = 2;
-
-        copy_string(telemetry.metrics[0].key, sizeof(telemetry.metrics[0].key), sensor_name);
-        telemetry.metrics[0].type = AETUS_METRIC_VALUE_DOUBLE;
-        telemetry.metrics[0].value.double_value = 10.0 + index;
-        copy_string(telemetry.metrics[0].unit, sizeof(telemetry.metrics[0].unit), "raw");
-
-        copy_string(telemetry.metrics[1].key, sizeof(telemetry.metrics[1].key), "producer_index");
-        telemetry.metrics[1].type = AETUS_METRIC_VALUE_INT64;
-        telemetry.metrics[1].value.int64_value = index;
+        aetus_telemetry_t telemetry;
+        aetus_telemetry_init(&telemetry);
+        ESP_ERROR_CHECK(aetus_telemetry_add_double(&telemetry, sensor_name, 10.0 + index, "raw"));
+        ESP_ERROR_CHECK(aetus_telemetry_add_int64(&telemetry, "producer_index", index, NULL));
 
         esp_err_t err = aetus_enqueue_telemetry(&telemetry, pdMS_TO_TICKS(100));
         if (err != ESP_OK) {

@@ -17,6 +17,15 @@ class ProvisionResponse(BaseModel):
     config: dict[str, str | int]
 
 
+class TimeSyncResponse(BaseModel):
+    unix_time_s: int
+    unix_time_ms: int
+    unix_time_ns: str
+    iso8601: str
+    source: str
+    valid_after_unix_s: int
+
+
 class DeviceIssueRequest(BaseModel):
     hardware_id: str
     model: str = "esp32-c5"

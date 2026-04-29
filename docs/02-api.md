@@ -4,6 +4,7 @@
 
 - `POST /v1/provision`
 - `POST /v1/ingest`
+- `GET /v1/time`
 - `GET /v1/healthz`
 - `GET /v1/readyz`
 
@@ -38,6 +39,42 @@
 - `boot_id`는 항상 포함하고, 서버는 `device_id + boot_id + sequence`를 이벤트 구분 기준으로 사용
 - `sequence`는 각 부팅 세션에서 `0`부터 시작하고, 재부팅 시 다시 `0`으로 초기화
 - 장치 시각이 필요하면 `timestamp_ns`를 선택 필드로 보낼 수 있지만, 서버는 이를 중복 방지 기준으로 사용하지 않음
+
+## RTC time sync API
+
+장치 RTC가 부정확할 수 있으므로, 표준 펌웨어는 업로드 전 서버 시간을 받아 RTC를 맞출 수 있다.
+
+권장 엔드포인트:
+
+- `GET /v1/time`
+
+요청 헤더:
+
+| Header | 필수 여부 | 설명 |
+| --- | --- | --- |
+| `X-Device-Id` | 필수 | 장치 식별자 |
+| `Authorization: Bearer <token>` | 필수 | 장치별 정적 토큰 |
+
+응답 예시:
+
+```json
+{
+  "unix_time_s": 1777443380,
+  "unix_time_ms": 1777443380857,
+  "unix_time_ns": "1777443380857659666",
+  "iso8601": "2026-04-29T06:16:20Z",
+  "source": "ingest-api",
+  "valid_after_unix_s": 1577836800
+}
+```
+
+설계 기준:
+
+- `unix_time_ns`는 JSON number 정밀도 문제를 피하기 위해 문자열로 반환한다.
+- endpoint는 `Cache-Control: no-store`를 반환한다.
+- 인증, source IP CIDR, rate limit 정책은 device token 기반 ingest 계열과 동일하게 적용한다.
+- 장치는 RTC sync 성공 후 protobuf `timestamp_ns`를 선택적으로 채운다.
+- RTC sync 실패가 데이터 업로드 자체를 반드시 막을 필요는 없으며, 제품 정책에 따라 timestamp 없이 업로드할 수 있다.
 
 ## 인증
 

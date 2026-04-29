@@ -62,6 +62,7 @@ services/
 
 - `GET /v1/healthz`
 - `GET /v1/readyz`
+- `GET /v1/time`
 - `POST /v1/ingest`
 - `POST /v1/provision`
 - `GET /v1/control/status`
@@ -76,13 +77,22 @@ services/
 
 1. `Content-Type=application/x-protobuf` 확인
 2. source IP CIDR 확인
-3. bearer token 추출
-4. control DB에서 device token read-only 조회
-5. protobuf 파싱
-6. `device_id`, `boot_id`, `body` 기본 검증
-7. in-memory rate limit 검사
+3. in-memory rate limit 검사
+4. bearer token 추출
+5. control DB에서 device token read-only 조회
+6. protobuf 파싱
+7. `device_id`, `boot_id`, `body` 기본 검증
 8. 내부 event object로 normalize
 9. memory publisher 또는 Kafka publisher로 publish
+
+### RTC time sync 동작
+
+`GET /v1/time`은 장치별 정적 bearer token으로 인증하고 서버 시간을 반환한다.
+
+- `unix_time_ns`는 JSON 정밀도 손실을 피하기 위해 문자열로 반환한다.
+- 응답에는 `Cache-Control: no-store`가 붙는다.
+- source IP CIDR, device token 검증, in-memory rate limit는 ingest 계열과 동일하게 적용한다.
+- ESP32 표준 컴포넌트는 이 값을 받아 `settimeofday()`로 RTC를 설정하고, 이후 `timestamp_ns` helper로 telemetry/status에 시간을 채운다.
 
 ### 중요한 구현 결정
 
@@ -324,6 +334,10 @@ uv run pytest tests/qemu_e2e -q -s
 현재 공개 API:
 
 - `aetus_start`
+- `aetus_sync_rtc`
+- `aetus_rtc_timestamp_ns`
+- `aetus_telemetry_set_timestamp_rtc`
+- `aetus_status_set_timestamp_rtc`
 - `aetus_enqueue_telemetry`
 - `aetus_enqueue_status`
 - `aetus_flush`
@@ -335,6 +349,8 @@ uv run pytest tests/qemu_e2e -q -s
 - 서버 2xx 수락 후 sequence 증가
 - telemetry/status event protobuf encode
 - double/int64/bool/string/bytes metric value encode
+- `/v1/time` 기반 RTC sync
+- RTC 기반 `timestamp_ns` helper
 - upload 실패 시 queue front requeue
 - `aetus_flush()` 완료 대기
 

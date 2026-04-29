@@ -83,6 +83,42 @@ def test_virtual_device_preserves_timestamp_ns() -> None:
     assert publisher.events[0]["timestamp_ns"] == 1_712_345_678_901_234_567
 
 
+def test_time_sync_returns_authenticated_server_time() -> None:
+    client, _ = make_client()
+
+    response = client.get(
+        "/v1/time",
+        headers={
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = response.json()
+    assert body["source"] == "ingest-api"
+    assert body["valid_after_unix_s"] == 1_577_836_800
+    assert body["unix_time_s"] >= body["valid_after_unix_s"]
+    assert body["unix_time_ms"] // 1000 == body["unix_time_s"]
+    assert body["unix_time_ns"].isdigit()
+    assert int(body["unix_time_ns"]) // 1_000_000_000 == body["unix_time_s"]
+
+
+def test_time_sync_rejects_invalid_device_token() -> None:
+    client, _ = make_client()
+
+    response = client.get(
+        "/v1/time",
+        headers={
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer wrong-token",
+        },
+    )
+
+    assert response.status_code == 401
+
+
 def test_virtual_device_can_upload_reboot_status() -> None:
     client, publisher = make_client()
     device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")

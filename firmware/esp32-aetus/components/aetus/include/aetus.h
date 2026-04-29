@@ -17,6 +17,7 @@ extern "C" {
 #define AETUS_METRIC_STRING_MAX 64
 #define AETUS_METRIC_BYTES_MAX 64
 #define AETUS_UPLOAD_DEFAULT_INTERVAL_MS (10U * 60U * 1000U)
+#define AETUS_RTC_VALID_AFTER_UNIX_S 1577836800ULL
 
 typedef enum {
     AETUS_METRIC_VALUE_INT64 = 0,
@@ -68,6 +69,7 @@ typedef struct {
     const char *wifi_ssid;
     const char *wifi_password;
     const char *ingest_url;
+    const char *time_url;
     const char *device_id;
     const char *device_token;
     uint32_t firmware_version;
@@ -75,7 +77,45 @@ typedef struct {
     uint32_t queue_depth;
 } aetus_config_t;
 
+void aetus_telemetry_init(aetus_telemetry_t *telemetry);
+void aetus_status_init(aetus_status_t *status, aetus_device_status_t device_status);
+esp_err_t aetus_status_set_reboot_reason(aetus_status_t *status, const char *reboot_reason);
+esp_err_t aetus_rtc_timestamp_ns(uint64_t *timestamp_ns);
+esp_err_t aetus_telemetry_set_timestamp_rtc(aetus_telemetry_t *telemetry);
+esp_err_t aetus_status_set_timestamp_rtc(aetus_status_t *status);
+esp_err_t aetus_telemetry_add_int64(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    int64_t value,
+    const char *unit
+);
+esp_err_t aetus_telemetry_add_double(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    double value,
+    const char *unit
+);
+esp_err_t aetus_telemetry_add_bool(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    bool value,
+    const char *unit
+);
+esp_err_t aetus_telemetry_add_string(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    const char *value,
+    const char *unit
+);
+esp_err_t aetus_telemetry_add_bytes(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    const uint8_t *value,
+    size_t value_size,
+    const char *unit
+);
 esp_err_t aetus_start(const aetus_config_t *config);
+esp_err_t aetus_sync_rtc(TickType_t timeout);
 esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t timeout);
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout);
 esp_err_t aetus_flush(TickType_t timeout);

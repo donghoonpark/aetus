@@ -102,6 +102,10 @@ firmware/
 
 ```c
 esp_err_t aetus_start(const aetus_config_t *config);
+esp_err_t aetus_sync_rtc(TickType_t timeout);
+esp_err_t aetus_rtc_timestamp_ns(uint64_t *timestamp_ns);
+esp_err_t aetus_telemetry_set_timestamp_rtc(aetus_telemetry_t *telemetry);
+esp_err_t aetus_status_set_timestamp_rtc(aetus_status_t *status);
 esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t timeout);
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout);
 esp_err_t aetus_flush(TickType_t timeout);
@@ -110,6 +114,7 @@ esp_err_t aetus_flush(TickType_t timeout);
 Thread safety 규칙:
 
 - `aetus_start()`는 부팅 초기에 1회 호출한다.
+- `aetus_sync_rtc()`는 시작 후 필요 시 호출하며, `/v1/time`에서 받은 서버 시간으로 RTC를 설정한다.
 - `aetus_enqueue_telemetry()`는 여러 FreeRTOS task에서 동시에 호출해도 된다.
 - `aetus_enqueue_status()`도 여러 FreeRTOS task에서 동시에 호출해도 된다.
 - enqueue API는 메시지를 내부 queue item으로 복사하므로 caller의 stack-local struct를 재사용해도 된다.
@@ -182,6 +187,14 @@ sequenceDiagram
 - 기본 주기: 10분
 - 테스트 주기: `.env.hil`에서 10초 등으로 조정
 - 즉시 업로드: `aetus_flush(timeout)`
+
+RTC 동기화:
+
+- `aetus_config_t.time_url`을 지정하면 해당 endpoint를 사용한다.
+- `time_url`을 생략하면 `ingest_url`이 `/v1/ingest`로 끝나는 경우 `/v1/time`으로 자동 치환한다.
+- `/v1/time` 응답의 `unix_time_ns` 문자열을 파싱해 `settimeofday()`로 RTC를 설정한다.
+- RTC가 `2020-01-01T00:00:00Z` 이전이면 `aetus_rtc_timestamp_ns()`는 미초기화 상태로 보고 실패한다.
+- `aetus_telemetry_set_timestamp_rtc()`와 `aetus_status_set_timestamp_rtc()`는 RTC가 유효할 때만 protobuf `timestamp_ns`를 채운다.
 
 실패 처리:
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from math import ceil
 from pathlib import Path
+import time
 
 from fastapi import FastAPI, Form, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,9 +25,11 @@ from aetus_ingest.schemas import (
     DeviceSummary,
     ProvisionRequest,
     ProvisionResponse,
+    TimeSyncResponse,
 )
 
 ADMIN_PAGE_SIZE = 10
+RTC_VALID_AFTER_UNIX_S = 1_577_836_800
 
 
 def _to_device_summary(record: DeviceRecord) -> DeviceSummary:
@@ -88,6 +91,35 @@ def create_app(
             burst=app.state.settings.allowlist_burst if is_allowlisted else app.state.settings.ingest_burst,
         )
 
+    async def require_device_auth(
+        *,
+        request: Request,
+        x_device_id: str,
+        authorization: str | None,
+        rate_limit_prefix: str,
+    ) -> str:
+        settings: Settings = app.state.settings
+        control_db: ControlDB = app.state.control_db
+        source_ip = request.client.host if request.client else "0.0.0.0"
+
+        if not is_source_ip_allowed(source_ip, settings):
+            raise HTTPException(status_code=403, detail="source ip not allowed")
+
+        rate_limit_key = f"{rate_limit_prefix}:{x_device_id}:{source_ip}"
+        rate_decision = app.state.rate_limiter.consume(rate_limit_key, ingest_rate_plan(x_device_id))
+        if not rate_decision.allowed:
+            raise_rate_limited(rate_decision, "rate limit exceeded")
+
+        try:
+            token = extract_bearer_token(authorization)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+        if not await verify_device_token(x_device_id, token, control_db):
+            raise HTTPException(status_code=401, detail="invalid device token")
+
+        return source_ip
+
     async def render_admin_devices_page(
         request: Request,
         *,
@@ -139,6 +171,32 @@ def create_app(
         settings: Settings = app.state.settings
         return await build_control_status(settings)
 
+    @app.get("/v1/time", response_model=TimeSyncResponse)
+    async def time_sync(
+        request: Request,
+        response: Response,
+        x_device_id: str = Header(..., alias="X-Device-Id"),
+        authorization: str | None = Header(None, alias="Authorization"),
+    ) -> TimeSyncResponse:
+        await require_device_auth(
+            request=request,
+            x_device_id=x_device_id,
+            authorization=authorization,
+            rate_limit_prefix="time",
+        )
+
+        unix_time_ns = time.time_ns()
+        unix_time_s = unix_time_ns // 1_000_000_000
+        response.headers["Cache-Control"] = "no-store"
+        return TimeSyncResponse(
+            unix_time_s=unix_time_s,
+            unix_time_ms=unix_time_ns // 1_000_000,
+            unix_time_ns=str(unix_time_ns),
+            iso8601=datetime.fromtimestamp(unix_time_s, timezone.utc).isoformat().replace("+00:00", "Z"),
+            source="ingest-api",
+            valid_after_unix_s=RTC_VALID_AFTER_UNIX_S,
+        )
+
     @app.get("/v1/control/devices", response_model=DeviceListResponse)
     async def control_devices(
         page: int = Query(1, ge=1),
@@ -182,27 +240,16 @@ def create_app(
         content_type: str | None = Header(None, alias="Content-Type"),
     ) -> dict[str, str | int]:
         settings: Settings = app.state.settings
-        control_db: ControlDB = app.state.control_db
-        source_ip = request.client.host if request.client else "0.0.0.0"
 
         if not content_type or "application/x-protobuf" not in content_type:
             raise HTTPException(status_code=415, detail="content-type must be application/x-protobuf")
 
-        if not is_source_ip_allowed(source_ip, settings):
-            raise HTTPException(status_code=403, detail="source ip not allowed")
-
-        rate_limit_key = f"ingest:{x_device_id}:{source_ip}"
-        rate_decision = app.state.rate_limiter.consume(rate_limit_key, ingest_rate_plan(x_device_id))
-        if not rate_decision.allowed:
-            raise_rate_limited(rate_decision, "rate limit exceeded")
-
-        try:
-            token = extract_bearer_token(authorization)
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-        if not await verify_device_token(x_device_id, token, control_db):
-            raise HTTPException(status_code=401, detail="invalid device token")
+        source_ip = await require_device_auth(
+            request=request,
+            x_device_id=x_device_id,
+            authorization=authorization,
+            rate_limit_prefix="ingest",
+        )
 
         body = await request.body()
         if len(body) > settings.max_body_bytes:

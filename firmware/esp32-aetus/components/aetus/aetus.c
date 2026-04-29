@@ -1,8 +1,11 @@
 #include "aetus.h"
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "esp_check.h"
 #include "esp_event.h"
@@ -30,6 +33,9 @@
 #define AETUS_TASK_PRIORITY 5
 #define AETUS_WIFI_CONNECT_TIMEOUT_MS 15000
 #define AETUS_ENCODE_BUFFER_BYTES 1024
+#define AETUS_TIME_RESPONSE_BUFFER_BYTES 512
+#define AETUS_INGEST_PATH "/v1/ingest"
+#define AETUS_TIME_PATH "/v1/time"
 
 static const char *TAG = "aetus";
 
@@ -50,6 +56,13 @@ typedef struct {
     const uint8_t *data;
     size_t size;
 } aetus_bytes_arg_t;
+
+typedef struct {
+    char *data;
+    size_t capacity;
+    size_t length;
+    bool overflow;
+} aetus_http_body_t;
 
 typedef struct {
     aetus_config_t config;
@@ -76,6 +89,27 @@ static void copy_string(char *target, size_t target_size, const char *source)
 
     strncpy(target, source, target_size - 1);
     target[target_size - 1] = '\0';
+}
+
+static bool string_fits(const char *value, size_t target_size)
+{
+    if (value == NULL) {
+        return true;
+    }
+    if (target_size == 0) {
+        return false;
+    }
+    return strnlen(value, target_size) < target_size;
+}
+
+static bool ends_with(const char *value, const char *suffix)
+{
+    if (value == NULL || suffix == NULL) {
+        return false;
+    }
+    size_t value_len = strlen(value);
+    size_t suffix_len = strlen(suffix);
+    return value_len >= suffix_len && memcmp(value + value_len - suffix_len, suffix, suffix_len) == 0;
 }
 
 static bool encode_string_callback(pb_ostream_t *stream, const pb_field_t *field, void *const *arg)
@@ -204,7 +238,7 @@ static esp_err_t wifi_start(aetus_ctx_t *ctx)
     return ESP_OK;
 }
 
-static esp_err_t wifi_wait_connected(aetus_ctx_t *ctx)
+static esp_err_t wifi_wait_connected_for(aetus_ctx_t *ctx, TickType_t timeout)
 {
     ESP_RETURN_ON_ERROR(wifi_start(ctx), TAG, "wifi start failed");
     EventBits_t bits = xEventGroupWaitBits(
@@ -212,9 +246,153 @@ static esp_err_t wifi_wait_connected(aetus_ctx_t *ctx)
         AETUS_WIFI_CONNECTED_BIT,
         pdFALSE,
         pdTRUE,
-        pdMS_TO_TICKS(AETUS_WIFI_CONNECT_TIMEOUT_MS)
+        timeout
     );
     return (bits & AETUS_WIFI_CONNECTED_BIT) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+static esp_err_t wifi_wait_connected(aetus_ctx_t *ctx)
+{
+    return wifi_wait_connected_for(ctx, pdMS_TO_TICKS(AETUS_WIFI_CONNECT_TIMEOUT_MS));
+}
+
+static esp_err_t collect_http_body(esp_http_client_event_t *event)
+{
+    if (event->event_id != HTTP_EVENT_ON_DATA || event->user_data == NULL || event->data == NULL) {
+        return ESP_OK;
+    }
+
+    aetus_http_body_t *body = (aetus_http_body_t *)event->user_data;
+    size_t incoming = (size_t)event->data_len;
+    if (body->length + incoming >= body->capacity) {
+        body->overflow = true;
+        incoming = body->capacity - body->length - 1;
+    }
+    if (incoming > 0) {
+        memcpy(body->data + body->length, event->data, incoming);
+        body->length += incoming;
+        body->data[body->length] = '\0';
+    }
+    return ESP_OK;
+}
+
+static esp_err_t resolve_time_url(const aetus_ctx_t *ctx, char *buffer, size_t buffer_size, const char **time_url)
+{
+    ESP_RETURN_ON_FALSE(ctx != NULL, ESP_ERR_INVALID_ARG, TAG, "context is required");
+    ESP_RETURN_ON_FALSE(time_url != NULL, ESP_ERR_INVALID_ARG, TAG, "time url output is required");
+
+    if (ctx->config.time_url != NULL && ctx->config.time_url[0] != '\0') {
+        *time_url = ctx->config.time_url;
+        return ESP_OK;
+    }
+
+    const char *ingest_url = ctx->config.ingest_url;
+    ESP_RETURN_ON_FALSE(
+        ends_with(ingest_url, AETUS_INGEST_PATH),
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "time_url is required when ingest_url does not end with /v1/ingest"
+    );
+
+    size_t prefix_len = strlen(ingest_url) - strlen(AETUS_INGEST_PATH);
+    size_t required = prefix_len + strlen(AETUS_TIME_PATH) + 1;
+    ESP_RETURN_ON_FALSE(required <= buffer_size, ESP_ERR_NO_MEM, TAG, "time url buffer too small");
+    memcpy(buffer, ingest_url, prefix_len);
+    memcpy(buffer + prefix_len, AETUS_TIME_PATH, strlen(AETUS_TIME_PATH) + 1);
+    *time_url = buffer;
+    return ESP_OK;
+}
+
+static esp_err_t parse_unix_time_ns(const char *body, uint64_t *unix_time_ns)
+{
+    ESP_RETURN_ON_FALSE(body != NULL, ESP_ERR_INVALID_ARG, TAG, "time response body is required");
+    ESP_RETURN_ON_FALSE(unix_time_ns != NULL, ESP_ERR_INVALID_ARG, TAG, "time output is required");
+
+    const char *key = "\"unix_time_ns\"";
+    const char *cursor = strstr(body, key);
+    ESP_RETURN_ON_FALSE(cursor != NULL, ESP_ERR_INVALID_RESPONSE, TAG, "unix_time_ns missing");
+    cursor = strchr(cursor + strlen(key), ':');
+    ESP_RETURN_ON_FALSE(cursor != NULL, ESP_ERR_INVALID_RESPONSE, TAG, "unix_time_ns separator missing");
+    cursor++;
+
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') {
+        cursor++;
+    }
+    if (*cursor == '"') {
+        cursor++;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long long parsed = strtoull(cursor, &end, 10);
+    ESP_RETURN_ON_FALSE(errno == 0 && end != cursor, ESP_ERR_INVALID_RESPONSE, TAG, "unix_time_ns invalid");
+
+    *unix_time_ns = (uint64_t)parsed;
+    return ESP_OK;
+}
+
+static esp_err_t fetch_server_time_ns(aetus_ctx_t *ctx, uint64_t *unix_time_ns)
+{
+    char time_url_buffer[160] = {0};
+    const char *time_url = NULL;
+    ESP_RETURN_ON_ERROR(resolve_time_url(ctx, time_url_buffer, sizeof(time_url_buffer), &time_url), TAG, "time url failed");
+
+    char response_body[AETUS_TIME_RESPONSE_BUFFER_BYTES] = {0};
+    aetus_http_body_t body = {
+        .data = response_body,
+        .capacity = sizeof(response_body),
+        .length = 0,
+        .overflow = false,
+    };
+    esp_http_client_config_t http_config = {
+        .url = time_url,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = AETUS_HTTP_TIMEOUT_MS,
+        .event_handler = collect_http_body,
+        .user_data = &body,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&http_config);
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+
+    char authorization[128];
+    snprintf(authorization, sizeof(authorization), "Bearer %s", ctx->config.device_token);
+    esp_http_client_set_header(client, "X-Device-Id", ctx->config.device_id);
+    esp_http_client_set_header(client, "Authorization", authorization);
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "time sync http failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    if (status < 200 || status >= 300) {
+        ESP_LOGE(TAG, "time sync rejected status=%d", status);
+        return ESP_FAIL;
+    }
+    ESP_RETURN_ON_FALSE(!body.overflow, ESP_ERR_NO_MEM, TAG, "time response too large");
+    return parse_unix_time_ns(response_body, unix_time_ns);
+}
+
+static esp_err_t set_rtc_from_unix_time_ns(uint64_t unix_time_ns)
+{
+    uint64_t unix_time_s = unix_time_ns / 1000000000ULL;
+    ESP_RETURN_ON_FALSE(
+        unix_time_s >= AETUS_RTC_VALID_AFTER_UNIX_S,
+        ESP_ERR_INVALID_RESPONSE,
+        TAG,
+        "server time is before valid rtc threshold"
+    );
+
+    struct timeval tv = {
+        .tv_sec = (time_t)unix_time_s,
+        .tv_usec = (suseconds_t)((unix_time_ns % 1000000000ULL) / 1000ULL),
+    };
+    ESP_RETURN_ON_FALSE(settimeofday(&tv, NULL) == 0, ESP_FAIL, TAG, "rtc write failed");
+    return ESP_OK;
 }
 
 static void fill_event_header(aetus_ctx_t *ctx, aetus_ingest_v1_IngestEvent *event)
@@ -443,6 +621,176 @@ static void uploader_task(void *arg)
     }
 }
 
+void aetus_telemetry_init(aetus_telemetry_t *telemetry)
+{
+    if (telemetry == NULL) {
+        return;
+    }
+    memset(telemetry, 0, sizeof(*telemetry));
+}
+
+void aetus_status_init(aetus_status_t *status, aetus_device_status_t device_status)
+{
+    if (status == NULL) {
+        return;
+    }
+    memset(status, 0, sizeof(*status));
+    status->status = device_status;
+}
+
+esp_err_t aetus_status_set_reboot_reason(aetus_status_t *status, const char *reboot_reason)
+{
+    ESP_RETURN_ON_FALSE(status != NULL, ESP_ERR_INVALID_ARG, TAG, "status is required");
+    ESP_RETURN_ON_FALSE(reboot_reason != NULL, ESP_ERR_INVALID_ARG, TAG, "reboot reason is required");
+    ESP_RETURN_ON_FALSE(
+        string_fits(reboot_reason, sizeof(status->reboot_reason)),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "reboot reason too long"
+    );
+    copy_string(status->reboot_reason, sizeof(status->reboot_reason), reboot_reason);
+    return ESP_OK;
+}
+
+esp_err_t aetus_rtc_timestamp_ns(uint64_t *timestamp_ns)
+{
+    ESP_RETURN_ON_FALSE(timestamp_ns != NULL, ESP_ERR_INVALID_ARG, TAG, "timestamp output is required");
+
+    struct timeval now;
+    ESP_RETURN_ON_FALSE(gettimeofday(&now, NULL) == 0, ESP_FAIL, TAG, "rtc read failed");
+    ESP_RETURN_ON_FALSE(
+        (uint64_t)now.tv_sec >= AETUS_RTC_VALID_AFTER_UNIX_S,
+        ESP_ERR_INVALID_STATE,
+        TAG,
+        "rtc is not initialized"
+    );
+
+    *timestamp_ns = ((uint64_t)now.tv_sec * 1000000000ULL) + ((uint64_t)now.tv_usec * 1000ULL);
+    return ESP_OK;
+}
+
+esp_err_t aetus_telemetry_set_timestamp_rtc(aetus_telemetry_t *telemetry)
+{
+    ESP_RETURN_ON_FALSE(telemetry != NULL, ESP_ERR_INVALID_ARG, TAG, "telemetry is required");
+    return aetus_rtc_timestamp_ns(&telemetry->timestamp_ns);
+}
+
+esp_err_t aetus_status_set_timestamp_rtc(aetus_status_t *status)
+{
+    ESP_RETURN_ON_FALSE(status != NULL, ESP_ERR_INVALID_ARG, TAG, "status is required");
+    return aetus_rtc_timestamp_ns(&status->timestamp_ns);
+}
+
+static esp_err_t append_metric(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    const char *unit,
+    aetus_metric_t **metric
+)
+{
+    ESP_RETURN_ON_FALSE(telemetry != NULL, ESP_ERR_INVALID_ARG, TAG, "telemetry is required");
+    ESP_RETURN_ON_FALSE(key != NULL && key[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "metric key is required");
+    ESP_RETURN_ON_FALSE(metric != NULL, ESP_ERR_INVALID_ARG, TAG, "metric output is required");
+    ESP_RETURN_ON_FALSE(string_fits(key, AETUS_METRIC_KEY_MAX), ESP_ERR_INVALID_ARG, TAG, "metric key too long");
+    ESP_RETURN_ON_FALSE(string_fits(unit, AETUS_METRIC_UNIT_MAX), ESP_ERR_INVALID_ARG, TAG, "metric unit too long");
+    ESP_RETURN_ON_FALSE(
+        telemetry->metric_count < AETUS_MAX_METRICS,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "too many metrics"
+    );
+
+    *metric = &telemetry->metrics[telemetry->metric_count];
+    memset(*metric, 0, sizeof(**metric));
+    copy_string((*metric)->key, sizeof((*metric)->key), key);
+    copy_string((*metric)->unit, sizeof((*metric)->unit), unit);
+    telemetry->metric_count++;
+    return ESP_OK;
+}
+
+esp_err_t aetus_telemetry_add_int64(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    int64_t value,
+    const char *unit
+)
+{
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(append_metric(telemetry, key, unit, &metric), TAG, "append metric failed");
+    metric->type = AETUS_METRIC_VALUE_INT64;
+    metric->value.int64_value = value;
+    return ESP_OK;
+}
+
+esp_err_t aetus_telemetry_add_double(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    double value,
+    const char *unit
+)
+{
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(append_metric(telemetry, key, unit, &metric), TAG, "append metric failed");
+    metric->type = AETUS_METRIC_VALUE_DOUBLE;
+    metric->value.double_value = value;
+    return ESP_OK;
+}
+
+esp_err_t aetus_telemetry_add_bool(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    bool value,
+    const char *unit
+)
+{
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(append_metric(telemetry, key, unit, &metric), TAG, "append metric failed");
+    metric->type = AETUS_METRIC_VALUE_BOOL;
+    metric->value.bool_value = value;
+    return ESP_OK;
+}
+
+esp_err_t aetus_telemetry_add_string(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    const char *value,
+    const char *unit
+)
+{
+    ESP_RETURN_ON_FALSE(value != NULL, ESP_ERR_INVALID_ARG, TAG, "string value is required");
+    ESP_RETURN_ON_FALSE(
+        string_fits(value, AETUS_METRIC_STRING_MAX),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "string value too long"
+    );
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(append_metric(telemetry, key, unit, &metric), TAG, "append metric failed");
+    metric->type = AETUS_METRIC_VALUE_STRING;
+    copy_string(metric->value.string_value, sizeof(metric->value.string_value), value);
+    return ESP_OK;
+}
+
+esp_err_t aetus_telemetry_add_bytes(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    const uint8_t *value,
+    size_t value_size,
+    const char *unit
+)
+{
+    ESP_RETURN_ON_FALSE(value != NULL || value_size == 0, ESP_ERR_INVALID_ARG, TAG, "bytes value is required");
+    ESP_RETURN_ON_FALSE(value_size <= AETUS_METRIC_BYTES_MAX, ESP_ERR_INVALID_ARG, TAG, "bytes value too large");
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(append_metric(telemetry, key, unit, &metric), TAG, "append metric failed");
+    metric->type = AETUS_METRIC_VALUE_BYTES;
+    if (value_size > 0) {
+        memcpy(metric->value.bytes_value.data, value, value_size);
+    }
+    metric->value.bytes_value.size = value_size;
+    return ESP_OK;
+}
+
 esp_err_t aetus_start(const aetus_config_t *config)
 {
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config is required");
@@ -495,6 +843,19 @@ esp_err_t aetus_start(const aetus_config_t *config)
         (unsigned)s_ctx.config.upload_interval_ms,
         (unsigned)s_ctx.config.queue_depth
     );
+    return ESP_OK;
+}
+
+esp_err_t aetus_sync_rtc(TickType_t timeout)
+{
+    ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
+    ESP_RETURN_ON_ERROR(wifi_wait_connected_for(&s_ctx, timeout), TAG, "wifi connect before time sync failed");
+
+    uint64_t unix_time_ns = 0;
+    ESP_RETURN_ON_ERROR(fetch_server_time_ns(&s_ctx, &unix_time_ns), TAG, "server time fetch failed");
+    ESP_RETURN_ON_ERROR(set_rtc_from_unix_time_ns(unix_time_ns), TAG, "rtc set failed");
+
+    ESP_LOGI(TAG, "AETUS_RTC_SYNC_OK unix_time_ns=%llu", unix_time_ns);
     return ESP_OK;
 }
 
