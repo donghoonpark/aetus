@@ -10,6 +10,7 @@
 
 - [[../firmware/esp32-aetus]]
 - [[../firmware/esp32c5-upload-smoke]]
+- [[../firmware/examples]]
 
 ## 설계 방향
 
@@ -67,6 +68,10 @@ firmware/
     components/
       aetus/
       nanopb/
+  examples/
+    basic-telemetry/
+    multitask-producers/
+    metric-types/
   esp32c5-upload-smoke/
     main/
 ```
@@ -75,7 +80,17 @@ firmware/
 
 - `esp32-aetus/components/aetus`: 공개 API, 업로드 task, protobuf encode, HTTP client
 - `esp32-aetus/components/nanopb`: 최소 nanopb runtime
+- `examples`: 표준 컴포넌트를 소비하는 이식 가능한 ESP-IDF 예제 app
 - `esp32c5-upload-smoke`: 실제 ESP32-C5 HIL 검증용 app
+
+## Flash/Partition 기준
+
+표준 예제는 최소 외부 SPI flash `4MB`를 가정한다.
+
+- ESP-IDF 기본 single-app 파티션은 app 영역이 작아 Wi-Fi, HTTP client, mbedTLS, nanopb가 들어간 예제에서 쉽게 부족해진다.
+- 예제 app은 custom partition table을 사용하고 factory app 영역을 `3MB`로 둔다.
+- 예제에서는 OTA slot을 아직 구성하지 않는다.
+- 제품 firmware에서 OTA가 필요하면 같은 4MB 기준으로 OTA partition layout을 별도 설계한다.
 
 ## 공개 API
 

@@ -98,3 +98,13 @@ void app_main(void)
 ## Current Consumer
 
 `firmware/esp32c5-upload-smoke` is the HIL app that consumes this portable stack on a real ESP32-C5 board.
+
+## Example Apps
+
+`firmware/examples` contains standalone ESP-IDF apps that validate the intended developer experience:
+
+- `basic-telemetry`: minimal boot/status and telemetry upload usage.
+- `multitask-producers`: concurrent producer tasks calling the thread-safe enqueue API.
+- `metric-types`: all supported protobuf metric value types.
+
+The examples target ESP32-C5, ESP-IDF 6.0, and a minimum 4MB external SPI flash with a 3MB factory app partition.

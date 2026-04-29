@@ -22,7 +22,7 @@
 - [[05-examples]]: FastAPI 예제 코드, nanopb 예제 코드, `.options` 예시
 - [[06-embedded-architecture]]: ESP32-C5 임베디드 구조, task 분리, 큐잉, FlashDB, nanopb
 - [[06-1-event-driven-low-power-system-implementation-plan]]: OPT3001 기반 이벤트 구동 저전력 전략, 전력 예산, 배터리 수명 계산
-- [[06-2-standard-embedded-upload-stack]]: `firmware/esp32-aetus` 표준 업로드 컴포넌트, 공개 API, thread safety, HIL 소비 구조
+- [[06-2-standard-embedded-upload-stack]]: `firmware/esp32-aetus` 표준 업로드 컴포넌트, 공개 API, thread safety, 예제 app, HIL 소비 구조
 - [[07-implementation-status]]: 현재 코드 구현 범위, 테스트 커버리지, 운영 제약, 다음 작업 포인트
 - [[open-decisions]]: 아직 합의가 필요한 기술 결정사항
 
@@ -38,6 +38,7 @@
 - Kafka와 PostgreSQL은 분리망 내 self-managed 운영 전제
 - 임베디드 표준 스택은 `ESP-IDF + FreeRTOS + NimBLE + FlashDB + nanopb`
 - 표준 업로드 컴포넌트는 `firmware/esp32-aetus`에 위치하며 유저 task는 thread-safe enqueue API만 호출한다
+- `firmware/examples`는 표준 컴포넌트를 실제 ESP-IDF app으로 소비하는 빌드 가능한 예제를 제공한다
 - bootstrap token은 단일 공용 token이며 유출/공유를 전제로 매우 가혹한 제한만 둔다
 - provisioning allowlist는 `source IP + hardware_id` 기준으로 FastAPI에서 관리한다
 

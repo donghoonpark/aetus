@@ -312,6 +312,7 @@ uv run pytest tests/qemu_e2e -q -s
 
 - [[../firmware/esp32-aetus]]
 - [[../firmware/esp32-aetus/components/aetus/include/aetus.h]]
+- [[../firmware/examples]]
 - [[../firmware/esp32c5-upload-smoke]]
 
 목적:
@@ -336,6 +337,13 @@ uv run pytest tests/qemu_e2e -q -s
 - double/int64/bool/string/bytes metric value encode
 - upload 실패 시 queue front requeue
 - `aetus_flush()` 완료 대기
+
+예제 app:
+
+- `firmware/examples/basic-telemetry`: 최소 telemetry/status enqueue 예제
+- `firmware/examples/multitask-producers`: 여러 FreeRTOS producer task에서 enqueue하는 예제
+- `firmware/examples/metric-types`: int64/double/bool/string/bytes metric type 예제
+- 모든 예제는 ESP32-C5, ESP-IDF 6.0, 4MB flash, 3MB factory app partition 기준으로 빌드한다.
 
 현재 미구현:
 
