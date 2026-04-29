@@ -94,6 +94,8 @@ void app_main(void)
 
 When testing with generic tools such as nRF Connect, remember that writing `wifi_password` only updates the pending password. The device does not reconnect until the client also writes any value, for example `1`, to the `apply` characteristic.
 
+The default provisioning advertiser uses a low-duty interval of about 3.5 seconds. After a central connects, AETUS automatically terminates the BLE connection after 10 minutes so forgotten provisioning sessions do not keep the radio active indefinitely.
+
 ```c
 static void on_connection_check(
     uint16_t conn_handle,

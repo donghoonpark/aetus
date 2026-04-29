@@ -12,6 +12,8 @@
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
+#include "nimble/ble.h"
+#include "nimble/nimble_npl.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "nvs_flash.h"
@@ -20,6 +22,10 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 static const char *TAG = "aetus_prov";
+
+#define AETUS_PROVISIONING_ADV_INTERVAL_MS 3500U
+#define AETUS_PROVISIONING_AUTO_DISCONNECT_MS (10U * 60U * 1000U)
+#define AETUS_PROVISIONING_ADV_INTERVAL_UNITS ((AETUS_PROVISIONING_ADV_INTERVAL_MS * 1000U) / 625U)
 
 typedef enum {
     AETUS_PROV_FIELD_WIFI_SSID = 1,
@@ -50,8 +56,12 @@ typedef struct {
     aetus_provisioning_config_changed_cb_t config_changed_cb;
     aetus_provisioning_connection_check_cb_t connection_check_cb;
     void *user_ctx;
+    struct ble_npl_callout disconnect_callout;
+    uint16_t conn_handle;
     uint8_t own_addr_type;
     bool started;
+    bool connected;
+    bool disconnect_callout_initialized;
 } aetus_provisioning_state_t;
 
 static aetus_provisioning_state_t s_prov;
@@ -95,6 +105,7 @@ static int provisioning_access(
     void *arg
 );
 static int provisioning_gap_event(struct ble_gap_event *event, void *arg);
+static void provisioning_disconnect_timeout(struct ble_npl_event *event);
 
 #define PROV_CUD(name_value) \
     (struct ble_gatt_dsc_def[]) { \
@@ -426,10 +437,14 @@ static void provisioning_advertise(void)
     struct ble_gap_adv_params adv_params = {0};
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    adv_params.itvl_min = AETUS_PROVISIONING_ADV_INTERVAL_UNITS;
+    adv_params.itvl_max = AETUS_PROVISIONING_ADV_INTERVAL_UNITS;
     rc = ble_gap_adv_start(s_prov.own_addr_type, NULL, BLE_HS_FOREVER, &adv_params, provisioning_gap_event, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "advertising start failed rc=%d", rc);
+        return;
     }
+    ESP_LOGI(TAG, "advertising interval set to %u ms", AETUS_PROVISIONING_ADV_INTERVAL_MS);
 }
 
 static void notify_connection_check(uint16_t conn_handle, int status)
@@ -453,6 +468,46 @@ static void notify_connection_check(uint16_t conn_handle, int status)
     );
 }
 
+static void provisioning_start_disconnect_timer(uint16_t conn_handle)
+{
+    if (!s_prov.disconnect_callout_initialized) {
+        return;
+    }
+    s_prov.conn_handle = conn_handle;
+    ble_npl_callout_stop(&s_prov.disconnect_callout);
+    ble_npl_callout_reset(
+        &s_prov.disconnect_callout,
+        ble_npl_time_ms_to_ticks32(AETUS_PROVISIONING_AUTO_DISCONNECT_MS)
+    );
+    ESP_LOGI(
+        TAG,
+        "provisioning auto-disconnect armed conn=%u timeout_ms=%u",
+        conn_handle,
+        AETUS_PROVISIONING_AUTO_DISCONNECT_MS
+    );
+}
+
+static void provisioning_stop_disconnect_timer(void)
+{
+    if (!s_prov.disconnect_callout_initialized) {
+        return;
+    }
+    ble_npl_callout_stop(&s_prov.disconnect_callout);
+}
+
+static void provisioning_disconnect_timeout(struct ble_npl_event *event)
+{
+    (void)event;
+    if (!s_prov.connected) {
+        return;
+    }
+    ESP_LOGI(TAG, "provisioning auto-disconnect timeout conn=%u", s_prov.conn_handle);
+    int rc = ble_gap_terminate(s_prov.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "provisioning auto-disconnect failed rc=%d", rc);
+    }
+}
+
 static int provisioning_gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -460,6 +515,8 @@ static int provisioning_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         ESP_LOGI(TAG, "provisioning client connect status=%d", event->connect.status);
         if (event->connect.status == 0) {
+            s_prov.connected = true;
+            provisioning_start_disconnect_timer(event->connect.conn_handle);
             notify_connection_check(event->connect.conn_handle, event->connect.status);
         } else {
             provisioning_advertise();
@@ -467,6 +524,8 @@ static int provisioning_gap_event(struct ble_gap_event *event, void *arg)
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "provisioning client disconnect reason=%d", event->disconnect.reason);
+        s_prov.connected = false;
+        provisioning_stop_disconnect_timer();
         provisioning_advertise();
         return 0;
     case BLE_GAP_EVENT_CONN_UPDATE:
@@ -527,6 +586,13 @@ esp_err_t aetus_start_provisioning(const aetus_provisioning_config_t *config)
     ESP_RETURN_ON_ERROR(ensure_nvs_initialized(), TAG, "nvs init failed");
     esp_err_t err = nimble_port_init();
     ESP_RETURN_ON_ERROR(err, TAG, "nimble init failed");
+    ble_npl_callout_init(
+        &s_prov.disconnect_callout,
+        nimble_port_get_dflt_eventq(),
+        provisioning_disconnect_timeout,
+        NULL
+    );
+    s_prov.disconnect_callout_initialized = true;
 
     ble_hs_cfg.reset_cb = provisioning_on_reset;
     ble_hs_cfg.sync_cb = provisioning_on_sync;
