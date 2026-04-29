@@ -16,7 +16,7 @@ from aetus_ingest.control_status import build_control_status
 from aetus_ingest.generated import ingest_pb2
 from aetus_ingest.normalize import normalize_event
 from aetus_ingest.publisher import InMemoryEventPublisher, KafkaEventPublisher
-from aetus_ingest.rate_limit import InMemoryRateLimiter, RateLimitPlan
+from aetus_ingest.rate_limit import InMemoryRateLimiter, RateLimitDecision, RateLimitPlan
 from aetus_ingest.schemas import (
     ControlStatusResponse,
     DeviceIssueRequest,
@@ -68,6 +68,25 @@ def create_app(
     else:
         app.state.publisher = InMemoryEventPublisher()
     app.state.rate_limiter = rate_limiter or InMemoryRateLimiter()
+
+    def raise_rate_limited(decision: RateLimitDecision, detail: str) -> None:
+        retry_after = max(1, ceil(decision.retry_after_seconds))
+        raise HTTPException(
+            status_code=429,
+            detail=detail,
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    def ingest_rate_plan(device_id: str) -> RateLimitPlan:
+        is_allowlisted = device_id in app.state.settings.allowlist_device_ids
+        return RateLimitPlan(
+            rate_per_second=(
+                app.state.settings.allowlist_requests_per_second
+                if is_allowlisted
+                else app.state.settings.ingest_requests_per_second
+            ),
+            burst=app.state.settings.allowlist_burst if is_allowlisted else app.state.settings.ingest_burst,
+        )
 
     async def render_admin_devices_page(
         request: Request,
@@ -172,6 +191,11 @@ def create_app(
         if not is_source_ip_allowed(source_ip, settings):
             raise HTTPException(status_code=403, detail="source ip not allowed")
 
+        rate_limit_key = f"ingest:{x_device_id}:{source_ip}"
+        rate_decision = app.state.rate_limiter.consume(rate_limit_key, ingest_rate_plan(x_device_id))
+        if not rate_decision.allowed:
+            raise_rate_limited(rate_decision, "rate limit exceeded")
+
         try:
             token = extract_bearer_token(authorization)
         except ValueError as exc:
@@ -196,19 +220,6 @@ def create_app(
             raise HTTPException(status_code=400, detail="boot_id required")
         if event.WhichOneof("body") is None:
             raise HTTPException(status_code=400, detail="body missing")
-
-        is_allowlisted = event.device_id in settings.allowlist_device_ids
-        plan = RateLimitPlan(
-            rate_per_second=(
-                settings.allowlist_requests_per_second
-                if is_allowlisted
-                else settings.ingest_requests_per_second
-            ),
-            burst=settings.allowlist_burst if is_allowlisted else settings.ingest_burst,
-        )
-        rate_limit_key = f"{event.device_id}:{source_ip}"
-        if not app.state.rate_limiter.allow(rate_limit_key, plan):
-            raise HTTPException(status_code=429, detail="rate limit exceeded")
 
         normalized = normalize_event(event, source_ip=source_ip)
         await app.state.publisher.publish(normalized)
@@ -247,8 +258,9 @@ def create_app(
             rate_per_second=settings.bootstrap_requests_per_window / settings.bootstrap_window_seconds,
             burst=settings.bootstrap_requests_per_window,
         )
-        if not app.state.rate_limiter.allow(f"bootstrap:{source_ip}:{payload.hardware_id}", bootstrap_plan):
-            raise HTTPException(status_code=429, detail="bootstrap rate limit exceeded")
+        bootstrap_decision = app.state.rate_limiter.consume(f"bootstrap:{source_ip}", bootstrap_plan)
+        if not bootstrap_decision.allowed:
+            raise_rate_limited(bootstrap_decision, "bootstrap rate limit exceeded")
 
         if not await control_db.is_hardware_allowed_readonly(payload.hardware_id):
             raise HTTPException(status_code=403, detail="hardware id not allowlisted")

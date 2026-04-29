@@ -95,6 +95,20 @@ def test_ingest_to_postgres_pipeline() -> None:
         assert provision_response.status_code == 201, provision_response.text
         provision_body = provision_response.json()
 
+        provision_rate_limited_response = httpx.post(
+            "http://127.0.0.1:18000/v1/provision",
+            json={
+                "hardware_id": "esp32c5-a1b2c3d4e5f6",
+                "model": "esp32-c5",
+                "firmware_version": 1002003,
+                "site_code": "factory-a",
+            },
+            headers={"Authorization": "Bearer bootstrap_shared_token"},
+            timeout=10.0,
+        )
+        assert provision_rate_limited_response.status_code == 429, provision_rate_limited_response.text
+        assert provision_rate_limited_response.headers["retry-after"] == "10"
+
         control_devices_response = httpx.get(
             "http://127.0.0.1:18000/v1/control/devices?q=factory-a",
             timeout=10.0,

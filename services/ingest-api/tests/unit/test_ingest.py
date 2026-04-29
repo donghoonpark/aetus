@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 import tempfile
 
@@ -7,28 +8,48 @@ from fastapi.testclient import TestClient
 
 from aetus_ingest.app import create_app
 from aetus_ingest.config import Settings
+from aetus_ingest.generated import ingest_pb2
 from aetus_ingest.publisher import InMemoryEventPublisher
+from aetus_ingest.rate_limit import InMemoryRateLimiter
 from ..helpers.nanopb_mock_device import NanopbMockDevice
 
 
-def make_client() -> tuple[TestClient, InMemoryEventPublisher]:
+class FakeClock:
+    def __init__(self) -> None:
+        self.value = 1_000.0
+
+    def monotonic(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def make_client(
+    *,
+    client_host: str = "127.0.0.1",
+    rate_limiter: InMemoryRateLimiter | None = None,
+    **settings_overrides,
+) -> tuple[TestClient, InMemoryEventPublisher]:
     tmpdir = tempfile.TemporaryDirectory()
     control_db_path = str(Path(tmpdir.name) / "control.db")
-    settings = Settings(
-        device_tokens={"esp32c5-test-001": "devtok_test_001"},
-        allowed_source_cidrs=Settings.from_env().allowed_source_cidrs,
-        allowlist_device_ids=set(),
-        allowed_hardware_ids={"esp32c5-a1b2c3d4e5f6"},
-        bootstrap_token="bootstrap_shared_token",
-        kafka_bootstrap_servers="127.0.0.1:65530",
-        kafka_connect_url="http://127.0.0.1:65531",
-        postgres_dsn="postgresql://aetus:aetus@127.0.0.1:65532/aetus",
-        status_timeout_seconds=0.2,
-        control_db_path=control_db_path,
-    )
+    defaults = {
+        "device_tokens": {"esp32c5-test-001": "devtok_test_001"},
+        "allowed_source_cidrs": Settings.from_env().allowed_source_cidrs,
+        "allowlist_device_ids": set(),
+        "allowed_hardware_ids": {"esp32c5-a1b2c3d4e5f6"},
+        "bootstrap_token": "bootstrap_shared_token",
+        "kafka_bootstrap_servers": "127.0.0.1:65530",
+        "kafka_connect_url": "http://127.0.0.1:65531",
+        "postgres_dsn": "postgresql://aetus:aetus@127.0.0.1:65532/aetus",
+        "status_timeout_seconds": 0.2,
+        "control_db_path": control_db_path,
+    }
+    defaults.update(settings_overrides)
+    settings = Settings(**defaults)
     publisher = InMemoryEventPublisher()
-    app = create_app(settings=settings, publisher=publisher)
-    client = TestClient(app, client=("127.0.0.1", 50000))
+    app = create_app(settings=settings, publisher=publisher, rate_limiter=rate_limiter)
+    client = TestClient(app, client=(client_host, 50000))
     client._tmpdir = tmpdir  # type: ignore[attr-defined]
     return client, publisher
 
@@ -82,6 +103,65 @@ def test_ingest_rejects_invalid_token() -> None:
     assert response.status_code == 401
 
 
+def test_ingest_rate_limit_blocks_repeated_uploads_with_retry_after() -> None:
+    clock = FakeClock()
+    client, publisher = make_client(
+        rate_limiter=InMemoryRateLimiter(clock=clock.monotonic),
+        ingest_requests_per_second=1.0,
+        ingest_burst=1,
+    )
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    first_response = device.upload(client, device.build_telemetry())
+    second_response = device.upload(client, device.build_telemetry())
+    clock.advance(1.0)
+    third_response = device.upload(client, device.build_telemetry())
+
+    assert first_response.status_code == 202
+    assert second_response.status_code == 429
+    assert second_response.headers["retry-after"] == "1"
+    assert third_response.status_code == 202
+    assert len(publisher.events) == 2
+
+
+def test_ingest_allowlist_uses_relaxed_rate_limit() -> None:
+    clock = FakeClock()
+    client, publisher = make_client(
+        rate_limiter=InMemoryRateLimiter(clock=clock.monotonic),
+        allowlist_device_ids={"esp32c5-test-001"},
+        ingest_requests_per_second=1.0,
+        ingest_burst=1,
+        allowlist_requests_per_second=1.0,
+        allowlist_burst=2,
+    )
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    first_response = device.upload(client, device.build_telemetry())
+    second_response = device.upload(client, device.build_telemetry())
+    third_response = device.upload(client, device.build_telemetry())
+
+    assert first_response.status_code == 202
+    assert second_response.status_code == 202
+    assert third_response.status_code == 429
+    assert len(publisher.events) == 2
+
+
+def test_ingest_rate_limit_runs_before_token_verification() -> None:
+    clock = FakeClock()
+    client, _ = make_client(
+        rate_limiter=InMemoryRateLimiter(clock=clock.monotonic),
+        ingest_requests_per_second=1.0,
+        ingest_burst=1,
+    )
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="wrong-token")
+
+    first_response = device.upload(client, device.build_telemetry())
+    second_response = device.upload(client, device.build_telemetry())
+
+    assert first_response.status_code == 401
+    assert second_response.status_code == 429
+
+
 def test_provisioning_issues_token_and_ingest_reads_from_sqlite() -> None:
     client, publisher = make_client()
     provision_response = client.post(
@@ -104,6 +184,222 @@ def test_provisioning_issues_token_and_ingest_reads_from_sqlite() -> None:
 
     assert upload_response.status_code == 202
     assert publisher.events[-1]["device_id"] == device_id
+
+
+def test_provisioning_rate_limit_blocks_hardware_id_rotation() -> None:
+    clock = FakeClock()
+    client, _ = make_client(
+        rate_limiter=InMemoryRateLimiter(clock=clock.monotonic),
+        allowed_hardware_ids={"esp32c5-a1b2c3d4e5f6", "esp32c5-b1b2c3d4e5f6"},
+        bootstrap_requests_per_window=1,
+        bootstrap_window_seconds=10.0,
+    )
+    headers = {"Authorization": "Bearer bootstrap_shared_token"}
+
+    first_response = client.post(
+        "/v1/provision",
+        json={
+            "hardware_id": "esp32c5-a1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+        },
+        headers=headers,
+    )
+    second_response = client.post(
+        "/v1/provision",
+        json={
+            "hardware_id": "esp32c5-b1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+        },
+        headers=headers,
+    )
+    clock.advance(10.0)
+    third_response = client.post(
+        "/v1/provision",
+        json={
+            "hardware_id": "esp32c5-b1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+        },
+        headers=headers,
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 429
+    assert second_response.headers["retry-after"] == "10"
+    assert third_response.status_code == 201
+
+
+def test_provisioning_rejects_invalid_bootstrap_token() -> None:
+    client, _ = make_client()
+
+    response = client.post(
+        "/v1/provision",
+        json={
+            "hardware_id": "esp32c5-a1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+        },
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_provisioning_rejects_non_allowlisted_hardware_id() -> None:
+    client, _ = make_client(allowed_hardware_ids={"esp32c5-a1b2c3d4e5f6"})
+
+    response = client.post(
+        "/v1/provision",
+        json={
+            "hardware_id": "esp32c5-not-allowed",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+        },
+        headers={"Authorization": "Bearer bootstrap_shared_token"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_source_ip_cidr_blocks_ingest_and_provisioning() -> None:
+    client, _ = make_client(
+        client_host="10.0.0.5",
+        allowed_source_cidrs=(ipaddress.ip_network("192.168.0.0/16"),),
+    )
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    ingest_response = device.upload(client, device.build_telemetry())
+    provision_response = client.post(
+        "/v1/provision",
+        json={
+            "hardware_id": "esp32c5-a1b2c3d4e5f6",
+            "model": "esp32-c5",
+            "firmware_version": 1002003,
+        },
+        headers={"Authorization": "Bearer bootstrap_shared_token"},
+    )
+
+    assert ingest_response.status_code == 403
+    assert provision_response.status_code == 403
+
+
+def test_ingest_rejects_non_protobuf_content_type() -> None:
+    client, _ = make_client()
+
+    response = client.post(
+        "/v1/ingest",
+        content=b"{}",
+        headers={
+            "Content-Type": "application/json",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 415
+
+
+def test_ingest_rejects_oversized_body() -> None:
+    client, _ = make_client(max_body_bytes=1)
+
+    response = client.post(
+        "/v1/ingest",
+        content=b"\x00\x00",
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 413
+
+
+def test_ingest_rejects_invalid_protobuf() -> None:
+    client, _ = make_client()
+
+    response = client.post(
+        "/v1/ingest",
+        content=b"\xff",
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid protobuf"
+
+
+def test_ingest_rejects_device_id_mismatch() -> None:
+    client, _ = make_client()
+    other_device = NanopbMockDevice(device_id="esp32c5-other-001", token="unused")
+
+    response = client.post(
+        "/v1/ingest",
+        content=other_device.build_telemetry(),
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "device id mismatch"
+
+
+def test_ingest_rejects_missing_boot_id() -> None:
+    client, _ = make_client()
+    event = ingest_pb2.IngestEvent(
+        schema_version=1,
+        device_id="esp32c5-test-001",
+        sequence=0,
+        event_type=ingest_pb2.EVENT_TYPE_TELEMETRY,
+    )
+    metric = event.telemetry.metrics.add()
+    metric.key = "temperature"
+    metric.double_value = 24.5
+
+    response = client.post(
+        "/v1/ingest",
+        content=event.SerializeToString(),
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "boot_id required"
+
+
+def test_ingest_rejects_missing_body() -> None:
+    client, _ = make_client()
+    event = ingest_pb2.IngestEvent(
+        schema_version=1,
+        device_id="esp32c5-test-001",
+        boot_id="boot-unit-0001",
+        sequence=0,
+        event_type=ingest_pb2.EVENT_TYPE_TELEMETRY,
+    )
+
+    response = client.post(
+        "/v1/ingest",
+        content=event.SerializeToString(),
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "body missing"
 
 
 def test_control_devices_json_endpoints_work() -> None:
