@@ -130,8 +130,6 @@ signature = HMAC_SHA256(device_secret, prefix || body_sha256_hex)
 
 HTTP header에는 `body_sha256_hex`를 보내지 않는다. 장치와 서버가 같은 raw body에서 각자 SHA256을 계산하고, 그 digest를 HMAC 입력으로 사용한다.
 
-HMAC은 암호화/복호화가 아니라 `서명 생성`과 `서명 검증`이다. payload는 HTTP body에 protobuf bytes로 그대로 전송되며, HMAC은 해당 body가 같은 secret을 가진 장치에서 만들어졌고 전송 중 바뀌지 않았는지 확인하는 값이다.
-
 ```mermaid
 sequenceDiagram
     participant Device as "ESP32-C5 device"
@@ -160,9 +158,6 @@ flowchart TD
     Prefix["version + method + path + device_id"] --> HMAC
     Hash --> HMAC
     HMAC --> SigHeader["X-Aetus-Signature: hmac-sha256-v1=..."]
-
-    Body -. "encrypted? no" .-> Plain["payload는 평문 전송"]
-    SigHeader -. "proves" .-> Proof["secret 보유 + body 무결성"]
 ```
 
 중요한 원칙:
@@ -175,6 +170,15 @@ flowchart TD
 - HMAC 검증 후 protobuf를 parse하고, body 내부 `device_id`가 `X-Device-Id`와 일치하는지 다시 확인한다.
 - HMAC 검증 실패 시 `401 Unauthorized`를 반환한다.
 - HMAC 경로에서도 source IP CIDR 제한과 rate limit는 동일하게 적용한다.
+
+device secret 생성:
+
+- 현재 구현은 provisioning 또는 admin 발급 시 `devtok_` prefix와 `secrets.token_urlsafe(24)` 결과를 합쳐 device token을 만든다.
+- `token_urlsafe(24)`는 24-byte cryptographic random 값을 base64url 문자열로 표현한 값이다.
+- 초기 HMAC 옵션에서는 이 device token을 그대로 HMAC secret으로 재사용한다.
+- 서버는 control DB의 `devices.token` 값을 read-only 조회해 secret으로 사용한다.
+- 장치는 provisioning 응답의 `access_token` 값을 저장하고 bearer mode에서는 token으로, HMAC mode에서는 secret으로 사용한다.
+- 장기적으로 용어 혼선을 줄이려면 API/DB 필드명을 `device_secret` 또는 `credential_secret`으로 확장할 수 있다.
 
 서버 처리 순서:
 
