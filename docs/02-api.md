@@ -29,7 +29,8 @@
 | `X-Device-Id` | 필수 | 장치 식별자 |
 | `Authorization: Bearer <token>` | 기본 인증 시 필수 | 장치별 정적 토큰 |
 | `X-Aetus-Auth: hmac-sha256-v1` | HMAC 인증 시 필수 | HMAC 인증 방식 식별자 |
-| `X-Aetus-Signature: v1=<hex>` | HMAC 인증 시 필수 | raw protobuf body 기반 HMAC-SHA256 서명 |
+| `X-Aetus-Body-SHA256: <hex>` | HMAC 인증 시 필수 | raw protobuf body의 SHA256 hex digest |
+| `X-Aetus-Signature: v1=<hex>` | HMAC 인증 시 필수 | body hash 기반 HMAC-SHA256 서명 |
 | `Idempotency-Key` | 선택 | HTTP 레벨 중복 방지 보조값 |
 
 권장 방식:
@@ -118,6 +119,7 @@ HMAC 요청 헤더:
 | `Content-Type: application/x-protobuf` | 필수 | protobuf 전송 |
 | `X-Device-Id` | 필수 | secret 조회를 위한 장치 식별자 |
 | `X-Aetus-Auth: hmac-sha256-v1` | 필수 | HMAC scheme/version |
+| `X-Aetus-Body-SHA256: <hex>` | 필수 | raw protobuf body의 SHA256 hex digest |
 | `X-Aetus-Signature: v1=<hex>` | 필수 | HMAC-SHA256 signature |
 
 `boot_id`, `sequence`, `event_type`, `timestamp_ns`는 protobuf body 안의 값을 사용한다. 이 값들을 HMAC 전용 header로 반복하지 않는다.
@@ -125,13 +127,52 @@ HMAC 요청 헤더:
 서명 대상:
 
 ```text
+body_sha256_hex = SHA256_HEX(raw_protobuf_body)
 prefix = "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n<device_id>\n"
-signature = HMAC_SHA256(device_secret, prefix || raw_protobuf_body)
+signature = HMAC_SHA256(device_secret, prefix || body_sha256_hex)
+```
+
+HMAC은 암호화/복호화가 아니라 `서명 생성`과 `서명 검증`이다. payload는 HTTP body에 protobuf bytes로 그대로 전송되며, HMAC은 해당 body가 같은 secret을 가진 장치에서 만들어졌고 전송 중 바뀌지 않았는지 확인하는 값이다.
+
+```mermaid
+sequenceDiagram
+    participant Device as "ESP32-C5 device"
+    participant API as "FastAPI ingest"
+    participant Registry as "Control DB"
+
+    Note over Device: "nanopb로 IngestEvent encode"
+    Device->>Device: "raw_protobuf_body 생성"
+    Device->>Device: "body_sha256_hex = SHA256(raw_protobuf_body)"
+    Device->>Device: "signature = HMAC(secret, prefix || body_sha256_hex)"
+    Device->>API: "POST /v1/ingest + X-Device-Id + X-Aetus-Body-SHA256 + X-Aetus-Signature"
+    API->>API: "source IP / rate limit / body size 확인"
+    API->>API: "server_body_sha256_hex = SHA256(received_body)"
+    API->>API: "header body hash와 server body hash 비교"
+    API->>Registry: "X-Device-Id로 device secret read-only 조회"
+    Registry-->>API: "device secret"
+    API->>API: "expected_signature = HMAC(secret, prefix || server_body_sha256_hex)"
+    API->>API: "constant-time compare"
+    API->>API: "protobuf parse 후 body.device_id == X-Device-Id 확인"
+    API-->>Device: "202 Accepted or 401 Unauthorized"
+```
+
+```mermaid
+flowchart TD
+    Body["raw protobuf body"] --> Hash["SHA256(body)"]
+    Hash --> BodyHeader["X-Aetus-Body-SHA256"]
+    Secret["device secret"] --> HMAC["HMAC-SHA256"]
+    Prefix["version + method + path + device_id"] --> HMAC
+    Hash --> HMAC
+    HMAC --> SigHeader["X-Aetus-Signature"]
+
+    Body -. "encrypted? no" .-> Plain["payload는 평문 전송"]
+    SigHeader -. "proves" .-> Proof["secret 보유 + body 무결성"]
 ```
 
 중요한 원칙:
 
-- 서버는 수신한 raw protobuf bytes 그대로 HMAC을 검증한다.
+- 서버는 수신한 raw protobuf bytes의 SHA256을 직접 계산하고 `X-Aetus-Body-SHA256`과 비교한다.
+- 서버는 검증된 body hash를 HMAC 입력으로 사용한다.
 - 서버는 protobuf를 parse한 뒤 다시 serialize한 bytes로 검증하지 않는다.
 - `X-Device-Id`는 secret 조회를 위해 header에 둔다.
 - HMAC 검증 후 protobuf를 parse하고, body 내부 `device_id`가 `X-Device-Id`와 일치하는지 다시 확인한다.
@@ -146,11 +187,29 @@ signature = HMAC_SHA256(device_secret, prefix || raw_protobuf_body)
 4. request body 읽기 및 크기 제한 확인
 5. `Authorization: Bearer` 또는 `X-Aetus-Auth: hmac-sha256-v1` 기준으로 인증 방식 선택
 6. bearer mode는 기존 device token 비교
-7. HMAC mode는 `X-Device-Id`로 device secret을 read-only 조회하고 raw body signature 검증
+7. HMAC mode는 raw body SHA256 검증 후 `X-Device-Id`로 device secret을 read-only 조회하고 body hash 기반 signature 검증
 8. protobuf 파싱
 9. body 내부 `device_id`, `boot_id`, `body` 기본 검증
 10. 내부 event object로 normalize
 11. memory publisher 또는 Kafka publisher로 publish
+
+big payload 고려:
+
+- HMAC 입력에 raw body 전체를 직접 넣지 않고 `body_sha256_hex`를 넣는다.
+- payload 전체를 새 버퍼로 복사하지 않고 streaming SHA256으로 digest를 계산할 수 있다.
+- FlashDB backlog에 이미 저장된 record는 향후 `body_sha256` metadata를 함께 저장해 재전송 시 hash 재계산을 줄일 수 있다.
+- HTTP streaming upload로 확장하더라도 `SHA256 update -> HTTP write` 순서로 처리하면 RAM 사용량 증가를 작게 유지할 수 있다.
+
+추가 최적화 여지:
+
+- 현재 고정 버전 `hmac-sha256-v1`에서는 hex digest가 사람이 읽기 쉽지만 32-byte digest를 64-byte ASCII로 늘린다.
+- 네트워크 바이트를 더 줄이고 싶으면 `X-Aetus-Body-SHA256-B64`와 `X-Aetus-Signature: v1b64=<base64url>` 같은 binary-to-text encoding을 검토할 수 있다.
+- 단순성과 디버깅 편의성은 hex가 더 좋으므로 초기 구현은 hex를 권장한다.
+- HMAC signature를 32-byte 전체가 아니라 앞 16-byte로 truncate하면 헤더를 줄일 수 있지만, 인증 강도와 표준성 손실이 있으므로 초기 권장안에서는 제외한다.
+- `Content-Encoding` 압축은 센서 payload 형태에 따라 효과가 다르며 ESP32 CPU와 RAM 비용이 생기므로 기본 경로에서는 제외한다.
+- 대형 payload가 FlashDB에 저장될 때 `body_sha256`을 record metadata로 함께 저장하면 재시도 시 hash 계산을 생략할 수 있다.
+- HTTP chunked streaming을 도입하면 encode buffer 전체를 들고 있지 않고 `SHA256 update`와 socket write를 같이 진행할 수 있지만, 서버와 펌웨어 구현 복잡도가 올라가므로 대형 blob API와 함께 검토한다.
+- 같은 TCP connection을 유지하는 keep-alive는 HTTPS보다 HMAC과 별개로 네트워크 왕복 비용을 줄이는 최적화이며, Wi-Fi duty cycle 정책과 함께 조정한다.
 
 리플레이 정책:
 

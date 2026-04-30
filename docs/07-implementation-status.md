@@ -95,7 +95,7 @@ HMAC-SHA256 선택 인증 경로를 추가할 경우 처리 순서는 다음처�
 4. request body 읽기 및 크기 제한 확인
 5. bearer 또는 HMAC 인증 방식 판별
 6. bearer mode는 기존 device token 비교
-7. HMAC mode는 raw protobuf body 기반 signature 검증
+7. HMAC mode는 raw body SHA256 검증 후 body hash 기반 signature 검증
 8. protobuf 파싱
 9. body 내부 `device_id`, `boot_id`, `body` 기본 검증
 10. 내부 event object로 normalize

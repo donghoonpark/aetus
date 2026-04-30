@@ -287,24 +287,36 @@ static void sensor_task(void *arg)
 - `aetus_config_t`에 인증 모드 enum을 추가한다.
 - 기본값은 기존 호환성을 위해 bearer token으로 둔다.
 - HMAC mode에서는 `device_token` 값을 HMAC secret으로 사용한다.
-- nanopb가 생성한 raw protobuf bytes에 대해 HMAC을 계산한다.
+- nanopb가 생성한 raw protobuf bytes의 SHA256 digest를 계산한다.
+- HMAC은 raw protobuf bytes 전체가 아니라 body SHA256 hex digest를 입력으로 계산한다.
 - `boot_id`, `sequence`는 protobuf body에 이미 있으므로 별도 HMAC header로 반복하지 않는다.
-- HTTP header에는 `X-Device-Id`, `X-Aetus-Auth`, `X-Aetus-Signature`만 추가한다.
+- HTTP header에는 `X-Device-Id`, `X-Aetus-Auth`, `X-Aetus-Body-SHA256`, `X-Aetus-Signature`를 추가한다.
 
 권장 서명 입력:
 
 ```text
+body_sha256_hex = SHA256_HEX(raw_protobuf_body)
 prefix = "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n<device_id>\n"
-signature = HMAC_SHA256(device_secret, prefix || raw_protobuf_body)
+signature = HMAC_SHA256(device_secret, prefix || body_sha256_hex)
 ```
 
 ESP32-C5 구현 관점:
 
 - ESP-IDF의 mbedTLS HMAC-SHA256을 사용한다.
-- HMAC 계산은 업로드 직전 `post_payload()` 경로에 넣는 것이 가장 단순하다.
+- SHA256/HMAC 계산은 업로드 직전 `post_payload()` 경로에 넣는 것이 가장 단순하다.
 - SHA256/HMAC 버퍼와 hex signature 버퍼만 추가하면 되므로 RAM 부담은 작다.
+- 큰 payload에서는 body hash만 HMAC 입력에 넣어 HMAC update 대상 크기를 고정한다.
+- 향후 FlashDB backlog에는 payload와 함께 `body_sha256` metadata를 저장해 재전송 시 hash 재계산을 줄일 수 있다.
 - retry 시 같은 protobuf body와 같은 sequence를 재전송하므로 signature도 동일하게 유지될 수 있다.
 - upload 성공 후에만 sequence를 증가시키는 기존 정책은 유지한다.
+
+최적화 여지:
+
+- 초기 구현은 디버깅이 쉬운 hex digest/header를 사용한다.
+- 헤더 바이트를 더 줄여야 하면 base64url encoding을 검토한다.
+- HMAC digest truncation은 헤더를 줄일 수 있지만 인증 강도가 낮아지므로 기본안에서 제외한다.
+- FlashDB durable backlog 구현 시 payload metadata에 `body_sha256`을 저장하면 재전송 때 SHA256 계산을 생략할 수 있다.
+- 대형 blob/pointer payload API를 구현할 때는 protobuf encode buffer, SHA256 update, HTTP write를 streaming pipeline으로 묶는 방안을 같이 검토한다.
 
 주의:
 

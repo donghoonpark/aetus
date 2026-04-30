@@ -249,7 +249,7 @@ flowchart LR
 
 기존 bearer token 방식은 단순하지만, HTTP 환경에서는 장치 자격증명이 요청마다 그대로 전송된다.
 
-HMAC 선택 경로를 추가하면 장치 secret 자체를 wire에 싣지 않고 `raw protobuf body`에 대한 서명만 전송할 수 있다.
+HMAC 선택 경로를 추가하면 장치 secret 자체를 wire에 싣지 않고 `raw protobuf body`의 hash와 그 hash에 대한 서명만 전송할 수 있다.
 
 기본 방향:
 
@@ -259,6 +259,7 @@ HMAC 선택 경로를 추가하면 장치 secret 자체를 wire에 싣지 않고
 - 더 엄격한 명명이 필요하면 향후 `device_secret`으로 용어를 전환한다.
 - HMAC 검증은 FastAPI에서 수행하고, Kafka/PostgreSQL 이후 파이프라인은 변경하지 않는다.
 - protobuf 내부의 `boot_id`, `sequence`를 HMAC 전용 header에 반복하지 않는다.
+- big payload 확장을 고려해 HMAC은 raw body 전체가 아니라 `SHA256(raw body)` 결과를 입력으로 사용한다.
 
 HMAC이 해결하는 것:
 
