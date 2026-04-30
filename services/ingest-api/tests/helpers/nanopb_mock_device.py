@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 import importlib
 import subprocess
+
+from aetus_ingest.auth import HMAC_SIGNATURE_PREFIX, HMAC_SIGNATURE_SCHEME
 
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -77,6 +81,27 @@ class NanopbMockDevice:
                 "Content-Type": "application/x-protobuf",
                 "X-Device-Id": self.device_id,
                 "Authorization": f"Bearer {self.token}",
+            },
+        )
+        self.sequence += 1
+        return response
+
+    def hmac_signature(self, payload: bytes) -> str:
+        body_sha256_hex = hashlib.sha256(payload).hexdigest()
+        signing_input = (
+            f"{HMAC_SIGNATURE_PREFIX}\nPOST\n/v1/ingest\n{self.device_id}\n{body_sha256_hex}"
+        ).encode("utf-8")
+        signature = hmac.new(self.token.encode("utf-8"), signing_input, hashlib.sha256).hexdigest()
+        return f"{HMAC_SIGNATURE_SCHEME}={signature}"
+
+    def upload_hmac(self, client: TestClient, payload: bytes, *, signature: str | None = None):
+        response = client.post(
+            "/v1/ingest",
+            content=payload,
+            headers={
+                "Content-Type": "application/x-protobuf",
+                "X-Device-Id": self.device_id,
+                "X-Aetus-Signature": signature or self.hmac_signature(payload),
             },
         )
         self.sequence += 1

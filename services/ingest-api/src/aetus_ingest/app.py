@@ -10,7 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from aetus_ingest.auth import extract_bearer_token, is_source_ip_allowed, verify_device_token
+from aetus_ingest.auth import (
+    extract_bearer_token,
+    is_source_ip_allowed,
+    verify_device_token,
+    verify_hmac_signature,
+)
 from aetus_ingest.config import Settings
 from aetus_ingest.control_db import ControlDB, DeviceRecord
 from aetus_ingest.control_status import build_control_status
@@ -57,7 +62,7 @@ def create_app(
         allow_origins=list(app.state.settings.cors_origins),
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "X-Device-Id"],
+        allow_headers=["Content-Type", "Authorization", "X-Device-Id", "X-Aetus-Signature"],
     )
     app.state.control_db = ControlDB(app.state.settings.control_db_path)
     app.state.control_db.initialize()
@@ -91,15 +96,13 @@ def create_app(
             burst=app.state.settings.allowlist_burst if is_allowlisted else app.state.settings.ingest_burst,
         )
 
-    async def require_device_auth(
+    async def prepare_device_ingest(
         *,
         request: Request,
         x_device_id: str,
-        authorization: str | None,
         rate_limit_prefix: str,
     ) -> str:
         settings: Settings = app.state.settings
-        control_db: ControlDB = app.state.control_db
         source_ip = request.client.host if request.client else "0.0.0.0"
 
         if not is_source_ip_allowed(source_ip, settings):
@@ -110,6 +113,14 @@ def create_app(
         if not rate_decision.allowed:
             raise_rate_limited(rate_decision, "rate limit exceeded")
 
+        return source_ip
+
+    async def require_bearer_device_auth(
+        *,
+        x_device_id: str,
+        authorization: str | None,
+    ) -> None:
+        control_db: ControlDB = app.state.control_db
         try:
             token = extract_bearer_token(authorization)
         except ValueError as exc:
@@ -118,7 +129,28 @@ def create_app(
         if not await verify_device_token(x_device_id, token, control_db):
             raise HTTPException(status_code=401, detail="invalid device token")
 
-        return source_ip
+    async def require_ingest_auth(
+        *,
+        request: Request,
+        x_device_id: str,
+        authorization: str | None,
+        x_aetus_signature: str | None,
+        body: bytes,
+    ) -> None:
+        if x_aetus_signature:
+            ok = await verify_hmac_signature(
+                device_id=x_device_id,
+                method=request.method,
+                path=request.url.path,
+                body=body,
+                signature_header=x_aetus_signature,
+                control_db=app.state.control_db,
+            )
+            if not ok:
+                raise HTTPException(status_code=401, detail="invalid hmac signature")
+            return
+
+        await require_bearer_device_auth(x_device_id=x_device_id, authorization=authorization)
 
     async def render_admin_devices_page(
         request: Request,
@@ -178,12 +210,12 @@ def create_app(
         x_device_id: str = Header(..., alias="X-Device-Id"),
         authorization: str | None = Header(None, alias="Authorization"),
     ) -> TimeSyncResponse:
-        await require_device_auth(
+        await prepare_device_ingest(
             request=request,
             x_device_id=x_device_id,
-            authorization=authorization,
             rate_limit_prefix="time",
         )
+        await require_bearer_device_auth(x_device_id=x_device_id, authorization=authorization)
 
         unix_time_ns = time.time_ns()
         unix_time_s = unix_time_ns // 1_000_000_000
@@ -237,6 +269,7 @@ def create_app(
         response: Response,
         x_device_id: str = Header(..., alias="X-Device-Id"),
         authorization: str | None = Header(None, alias="Authorization"),
+        x_aetus_signature: str | None = Header(None, alias="X-Aetus-Signature"),
         content_type: str | None = Header(None, alias="Content-Type"),
     ) -> dict[str, str | int]:
         settings: Settings = app.state.settings
@@ -244,16 +277,23 @@ def create_app(
         if not content_type or "application/x-protobuf" not in content_type:
             raise HTTPException(status_code=415, detail="content-type must be application/x-protobuf")
 
-        source_ip = await require_device_auth(
+        source_ip = await prepare_device_ingest(
             request=request,
             x_device_id=x_device_id,
-            authorization=authorization,
             rate_limit_prefix="ingest",
         )
 
         body = await request.body()
         if len(body) > settings.max_body_bytes:
             raise HTTPException(status_code=413, detail="request body too large")
+
+        await require_ingest_auth(
+            request=request,
+            x_device_id=x_device_id,
+            authorization=authorization,
+            x_aetus_signature=x_aetus_signature,
+            body=body,
+        )
 
         event = ingest_pb2.IngestEvent()
         try:

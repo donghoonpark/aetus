@@ -73,6 +73,49 @@ def test_virtual_device_can_upload_telemetry() -> None:
     assert event["timestamp_ns"] is None
 
 
+def test_virtual_device_can_upload_telemetry_with_hmac_signature() -> None:
+    client, publisher = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+    payload = device.build_telemetry()
+
+    response = device.upload_hmac(client, payload)
+
+    assert response.status_code == 202
+    assert publisher.events[0]["device_id"] == "esp32c5-test-001"
+    assert publisher.events[0]["sequence"] == 0
+
+
+def test_ingest_rejects_invalid_hmac_signature() -> None:
+    client, _ = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    response = device.upload_hmac(client, device.build_telemetry(), signature="hmac-sha256-v1=" + "0" * 64)
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid hmac signature"
+
+
+def test_ingest_rejects_hmac_signature_for_modified_body() -> None:
+    client, _ = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+    signed_payload = device.build_telemetry()
+    modified_payload = bytearray(signed_payload)
+    modified_payload[-1] ^= 0x01
+
+    response = device.upload_hmac(client, bytes(modified_payload), signature=device.hmac_signature(signed_payload))
+
+    assert response.status_code == 401
+
+
+def test_ingest_rejects_unknown_hmac_scheme() -> None:
+    client, _ = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    response = device.upload_hmac(client, device.build_telemetry(), signature="hmac-sha256-v2=" + "0" * 64)
+
+    assert response.status_code == 401
+
+
 def test_virtual_device_preserves_timestamp_ns() -> None:
     client, publisher = make_client()
     device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
