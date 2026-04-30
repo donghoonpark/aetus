@@ -99,9 +99,9 @@
 
 ### 선택 인증 경로: HMAC-SHA256
 
-공개망 또는 보안 요구가 높은 배포를 고려해 `POST /v1/ingest`에 HMAC 인증 경로를 선택 옵션으로 추가할 수 있다.
+공개망 또는 보안 요구가 높은 배포를 고려해 `POST /v1/ingest`에 HMAC 인증 경로를 선택 옵션으로 제공한다.
 
-이 경로는 아직 구현 확정 전 설계안이며, 기존 bearer token 경로를 제거하지 않고 병행 지원하는 `dual mode`를 우선 검토한다.
+기존 bearer token 경로를 제거하지 않고 병행 지원하는 `dual mode`이며, 장치별로 펌웨어 설정에서 bearer 또는 HMAC mode를 선택한다.
 
 목표:
 

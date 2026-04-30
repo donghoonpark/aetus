@@ -258,6 +258,7 @@ static void sensor_task(void *arg)
 - manual flush
 - protobuf encode via nanopb
 - HTTP POST with bearer token
+- optional HMAC-SHA256 ingest auth
 - telemetry event
 - status event
 - double, int64, bool, string, bytes metric value
@@ -268,7 +269,6 @@ static void sensor_task(void *arg)
 
 - FlashDB durable backlog
 - 대형 payload용 pointer/blob queue API
-- HMAC-SHA256 선택 인증 경로
 - ISR-safe enqueue API
 - Wi-Fi ownership 분리
 - HTTPS certificate verification bypass option
@@ -276,16 +276,14 @@ static void sensor_task(void *arg)
 
 대형 payload용 pointer/blob queue API는 1200B급 센서 샘플처럼 기존 `aetus_telemetry_t` 고정 배열에 담기 부담스러운 데이터를 위한 향후 기능이다. 기본 방향은 `aetus_enqueue_payload_copy()`와 `aetus_enqueue_payload_owned()`를 제공하고, 성공적으로 enqueue된 owned payload는 AETUS uploader task가 소유권을 가져가 업로드 성공 또는 최종 drop 시 release callback으로 해제하는 것이다. 이 기능을 구현할 때는 queue item에는 포인터와 크기만 저장하고, protobuf 인코딩은 가능하면 nanopb callback 또는 HTTP streaming 방식으로 처리해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
 
-## HMAC 인증 옵션 설계안
+## HMAC 인증 옵션
 
-현재 표준 업로드 컴포넌트는 bearer token을 `Authorization` header로 전송한다.
+현재 표준 업로드 컴포넌트는 bearer token과 HMAC-SHA256 ingest 인증을 모두 지원한다.
 
-보안 요구가 높은 배포를 위해 HMAC-SHA256 인증을 선택 옵션으로 추가할 수 있다.
+기본값은 기존 호환성을 위해 bearer token이며, `aetus_config_t.auth_mode` 또는 C++ wrapper의 `.hmac_sha256_auth()`로 HMAC mode를 선택한다.
 
-펌웨어 측 변경 방향:
+구현 방식:
 
-- `aetus_config_t`에 인증 모드 enum을 추가한다.
-- 기본값은 기존 호환성을 위해 bearer token으로 둔다.
 - HMAC mode에서는 `device_token` 값을 HMAC secret으로 사용한다.
 - nanopb가 생성한 raw protobuf bytes의 SHA256 digest를 계산한다.
 - HMAC은 raw protobuf bytes 전체가 아니라 body SHA256 hex digest를 입력으로 계산한다.
@@ -304,7 +302,8 @@ header = "X-Aetus-Signature: hmac-sha256-v1=<signature_hex>"
 
 ESP32-C5 구현 관점:
 
-- ESP-IDF의 mbedTLS HMAC-SHA256을 사용한다.
+- ESP-IDF의 mbedTLS SHA256 primitive를 사용한다.
+- HMAC은 SHA256 ipad/opad 방식으로 component 내부에서 계산한다.
 - SHA256/HMAC 계산은 업로드 직전 `post_payload()` 경로에 넣는 것이 가장 단순하다.
 - SHA256/HMAC 버퍼와 hex signature 버퍼만 추가하면 되므로 RAM 부담은 작다.
 - 큰 payload에서는 body hash만 HMAC 입력에 넣어 HMAC update 대상 크기를 고정한다.
