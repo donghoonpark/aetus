@@ -96,6 +96,8 @@ def e2e_stack() -> None:
     if os.getenv("AETUS_SKIP_E2E") == "1":
         pytest.skip("E2E disabled by environment")
 
+    # Keep E2E deterministic after interrupted local runs.
+    _docker_compose("down", "-v", "--remove-orphans")
     _docker_compose("up", "-d", "--build")
     try:
         _wait_for_http(f"{INGEST_API_URL}/v1/healthz")
