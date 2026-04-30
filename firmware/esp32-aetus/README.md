@@ -70,6 +70,7 @@ void app_main(void)
         .time_url = "http://ingest.internal/v1/time",
         .device_id = "esp32c5-001",
         .device_token = "devtok_xxxxx",
+        .auth_mode = AETUS_AUTH_BEARER,
         .firmware_version = 1002003,
         .upload_interval_ms = AETUS_UPLOAD_DEFAULT_INTERVAL_MS,
         .queue_depth = 16,
@@ -234,6 +235,7 @@ extern "C" void app_main(void)
                                      .ingest_url("http://ingest.internal/v1/ingest")
                                      .time_url("http://ingest.internal/v1/time")
                                      .device("esp32c5-001", "devtok_xxxxx")
+                                     .bearer_auth()
                                      .firmware_version(1002003)
                                      .upload_interval_ms(AETUS_UPLOAD_DEFAULT_INTERVAL_MS)
                                      .queue_depth(16)
@@ -265,6 +267,8 @@ extern "C" void app_main(void)
 
 - `aetus_start()` must be called once before enqueue APIs.
 - `aetus_sync_rtc()` performs authenticated `GET /v1/time` and sets the ESP32 RTC from `unix_time_ns`.
+- `aetus_config_t.auth_mode` defaults to bearer when zero-initialized; set `AETUS_AUTH_HMAC_SHA256` to send `X-Aetus-Signature` instead of `Authorization`.
+- In HMAC mode, `device_token` is reused as the shared secret and `/v1/time` still uses bearer token authentication.
 - `aetus_enqueue_telemetry()` and `aetus_enqueue_status()` are thread-safe from normal FreeRTOS task context.
 - Enqueue APIs copy the message into the internal queue, so callers may reuse stack-local structs after the call returns.
 - Enqueue APIs are not ISR-safe. Add `FromISR` variants later if an interrupt path needs direct event emission.
@@ -306,6 +310,8 @@ set +a
 source "$IDF_PATH/export.sh"
 idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 reconfigure build
 ```
+
+Set `AETUS_AUTH=hmac` to build the same example or the HIL smoke app with HMAC-SHA256 ingest authentication. If `AETUS_AUTH` is omitted, examples use bearer token authentication.
 
 Set `AETUS_WIFI_AUTH=peap` and `AETUS_WIFI_ID=<id>` to build the same example for WPA2-Enterprise PEAP. If `AETUS_WIFI_AUTH` is omitted, the example uses the normal PSK path. Use `reconfigure` after changing these environment variables because CMake does not always notice environment-only changes.
 

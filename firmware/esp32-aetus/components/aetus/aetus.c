@@ -21,6 +21,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+#include "mbedtls/md.h"
 #include "nvs_flash.h"
 #include "pb_encode.h"
 
@@ -38,6 +39,8 @@
 #define AETUS_TIME_RESPONSE_BUFFER_BYTES 512
 #define AETUS_INGEST_PATH "/v1/ingest"
 #define AETUS_TIME_PATH "/v1/time"
+#define AETUS_HMAC_SCHEME "hmac-sha256-v1"
+#define AETUS_HMAC_PREFIX "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n"
 
 static const char *TAG = "aetus";
 
@@ -118,6 +121,166 @@ static bool ends_with(const char *value, const char *suffix)
     size_t value_len = strlen(value);
     size_t suffix_len = strlen(suffix);
     return value_len >= suffix_len && memcmp(value + value_len - suffix_len, suffix, suffix_len) == 0;
+}
+
+static void bytes_to_hex(const uint8_t *bytes, size_t byte_count, char *hex, size_t hex_size)
+{
+    static const char digits[] = "0123456789abcdef";
+    if (hex_size < (byte_count * 2U) + 1U) {
+        if (hex_size > 0) {
+            hex[0] = '\0';
+        }
+        return;
+    }
+    for (size_t index = 0; index < byte_count; index++) {
+        hex[index * 2U] = digits[bytes[index] >> 4U];
+        hex[(index * 2U) + 1U] = digits[bytes[index] & 0x0fU];
+    }
+    hex[byte_count * 2U] = '\0';
+}
+
+static esp_err_t sha256_digest_parts(
+    const uint8_t *part0,
+    size_t part0_size,
+    const uint8_t *part1,
+    size_t part1_size,
+    const uint8_t *part2,
+    size_t part2_size,
+    uint8_t digest[32]
+)
+{
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    ESP_RETURN_ON_FALSE(info != NULL, ESP_FAIL, TAG, "sha256 md info unavailable");
+
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    int rc = mbedtls_md_setup(&ctx, info, 0);
+    if (rc == 0) {
+        rc = mbedtls_md_starts(&ctx);
+    }
+    if (rc == 0 && part0 != NULL && part0_size > 0) {
+        rc = mbedtls_md_update(&ctx, part0, part0_size);
+    }
+    if (rc == 0 && part1 != NULL && part1_size > 0) {
+        rc = mbedtls_md_update(&ctx, part1, part1_size);
+    }
+    if (rc == 0 && part2 != NULL && part2_size > 0) {
+        rc = mbedtls_md_update(&ctx, part2, part2_size);
+    }
+    if (rc == 0) {
+        rc = mbedtls_md_finish(&ctx, digest);
+    }
+    mbedtls_md_free(&ctx);
+    ESP_RETURN_ON_FALSE(rc == 0, ESP_FAIL, TAG, "sha256 failed rc=%d", rc);
+
+    return ESP_OK;
+}
+
+static esp_err_t sha256_hex(const uint8_t *payload, size_t payload_size, char *hex, size_t hex_size)
+{
+    uint8_t digest[32];
+    ESP_RETURN_ON_ERROR(
+        sha256_digest_parts(payload, payload_size, NULL, 0, NULL, 0, digest),
+        TAG,
+        "sha256 digest failed"
+    );
+    bytes_to_hex(digest, sizeof(digest), hex, hex_size);
+    return ESP_OK;
+}
+
+static esp_err_t hmac_sha256_digest(
+    const uint8_t *key,
+    size_t key_size,
+    const uint8_t *message0,
+    size_t message0_size,
+    const uint8_t *message1,
+    size_t message1_size,
+    uint8_t digest[32]
+)
+{
+    uint8_t key_block[64] = {0};
+    if (key_size > sizeof(key_block)) {
+        ESP_RETURN_ON_ERROR(
+            sha256_digest_parts(key, key_size, NULL, 0, NULL, 0, key_block),
+            TAG,
+            "hmac key hash failed"
+        );
+    } else {
+        memcpy(key_block, key, key_size);
+    }
+
+    uint8_t ipad[64];
+    uint8_t opad[64];
+    for (size_t index = 0; index < sizeof(key_block); index++) {
+        ipad[index] = key_block[index] ^ 0x36U;
+        opad[index] = key_block[index] ^ 0x5cU;
+    }
+
+    uint8_t inner_digest[32];
+    ESP_RETURN_ON_ERROR(
+        sha256_digest_parts(ipad, sizeof(ipad), message0, message0_size, message1, message1_size, inner_digest),
+        TAG,
+        "hmac inner hash failed"
+    );
+    ESP_RETURN_ON_ERROR(
+        sha256_digest_parts(opad, sizeof(opad), inner_digest, sizeof(inner_digest), NULL, 0, digest),
+        TAG,
+        "hmac outer hash failed"
+    );
+    return ESP_OK;
+}
+
+static esp_err_t hmac_signature_header(
+    const aetus_ctx_t *ctx,
+    const uint8_t *payload,
+    size_t payload_size,
+    char *header,
+    size_t header_size
+)
+{
+    char body_sha256_hex[65];
+    uint8_t digest[32];
+    ESP_RETURN_ON_ERROR(sha256_hex(payload, payload_size, body_sha256_hex, sizeof(body_sha256_hex)), TAG, "body sha256 failed");
+
+    char signing_prefix[128];
+    int prefix_len = snprintf(
+        signing_prefix,
+        sizeof(signing_prefix),
+        "%s%s\n",
+        AETUS_HMAC_PREFIX,
+        ctx->config.device_id
+    );
+    ESP_RETURN_ON_FALSE(
+        prefix_len > 0 && (size_t)prefix_len < sizeof(signing_prefix),
+        ESP_ERR_INVALID_SIZE,
+        TAG,
+        "hmac signing prefix too long"
+    );
+
+    ESP_RETURN_ON_ERROR(
+        hmac_sha256_digest(
+            (const uint8_t *)ctx->config.device_token,
+            strlen(ctx->config.device_token),
+            (const uint8_t *)signing_prefix,
+            (size_t)prefix_len,
+            (const uint8_t *)body_sha256_hex,
+            strlen(body_sha256_hex),
+            digest
+        ),
+        TAG,
+        "hmac digest failed"
+    );
+
+    char signature_hex[65];
+    bytes_to_hex(digest, sizeof(digest), signature_hex, sizeof(signature_hex));
+    int written = snprintf(header, header_size, "%s=%s", AETUS_HMAC_SCHEME, signature_hex);
+    ESP_RETURN_ON_FALSE(
+        written > 0 && (size_t)written < header_size,
+        ESP_ERR_INVALID_SIZE,
+        TAG,
+        "hmac signature header too long"
+    );
+    return ESP_OK;
 }
 
 static bool encode_string_callback(pb_ostream_t *stream, const pb_field_t *field, void *const *arg)
@@ -628,11 +791,22 @@ static esp_err_t post_payload(aetus_ctx_t *ctx, const uint8_t *payload, size_t p
         return ESP_FAIL;
     }
 
-    char authorization[128];
-    snprintf(authorization, sizeof(authorization), "Bearer %s", ctx->config.device_token);
     esp_http_client_set_header(client, "Content-Type", "application/x-protobuf");
     esp_http_client_set_header(client, "X-Device-Id", ctx->config.device_id);
-    esp_http_client_set_header(client, "Authorization", authorization);
+
+    if (ctx->config.auth_mode == AETUS_AUTH_HMAC_SHA256) {
+        char signature_header[96];
+        esp_err_t sign_err = hmac_signature_header(ctx, payload, payload_size, signature_header, sizeof(signature_header));
+        if (sign_err != ESP_OK) {
+            esp_http_client_cleanup(client);
+            return sign_err;
+        }
+        esp_http_client_set_header(client, "X-Aetus-Signature", signature_header);
+    } else {
+        char authorization[128];
+        snprintf(authorization, sizeof(authorization), "Bearer %s", ctx->config.device_token);
+        esp_http_client_set_header(client, "Authorization", authorization);
+    }
     esp_http_client_set_post_field(client, (const char *)payload, payload_size);
 
     esp_err_t err = esp_http_client_perform(client);
@@ -905,6 +1079,12 @@ esp_err_t aetus_start(const aetus_config_t *config)
         TAG,
         "unsupported wifi auth"
     );
+    ESP_RETURN_ON_FALSE(
+        config->auth_mode == AETUS_AUTH_BEARER || config->auth_mode == AETUS_AUTH_HMAC_SHA256,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "unsupported auth mode"
+    );
     if (config->wifi_auth == AETUS_WIFI_AUTH_PEAP) {
         ESP_RETURN_ON_FALSE(
             string_required_fits(config->wifi_identity, AETUS_WIFI_IDENTITY_MAX),
@@ -995,6 +1175,12 @@ esp_err_t aetus_update_config(const aetus_config_t *config)
         ESP_ERR_INVALID_ARG,
         TAG,
         "unsupported wifi auth"
+    );
+    ESP_RETURN_ON_FALSE(
+        next.auth_mode == AETUS_AUTH_BEARER || next.auth_mode == AETUS_AUTH_HMAC_SHA256,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "unsupported auth mode"
     );
     if (next.wifi_auth == AETUS_WIFI_AUTH_PEAP) {
         ESP_RETURN_ON_FALSE(

@@ -57,6 +57,7 @@ void app_main(void)
         .time_url = AETUS_TIME_URL,
         .device_id = AETUS_DEVICE_ID,
         .device_token = AETUS_DEVICE_TOKEN,
+        .auth_mode = AETUS_AUTH_HMAC ? AETUS_AUTH_HMAC_SHA256 : AETUS_AUTH_BEARER,
         .firmware_version = 1002003,
         .upload_interval_ms = AETUS_UPLOAD_INTERVAL_MS,
         .queue_depth = 16,

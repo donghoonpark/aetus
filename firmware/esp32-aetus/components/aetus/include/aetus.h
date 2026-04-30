@@ -68,6 +68,11 @@ typedef enum {
     AETUS_WIFI_AUTH_PEAP = 1,
 } aetus_wifi_auth_t;
 
+typedef enum {
+    AETUS_AUTH_BEARER = 0,
+    AETUS_AUTH_HMAC_SHA256 = 1,
+} aetus_auth_mode_t;
+
 typedef struct {
     aetus_device_status_t status;
     int32_t rssi;
@@ -85,6 +90,7 @@ typedef struct {
     const char *time_url;
     const char *device_id;
     const char *device_token;
+    aetus_auth_mode_t auth_mode;
     uint32_t firmware_version;
     uint32_t upload_interval_ms;
     uint32_t queue_depth;

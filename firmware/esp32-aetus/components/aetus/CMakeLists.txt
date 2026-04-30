@@ -13,6 +13,7 @@ idf_component_register(
         esp_wifi
         bt
         esp_driver_gpio
+        mbedtls
         nanopb
         nvs_flash
         wpa_supplicant

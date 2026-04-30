@@ -4,10 +4,15 @@ set(AETUS_INGEST_URL "$ENV{AETUS_INGEST_URL}")
 set(AETUS_TIME_URL "$ENV{AETUS_TIME_URL}")
 set(AETUS_DEVICE_ID "$ENV{AETUS_DEVICE_ID}")
 set(AETUS_DEVICE_TOKEN "$ENV{AETUS_DEVICE_TOKEN}")
+set(AETUS_AUTH "$ENV{AETUS_AUTH}")
 set(AETUS_UPLOAD_INTERVAL_MS "$ENV{AETUS_UPLOAD_INTERVAL_MS}")
 
 if(NOT AETUS_UPLOAD_INTERVAL_MS)
     set(AETUS_UPLOAD_INTERVAL_MS "600000")
+endif()
+
+if(NOT AETUS_AUTH)
+    set(AETUS_AUTH "bearer")
 endif()
 
 foreach(required_var
@@ -24,6 +29,15 @@ endforeach()
 
 if(NOT AETUS_TIME_URL)
     string(REPLACE "/v1/ingest" "/v1/time" AETUS_TIME_URL "${AETUS_INGEST_URL}")
+endif()
+
+string(TOLOWER "${AETUS_AUTH}" AETUS_AUTH_NORMALIZED)
+if(AETUS_AUTH_NORMALIZED STREQUAL "hmac")
+    set(AETUS_AUTH_HMAC 1)
+elseif(AETUS_AUTH_NORMALIZED STREQUAL "bearer")
+    set(AETUS_AUTH_HMAC 0)
+else()
+    message(FATAL_ERROR "AETUS_AUTH must be either 'bearer' or 'hmac'")
 endif()
 
 configure_file(

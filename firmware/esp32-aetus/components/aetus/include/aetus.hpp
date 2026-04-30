@@ -51,6 +51,18 @@ public:
         return *this;
     }
 
+    constexpr Config &bearer_auth()
+    {
+        value_.auth_mode = AETUS_AUTH_BEARER;
+        return *this;
+    }
+
+    constexpr Config &hmac_sha256_auth()
+    {
+        value_.auth_mode = AETUS_AUTH_HMAC_SHA256;
+        return *this;
+    }
+
     constexpr Config &firmware_version(uint32_t version)
     {
         value_.firmware_version = version;

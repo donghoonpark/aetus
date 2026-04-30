@@ -58,6 +58,11 @@ extern "C" void app_main(void)
                                      .ingest_url(AETUS_INGEST_URL)
                                      .time_url(AETUS_TIME_URL)
                                      .device(AETUS_DEVICE_ID, AETUS_DEVICE_TOKEN)
+#if AETUS_AUTH_HMAC
+                                     .hmac_sha256_auth()
+#else
+                                     .bearer_auth()
+#endif
                                      .firmware_version(1002003)
                                      .upload_interval_ms(AETUS_UPLOAD_INTERVAL_MS)
                                      .queue_depth(16)
