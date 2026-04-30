@@ -213,7 +213,8 @@ npm run build
 - [[../services/kafka-connect/sink-config.json]]
 - [[../services/kafka-connect/connectors/raw-device-events-sink.json]]
 - [[../services/kafka-connect/connectors/metric-ingest-staging-sink.json]]
-- [[../services/postgres/init.sql]]
+- [[../services/postgres/initdb/00-base.sql]]
+- [[../services/postgres/initdb/10-timescale.sql]]
 
 현재 적재 흐름:
 
@@ -301,6 +302,8 @@ npm run build
 
 TimescaleDB 설정:
 
+- `00-base.sql`은 plain PostgreSQL fallback 가능한 table/index/trigger 정의
+- `10-timescale.sql`은 TimescaleDB extension, hypertable, compression, retention 정책 정의
 - `CREATE EXTENSION IF NOT EXISTS timescaledb`
 - `device_metric_points(event_time)` hypertable
 - `7일` 경과 chunk compression policy

@@ -1,5 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS timescaledb;
-
 CREATE TABLE IF NOT EXISTS raw_device_events (
     device_id TEXT NOT NULL,
     boot_id TEXT NOT NULL,
@@ -89,21 +87,10 @@ CREATE TABLE IF NOT EXISTS device_metric_points (
     UNIQUE (event_time, request_id, metric_index)
 );
 
-SELECT create_hypertable('device_metric_points', 'event_time', if_not_exists => TRUE);
-
 CREATE INDEX IF NOT EXISTS idx_metric_points_time ON device_metric_points(event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_metric_points_device_time ON device_metric_points(device_pk, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_metric_points_metric_time ON device_metric_points(metric_pk, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_boot_sessions_device ON device_boot_sessions(device_pk);
-
-ALTER TABLE device_metric_points SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'device_pk, metric_pk',
-    timescaledb.compress_orderby = 'event_time DESC'
-);
-
-SELECT add_compression_policy('device_metric_points', INTERVAL '7 days', if_not_exists => TRUE);
-SELECT add_retention_policy('device_metric_points', INTERVAL '1 year', if_not_exists => TRUE);
 
 CREATE OR REPLACE FUNCTION ingest_metric_staging_row()
 RETURNS TRIGGER AS $$

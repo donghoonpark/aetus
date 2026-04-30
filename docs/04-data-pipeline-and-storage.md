@@ -128,6 +128,8 @@ erDiagram
 
 TimescaleDB 설정:
 
+`services/postgres/initdb/00-base.sql`은 plain PostgreSQL에서도 실행 가능한 기본 schema와 trigger만 정의한다. `services/postgres/initdb/10-timescale.sql`은 TimescaleDB가 있는 환경에서만 적용하는 선택 레이어이며, 개발 compose 기본 이미지는 TimescaleDB를 포함한다.
+
 ```sql
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
