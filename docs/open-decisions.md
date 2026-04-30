@@ -2,7 +2,28 @@
 
 ## 지금 합의가 필요한 항목
 
-현재 시점에서 별도로 남겨둔 핵심 기술 의사결정은 없다.
+### HMAC-SHA256 선택 인증 경로 도입 여부
+
+현재 기본 인증은 장치별 정적 bearer token이다.
+
+공개망 또는 보안 요구가 높은 배포를 고려해 `POST /v1/ingest`에 HMAC-SHA256 선택 인증 경로를 추가하는 안을 검토 중이다.
+
+검토안:
+
+- 기존 bearer token 경로는 유지한다.
+- HMAC은 `POST /v1/ingest`에 우선 한정한다.
+- `X-Device-Id`는 secret 조회를 위해 header에 둔다.
+- `boot_id`, `sequence`는 protobuf body 내부 값을 사용하고 header에 반복하지 않는다.
+- signature는 `prefix || raw_protobuf_body`에 대해 계산한다.
+- `/v1/time`은 초기에는 기존 bearer token 인증을 유지한다.
+- HMAC만으로 replay 방지는 완결되지 않으므로, replay guard는 별도 확장으로 둔다.
+
+컨펌 필요 항목:
+
+- HMAC을 실제 구현 범위에 포함할지
+- HMAC mode를 bearer와 병행하는 `dual mode`로 둘지
+- device token을 그대로 HMAC secret으로 재사용할지, 용어를 `device_secret`으로 바꿀지
+- replay guard를 초기 범위에서 제외해도 되는지
 
 ## 참고
 

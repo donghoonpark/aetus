@@ -85,6 +85,24 @@ services/
 8. 내부 event object로 normalize
 9. memory publisher 또는 Kafka publisher로 publish
 
+현재 구현은 bearer token 인증만 지원한다.
+
+HMAC-SHA256 선택 인증 경로를 추가할 경우 처리 순서는 다음처럼 바뀐다.
+
+1. `Content-Type=application/x-protobuf` 확인
+2. source IP CIDR 확인
+3. in-memory rate limit 검사
+4. request body 읽기 및 크기 제한 확인
+5. bearer 또는 HMAC 인증 방식 판별
+6. bearer mode는 기존 device token 비교
+7. HMAC mode는 raw protobuf body 기반 signature 검증
+8. protobuf 파싱
+9. body 내부 `device_id`, `boot_id`, `body` 기본 검증
+10. 내부 event object로 normalize
+11. memory publisher 또는 Kafka publisher로 publish
+
+HMAC 경로는 아직 구현하지 않았으며, 설계 컨펌 후 작업한다.
+
 ### RTC time sync 동작
 
 `GET /v1/time`은 장치별 정적 bearer token으로 인증하고 서버 시간을 반환한다.
@@ -100,6 +118,7 @@ services/
 - ingest 인증 조회는 `aiosqlite` 기반 read-only connection으로 수행한다.
 - `timestamp_ns`는 장치 시각으로 별도 보존하고, `received_at`은 서버 수신 시각으로 별도 기록한다.
 - `sequence` 순서가 꼬여 들어와도 ingest 레벨에서는 막지 않는다.
+- HMAC 인증을 추가하더라도 초기 구현에서는 ingest 경로 DB write 원칙을 유지하고, replay guard는 별도 확장으로 둔다.
 
 ## 2. Provisioning / Control Plane
 

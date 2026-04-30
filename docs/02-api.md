@@ -27,7 +27,9 @@
 | --- | --- | --- |
 | `Content-Type: application/x-protobuf` | 필수 | protobuf 전송 |
 | `X-Device-Id` | 필수 | 장치 식별자 |
-| `Authorization: Bearer <token>` | 필수 | 장치별 정적 토큰 |
+| `Authorization: Bearer <token>` | 기본 인증 시 필수 | 장치별 정적 토큰 |
+| `X-Aetus-Auth: hmac-sha256-v1` | HMAC 인증 시 필수 | HMAC 인증 방식 식별자 |
+| `X-Aetus-Signature: v1=<hex>` | HMAC 인증 시 필수 | raw protobuf body 기반 HMAC-SHA256 서명 |
 | `Idempotency-Key` | 선택 | HTTP 레벨 중복 방지 보조값 |
 
 권장 방식:
@@ -78,9 +80,9 @@
 
 ## 인증
 
-확정 사항:
+현재 확정된 기본 인증:
 
-- ingest 인증은 `장치별 정적 bearer token`
+- ingest 기본 인증은 `장치별 정적 bearer token`
 - 장치군 공통 토큰은 기본안으로 사용하지 않음
 - 토큰 발급은 별도 provisioning API에서 수행
 - token은 API 차원 만료를 두지 않음
@@ -95,6 +97,74 @@
 - `HTTPS`를 사용하는 경우에도 장치에서는 인증서 검증을 수행하지 않음
 - 네트워크 ACL로 허용된 대역에서만 ingress 접근
 - source IP는 `L4` 직결로 원본 주소가 보존된다고 가정
+
+### 선택 인증 경로: HMAC-SHA256
+
+공개망 또는 보안 요구가 높은 배포를 고려해 `POST /v1/ingest`에 HMAC 인증 경로를 선택 옵션으로 추가할 수 있다.
+
+이 경로는 아직 구현 확정 전 설계안이며, 기존 bearer token 경로를 제거하지 않고 병행 지원하는 `dual mode`를 우선 검토한다.
+
+목표:
+
+- HTTP를 유지하더라도 장치 secret이 요청마다 직접 노출되지 않게 함
+- ESP32-C5 펌웨어 부담을 크게 늘리지 않음
+- protobuf 내부 필드를 HTTP header에 과도하게 반복하지 않음
+- 기존 provisioning, rate limit, Kafka/PostgreSQL 파이프라인을 최대한 유지
+
+HMAC 요청 헤더:
+
+| Header | 필수 여부 | 설명 |
+| --- | --- | --- |
+| `Content-Type: application/x-protobuf` | 필수 | protobuf 전송 |
+| `X-Device-Id` | 필수 | secret 조회를 위한 장치 식별자 |
+| `X-Aetus-Auth: hmac-sha256-v1` | 필수 | HMAC scheme/version |
+| `X-Aetus-Signature: v1=<hex>` | 필수 | HMAC-SHA256 signature |
+
+`boot_id`, `sequence`, `event_type`, `timestamp_ns`는 protobuf body 안의 값을 사용한다. 이 값들을 HMAC 전용 header로 반복하지 않는다.
+
+서명 대상:
+
+```text
+prefix = "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n<device_id>\n"
+signature = HMAC_SHA256(device_secret, prefix || raw_protobuf_body)
+```
+
+중요한 원칙:
+
+- 서버는 수신한 raw protobuf bytes 그대로 HMAC을 검증한다.
+- 서버는 protobuf를 parse한 뒤 다시 serialize한 bytes로 검증하지 않는다.
+- `X-Device-Id`는 secret 조회를 위해 header에 둔다.
+- HMAC 검증 후 protobuf를 parse하고, body 내부 `device_id`가 `X-Device-Id`와 일치하는지 다시 확인한다.
+- HMAC 검증 실패 시 `401 Unauthorized`를 반환한다.
+- HMAC 경로에서도 source IP CIDR 제한과 rate limit는 동일하게 적용한다.
+
+서버 처리 순서:
+
+1. `Content-Type=application/x-protobuf` 확인
+2. source IP CIDR 확인
+3. in-memory rate limit 검사
+4. request body 읽기 및 크기 제한 확인
+5. `Authorization: Bearer` 또는 `X-Aetus-Auth: hmac-sha256-v1` 기준으로 인증 방식 선택
+6. bearer mode는 기존 device token 비교
+7. HMAC mode는 `X-Device-Id`로 device secret을 read-only 조회하고 raw body signature 검증
+8. protobuf 파싱
+9. body 내부 `device_id`, `boot_id`, `body` 기본 검증
+10. 내부 event object로 normalize
+11. memory publisher 또는 Kafka publisher로 publish
+
+리플레이 정책:
+
+- HMAC은 secret 미보유 장치를 거르는 인증 수단이다.
+- HMAC만으로 캡처된 정상 요청의 재전송을 완전히 막지는 않는다.
+- 현재 `device_id + boot_id + sequence`는 downstream 중복 적재 방지 키로 유지한다.
+- ingest 서버 단계에서 리플레이를 차단하려면 `(device_id, boot_id, sequence)` 기반 replay cache 또는 persistent sequence guard가 별도로 필요하다.
+- 초기 구현은 ingest 경로에서 DB write를 피하는 현재 원칙을 유지하고, replay guard는 별도 확장안으로 둔다.
+
+RTC time sync와 HMAC:
+
+- `GET /v1/time`은 body가 없으므로 ingest와 동일한 raw body HMAC 규칙을 그대로 적용하기 어렵다.
+- 초기 HMAC 옵션 범위는 `POST /v1/ingest`로 한정한다.
+- `/v1/time`은 기존 bearer token 인증을 유지하거나, 이후 별도 nonce 기반 HMAC 규칙을 추가로 설계한다.
 
 ## provisioning API
 

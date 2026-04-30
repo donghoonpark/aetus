@@ -221,6 +221,7 @@ flowchart LR
 권장 고려 사항:
 
 - device 인증: 장치별 정적 bearer token
+- 공개망 또는 보안 요구가 높은 배포에서는 `POST /v1/ingest`에 HMAC-SHA256 선택 인증 경로를 추가 검토
 - device to API 구간은 `HTTP` 기본, 필요 시 `HTTPS` 사용 가능
 - `HTTPS`를 쓰더라도 장치에서는 인증서 검증을 수행하지 않음
 - API 이후 서버 간 통신은 가능한 한 암호화
@@ -243,6 +244,35 @@ flowchart LR
 - 토큰 원문은 최소 노출 원칙 적용
 - token rotate API는 초기 범위에서 제외
 - token 교체는 재프로비저닝 또는 운영자 수동 재발급으로 처리
+
+### HMAC 선택 인증 경로 검토안
+
+기존 bearer token 방식은 단순하지만, HTTP 환경에서는 장치 자격증명이 요청마다 그대로 전송된다.
+
+HMAC 선택 경로를 추가하면 장치 secret 자체를 wire에 싣지 않고 `raw protobuf body`에 대한 서명만 전송할 수 있다.
+
+기본 방향:
+
+- 기존 bearer token 인증은 유지한다.
+- HMAC은 `POST /v1/ingest`에 한정된 선택 경로로 추가한다.
+- provisioning에서 발급한 device token을 HMAC secret으로 재사용할 수 있다.
+- 더 엄격한 명명이 필요하면 향후 `device_secret`으로 용어를 전환한다.
+- HMAC 검증은 FastAPI에서 수행하고, Kafka/PostgreSQL 이후 파이프라인은 변경하지 않는다.
+- protobuf 내부의 `boot_id`, `sequence`를 HMAC 전용 header에 반복하지 않는다.
+
+HMAC이 해결하는 것:
+
+- secret 없는 비인가 장치 요청 거부
+- bearer token 원문이 매 요청에 노출되는 문제 완화
+- HTTP 기반 운영을 유지하면서 인증 강도 향상
+
+HMAC만으로 해결하지 않는 것:
+
+- 캡처된 정상 요청의 재전송 방지
+- 서버 DB에 저장된 secret 보호
+- TLS가 제공하는 통신 기밀성
+
+리플레이 방지를 ingest 서버에서 직접 수행하려면 `(device_id, boot_id, sequence)` 기반 replay cache 또는 persistent sequence guard가 필요하다. 단, 이 경우 현재 원칙인 "ingest 경로에서 내부 관리 DB write를 하지 않음"과 충돌할 수 있으므로 별도 의사결정 대상으로 둔다.
 
 ## FastAPI 내부 관리 DB
 

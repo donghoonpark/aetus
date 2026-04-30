@@ -41,6 +41,7 @@
 - `firmware/examples`는 표준 컴포넌트를 실제 ESP-IDF app으로 소비하는 빌드 가능한 예제를 제공한다
 - bootstrap token은 단일 공용 token이며 유출/공유를 전제로 매우 가혹한 제한만 둔다
 - provisioning allowlist는 `source IP + hardware_id` 기준으로 FastAPI에서 관리한다
+- HMAC-SHA256 ingest 인증은 선택 경로로 검토 중이며, 구현 전 [[open-decisions]]에서 컨펌한다
 
 ## 원본 문서
 

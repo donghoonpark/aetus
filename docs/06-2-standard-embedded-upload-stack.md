@@ -268,12 +268,49 @@ static void sensor_task(void *arg)
 
 - FlashDB durable backlog
 - 대형 payload용 pointer/blob queue API
+- HMAC-SHA256 선택 인증 경로
 - ISR-safe enqueue API
 - Wi-Fi ownership 분리
 - HTTPS certificate verification bypass option
 - provisioning client
 
 대형 payload용 pointer/blob queue API는 1200B급 센서 샘플처럼 기존 `aetus_telemetry_t` 고정 배열에 담기 부담스러운 데이터를 위한 향후 기능이다. 기본 방향은 `aetus_enqueue_payload_copy()`와 `aetus_enqueue_payload_owned()`를 제공하고, 성공적으로 enqueue된 owned payload는 AETUS uploader task가 소유권을 가져가 업로드 성공 또는 최종 drop 시 release callback으로 해제하는 것이다. 이 기능을 구현할 때는 queue item에는 포인터와 크기만 저장하고, protobuf 인코딩은 가능하면 nanopb callback 또는 HTTP streaming 방식으로 처리해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
+
+## HMAC 인증 옵션 설계안
+
+현재 표준 업로드 컴포넌트는 bearer token을 `Authorization` header로 전송한다.
+
+보안 요구가 높은 배포를 위해 HMAC-SHA256 인증을 선택 옵션으로 추가할 수 있다.
+
+펌웨어 측 변경 방향:
+
+- `aetus_config_t`에 인증 모드 enum을 추가한다.
+- 기본값은 기존 호환성을 위해 bearer token으로 둔다.
+- HMAC mode에서는 `device_token` 값을 HMAC secret으로 사용한다.
+- nanopb가 생성한 raw protobuf bytes에 대해 HMAC을 계산한다.
+- `boot_id`, `sequence`는 protobuf body에 이미 있으므로 별도 HMAC header로 반복하지 않는다.
+- HTTP header에는 `X-Device-Id`, `X-Aetus-Auth`, `X-Aetus-Signature`만 추가한다.
+
+권장 서명 입력:
+
+```text
+prefix = "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n<device_id>\n"
+signature = HMAC_SHA256(device_secret, prefix || raw_protobuf_body)
+```
+
+ESP32-C5 구현 관점:
+
+- ESP-IDF의 mbedTLS HMAC-SHA256을 사용한다.
+- HMAC 계산은 업로드 직전 `post_payload()` 경로에 넣는 것이 가장 단순하다.
+- SHA256/HMAC 버퍼와 hex signature 버퍼만 추가하면 되므로 RAM 부담은 작다.
+- retry 시 같은 protobuf body와 같은 sequence를 재전송하므로 signature도 동일하게 유지될 수 있다.
+- upload 성공 후에만 sequence를 증가시키는 기존 정책은 유지한다.
+
+주의:
+
+- HMAC은 인증 강화를 위한 옵션이며, 단독으로 replay attack을 완전히 막지는 않는다.
+- replay 방지가 필요하면 서버가 `(device_id, boot_id, sequence)`를 별도로 기억해야 한다.
+- `/v1/time`은 body가 없는 endpoint이므로 초기 HMAC 적용 범위에서 제외하고 bearer token을 유지한다.
 
 ## FlashDB 통합 계획
 
