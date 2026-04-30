@@ -58,15 +58,15 @@
 }
 ```
 
-## PostgreSQL 적재 모델
+## TimescaleDB/PostgreSQL 적재 모델
 
-현재 구현은 디버깅용 raw 테이블과 장기 분석용 metric point 테이블을 분리한다.
+현재 구현은 TimescaleDB 기반 PostgreSQL을 기본 DB로 사용하고, 디버깅용 raw 테이블과 장기 분석용 metric point hypertable을 분리한다.
 
 운영 보관 전략:
 
 - `raw_device_events`: 원본 이벤트 확인 및 장애 분석용, 기본 보관 목표 `1일`
 - `metric_ingest_staging`: Kafka Connect가 쓰는 중간 테이블, raw와 같은 짧은 보관 주기
-- `device_metric_points`: 장기 시계열 분석용, 기본 보관 목표 `1년`
+- `device_metric_points`: 장기 시계열 분석용 TimescaleDB hypertable, 기본 보관 목표 `1년`
 - `devices`, `device_boot_sessions`, `metric_definitions`: 문자열 dimension을 정수 surrogate key로 매핑
 
 관계 개요:
@@ -100,7 +100,7 @@ erDiagram
     }
 
     DEVICE_METRIC_POINTS {
-        bigint point_id PK
+        bigint point_id
         timestamptz event_time
         bigint event_time_ns
         bigint device_pk FK
@@ -122,7 +122,32 @@ erDiagram
 - 긴 문자열인 `device_id`, `boot_id`, `metric_key` 반복 저장을 장기 point 테이블에서 줄임
 - numeric metric은 `value_double` / `value_int` / `value_bool`에 저장해 JSON 파싱 없이 조회
 - 원본 payload는 raw에 짧게 보관해 디버깅 가능성 유지
-- TimescaleDB로 전환할 경우 `device_metric_points(event_time)`를 hypertable 후보로 사용 가능
+- `device_metric_points(event_time)`를 TimescaleDB hypertable로 사용해 시간 기준 chunk 분할
+- `7일`이 지난 metric chunk는 TimescaleDB compression policy로 압축
+- `1년`이 지난 metric point는 TimescaleDB retention policy로 자동 삭제
+
+TimescaleDB 설정:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+SELECT create_hypertable('device_metric_points', 'event_time', if_not_exists => TRUE);
+
+ALTER TABLE device_metric_points SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'device_pk, metric_pk',
+    timescaledb.compress_orderby = 'event_time DESC'
+);
+
+SELECT add_compression_policy('device_metric_points', INTERVAL '7 days', if_not_exists => TRUE);
+SELECT add_retention_policy('device_metric_points', INTERVAL '1 year', if_not_exists => TRUE);
+```
+
+제약 조건 주의:
+
+- TimescaleDB hypertable의 unique index는 time partition column을 포함해야 한다.
+- 따라서 `device_metric_points`는 `UNIQUE (event_time, request_id, metric_index)`를 사용한다.
+- `point_id`는 row 식별 편의용 sequence이며 primary key로 두지 않는다.
 
 이전 후보 테이블:
 
@@ -268,11 +293,12 @@ metric point 적재 테이블:
 - 업그레이드 및 파티션 운영
 - 모니터링과 lag 추적
 
-### PostgreSQL
+### TimescaleDB / PostgreSQL
 
 운영 전제:
 
-- 분리망 내부 VM 기반 self-managed PostgreSQL
+- 분리망 내부 VM 기반 self-managed TimescaleDB/PostgreSQL
+- 개발 환경은 `timescale/timescaledb:latest-pg17` 이미지 사용
 
 운영 고려 사항:
 
@@ -426,7 +452,7 @@ HMAC만으로 해결하지 않는 것:
 
 ## InfluxDB 호환 덤프 구조
 
-PostgreSQL 적재는 raw 이벤트 중심으로 가져가되, 이후 Influx 스타일 덤프를 만들기 쉬운 형태를 함께 고려한다.
+PostgreSQL 적재는 raw 이벤트와 metric point hypertable을 함께 가져가며, 이후 Influx 스타일 덤프를 만들기 쉬운 형태를 유지한다.
 
 핵심 대응 관계:
 
@@ -437,9 +463,9 @@ PostgreSQL 적재는 raw 이벤트 중심으로 가져가되, 이후 Influx 스�
 
 권장 전략:
 
-1. 1차 적재는 `raw_device_events`에 그대로 저장
-2. 2차 조회/덤프용으로 `device_metric_points` 뷰 또는 파생 테이블 구성
-3. Influx line protocol 또는 CSV dump는 이 파생 구조에서 생성
+1. 원본 이벤트는 `raw_device_events`에 그대로 저장
+2. metric은 `device_metric_points` hypertable에 정규화 저장
+3. Influx line protocol 또는 CSV dump는 `device_metric_points`와 dimension table join 결과에서 생성
 
 예시 파생 구조:
 
@@ -478,10 +504,10 @@ flowchart TD
 ## 현재 시점 권장 시작안
 
 1. 기기는 기본적으로 `HTTP`로 FastAPI에 `protobuf` 업로드
-2. FastAPI는 protobuf decode와 최소 검증 후 내부 표준 object로 정규화해 `device.raw.v1`에 publish
-3. `Kafka Connect JDBC Sink`가 PostgreSQL에 upsert
+2. FastAPI는 protobuf decode와 최소 검증 후 내부 표준 object로 정규화해 `device.raw.v1`과 `device.metric.v1`에 publish
+3. `Kafka Connect JDBC Sink`가 TimescaleDB/PostgreSQL에 upsert
 4. 실패 메시지는 `device.dlq.v1`로 이동
 5. `device_id + boot_id + sequence`로 중복 전송을 구분
-6. PostgreSQL은 일반 테이블 + `jsonb payload`로 시작
+6. raw는 짧게 보관하고, metric은 `device_metric_points` hypertable에 장기 보관
 7. FastAPI control DB는 초기 `SQLite`, 고부하 시 `MySQL`로 전환
 8. `k8s`에는 API와 Kafka Connect를 올리고, Kafka와 PostgreSQL은 분리망 내 self-managed로 운영

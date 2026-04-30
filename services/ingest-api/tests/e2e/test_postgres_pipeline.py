@@ -356,3 +356,55 @@ def test_dimension_tables_deduplicate_device_boot_and_metric_keys(ingest_result:
     assert device_count == 1
     assert boot_count == 1
     assert metric_count == 1
+
+
+def test_metric_points_table_is_timescaledb_hypertable(ingest_result: IngestResult) -> None:
+    del ingest_result
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb')")
+            extension_exists = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT compression_enabled
+                FROM timescaledb_information.hypertables
+                WHERE hypertable_schema = 'public'
+                  AND hypertable_name = 'device_metric_points'
+                """
+            )
+            hypertable_row = cur.fetchone()
+            cur.execute(
+                """
+                SELECT array_agg(a.attname ORDER BY array_position(i.indkey, a.attnum))
+                FROM pg_class t
+                JOIN pg_index i ON i.indrelid = t.oid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+                WHERE t.relname = 'device_metric_points'
+                  AND i.indisunique
+                GROUP BY i.indexrelid
+                """
+            )
+            unique_indexes = [tuple(row[0]) for row in cur.fetchall()]
+
+    assert extension_exists is True
+    assert hypertable_row == (True,)
+    assert ("event_time", "request_id", "metric_index") in unique_indexes
+
+
+def test_timescaledb_metric_retention_and_compression_jobs_exist(ingest_result: IngestResult) -> None:
+    del ingest_result
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT proc_name
+                FROM timescaledb_information.jobs
+                WHERE hypertable_schema = 'public'
+                  AND hypertable_name = 'device_metric_points'
+                  AND proc_name IN ('policy_compression', 'policy_retention')
+                ORDER BY proc_name
+                """
+            )
+            job_names = {row[0] for row in cur.fetchall()}
+
+    assert job_names == {"policy_compression", "policy_retention"}

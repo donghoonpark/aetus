@@ -205,7 +205,7 @@ npm install
 npm run build
 ```
 
-## 4. Kafka / Kafka Connect / PostgreSQL
+## 4. Kafka / Kafka Connect / TimescaleDB/PostgreSQL
 
 구현 파일:
 
@@ -217,7 +217,7 @@ npm run build
 
 현재 적재 흐름:
 
-`FastAPI -> Kafka -> Kafka Connect JDBC Sink -> PostgreSQL`
+`FastAPI -> Kafka -> Kafka Connect JDBC Sink -> TimescaleDB/PostgreSQL`
 
 현재 Kafka Connect sink는 두 개다.
 
@@ -268,9 +268,9 @@ npm run build
 
 - PK: `(device_id, boot_id, sequence)`
 
-### PostgreSQL metric tables
+### TimescaleDB metric tables
 
-장기 분석용 metric은 raw JSON과 분리해 저장한다.
+장기 분석용 metric은 raw JSON과 분리해 TimescaleDB hypertable에 저장한다.
 
 테이블:
 
@@ -278,7 +278,7 @@ npm run build
 - `devices`
 - `device_boot_sessions`
 - `metric_definitions`
-- `device_metric_points`
+- `device_metric_points` hypertable
 
 흐름:
 
@@ -297,7 +297,15 @@ npm run build
 
 - `raw_device_events`: 1일 수준의 짧은 디버깅 보관
 - `metric_ingest_staging`: raw와 같은 짧은 보관
-- `device_metric_points`: 1년 수준의 장기 보관
+- `device_metric_points`: TimescaleDB retention policy로 1년 수준의 장기 보관
+
+TimescaleDB 설정:
+
+- `CREATE EXTENSION IF NOT EXISTS timescaledb`
+- `device_metric_points(event_time)` hypertable
+- `7일` 경과 chunk compression policy
+- `1년` 경과 metric retention policy
+- hypertable unique 제약 조건은 time partition column을 포함하기 위해 `UNIQUE (event_time, request_id, metric_index)` 사용
 
 ## 5. Mock Device
 
