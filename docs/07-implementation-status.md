@@ -211,11 +211,18 @@ npm run build
 
 - [[../compose/e2e-compose.yml]]
 - [[../services/kafka-connect/sink-config.json]]
+- [[../services/kafka-connect/connectors/raw-device-events-sink.json]]
+- [[../services/kafka-connect/connectors/metric-ingest-staging-sink.json]]
 - [[../services/postgres/init.sql]]
 
 현재 적재 흐름:
 
 `FastAPI -> Kafka -> Kafka Connect JDBC Sink -> PostgreSQL`
+
+현재 Kafka Connect sink는 두 개다.
+
+- `raw-device-events-sink`: `device.raw.v1`을 `raw_device_events`에 upsert
+- `metric-ingest-staging-sink`: `device.metric.v1`을 `metric_ingest_staging`에 upsert
 
 ### Kafka publish 형식
 
@@ -260,6 +267,37 @@ npm run build
 중복 방지 키:
 
 - PK: `(device_id, boot_id, sequence)`
+
+### PostgreSQL metric tables
+
+장기 분석용 metric은 raw JSON과 분리해 저장한다.
+
+테이블:
+
+- `metric_ingest_staging`
+- `devices`
+- `device_boot_sessions`
+- `metric_definitions`
+- `device_metric_points`
+
+흐름:
+
+1. FastAPI가 telemetry payload의 `metrics`를 metric별 Kafka record로 펼쳐 `device.metric.v1`에 publish
+2. Kafka Connect JDBC Sink가 `metric_ingest_staging`에 upsert
+3. PostgreSQL trigger `ingest_metric_staging_row()`가 dimension table을 upsert
+4. 같은 trigger가 `device_metric_points`에 정수 key 기반 point row를 upsert
+
+시간 처리:
+
+- `timestamp_ns`가 있으면 `device_metric_points.event_time`은 장치 timestamp 기준
+- `timestamp_ns`가 없으면 `received_at` 기준
+- 원본 ns 값은 `event_time_ns`에 그대로 보관
+
+보관 정책 목표:
+
+- `raw_device_events`: 1일 수준의 짧은 디버깅 보관
+- `metric_ingest_staging`: raw와 같은 짧은 보관
+- `device_metric_points`: 1년 수준의 장기 보관
 
 ## 5. Mock Device
 

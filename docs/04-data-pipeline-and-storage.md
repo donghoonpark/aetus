@@ -5,6 +5,7 @@
 | Topic | 설명 | 비고 |
 | --- | --- | --- |
 | `device.raw.v1` | API가 받은 원본 이벤트 | 최초 진입 토픽 |
+| `device.metric.v1` | telemetry metric을 1 metric = 1 record로 펼친 장기 적재용 토픽 | Kafka Connect JDBC Sink가 staging에 적재 |
 | `device.validated.v1` | 검증/정규화 완료 이벤트 | 선택 사항 |
 | `device.dlq.v1` | 처리 실패 이벤트 | 분석 및 재처리 |
 | `device.status.v1` | heartbeat, online/offline 상태 | 운영성 강화 |
@@ -59,7 +60,71 @@
 
 ## PostgreSQL 적재 모델
 
-주요 테이블 후보:
+현재 구현은 디버깅용 raw 테이블과 장기 분석용 metric point 테이블을 분리한다.
+
+운영 보관 전략:
+
+- `raw_device_events`: 원본 이벤트 확인 및 장애 분석용, 기본 보관 목표 `1일`
+- `metric_ingest_staging`: Kafka Connect가 쓰는 중간 테이블, raw와 같은 짧은 보관 주기
+- `device_metric_points`: 장기 시계열 분석용, 기본 보관 목표 `1년`
+- `devices`, `device_boot_sessions`, `metric_definitions`: 문자열 dimension을 정수 surrogate key로 매핑
+
+관계 개요:
+
+```mermaid
+erDiagram
+    DEVICES ||--o{ DEVICE_BOOT_SESSIONS : has
+    DEVICES ||--o{ DEVICE_METRIC_POINTS : owns
+    DEVICE_BOOT_SESSIONS ||--o{ DEVICE_METRIC_POINTS : groups
+    METRIC_DEFINITIONS ||--o{ DEVICE_METRIC_POINTS : describes
+    METRIC_INGEST_STAGING ||--|| DEVICE_METRIC_POINTS : "trigger upserts"
+
+    DEVICES {
+        bigint device_pk PK
+        text device_id UK
+        timestamptz created_at
+    }
+
+    DEVICE_BOOT_SESSIONS {
+        bigint boot_pk PK
+        bigint device_pk FK
+        text boot_id
+        timestamptz first_seen_at
+    }
+
+    METRIC_DEFINITIONS {
+        bigint metric_pk PK
+        text metric_key
+        text metric_unit
+        text value_type
+    }
+
+    DEVICE_METRIC_POINTS {
+        bigint point_id PK
+        timestamptz event_time
+        bigint event_time_ns
+        bigint device_pk FK
+        bigint boot_pk FK
+        bigint metric_pk FK
+        bigint sequence
+        integer metric_index
+        double value_double
+        bigint value_int
+        boolean value_bool
+        text value_string
+        text value_bytes_hex
+    }
+}
+```
+
+이 구조의 의도:
+
+- 긴 문자열인 `device_id`, `boot_id`, `metric_key` 반복 저장을 장기 point 테이블에서 줄임
+- numeric metric은 `value_double` / `value_int` / `value_bool`에 저장해 JSON 파싱 없이 조회
+- 원본 payload는 raw에 짧게 보관해 디버깅 가능성 유지
+- TimescaleDB로 전환할 경우 `device_metric_points(event_time)`를 hypertable 후보로 사용 가능
+
+이전 후보 테이블:
 
 - `devices`
 - `device_events`
@@ -111,18 +176,33 @@ erDiagram
 
 ## Sink 기반 적재 전략
 
-직접 구현 consumer를 피하려면 다음 두 테이블 전략이 현실적이다.
+직접 구현 consumer를 피하기 위해 Kafka Connect JDBC Sink를 두 개 사용한다.
 
-1. `raw_device_events`
-2. 필요 시 후속 배치/뷰/SQL로 정규화 테이블 파생
+1. `raw-device-events-sink`: `device.raw.v1` -> `raw_device_events`
+2. `metric-ingest-staging-sink`: `device.metric.v1` -> `metric_ingest_staging`
+
+`metric_ingest_staging`에는 PostgreSQL trigger가 걸려 있다. Kafka Connect가 staging row를 upsert하면 trigger가 다음 작업을 DB 내부에서 수행한다.
+
+```mermaid
+flowchart LR
+    API["FastAPI"] -->|"raw envelope"| RawTopic["device.raw.v1"]
+    API -->|"metric envelope"| MetricTopic["device.metric.v1"]
+    RawTopic --> RawSink["raw-device-events-sink"]
+    MetricTopic --> MetricSink["metric-ingest-staging-sink"]
+    RawSink --> RawTable["raw_device_events"]
+    MetricSink --> Staging["metric_ingest_staging"]
+    Staging -->|"AFTER INSERT/UPDATE trigger"| Dims["devices / boot sessions / metric definitions"]
+    Staging -->|"upsert"| Points["device_metric_points"]
+```
 
 장점:
 
 - Kafka Connect JDBC Sink로 바로 적재 가능
 - 적재 경로에 커스텀 코드가 거의 없음
 - 스키마 변경 충격을 줄이기 쉬움
+- 장기 보관 테이블에서는 문자열 반복과 JSON 오버헤드를 줄일 수 있음
 
-예시 적재 테이블:
+raw 적재 테이블:
 
 | Column | Type | 설명 |
 | --- | --- | --- |
@@ -133,9 +213,27 @@ erDiagram
 | `firmware_version` | `integer` | packed integer 펌웨어 버전, 선택 저장 |
 | `uptime_ms` | `bigint` | 부팅 이후 경과 시간, 선택 저장 |
 | `timestamp_ns` | `bigint` | 장치 기준 ns 단위 절대시각, 선택 저장 |
-| `received_at` | `timestamptz` | API 수신 시각 |
+| `received_at` | `text` | API 수신 시각. Kafka Connect 단순 적재를 위해 text로 저장 |
 | `request_id` | `text` | 추적 ID |
-| `payload` | `jsonb` | 센서/이벤트 데이터 |
+| `payload_json` | `text` | 센서/이벤트 데이터의 compact JSON |
+
+metric point 적재 테이블:
+
+| Column | Type | 설명 |
+| --- | --- | --- |
+| `event_time` | `timestamptz` | 조회 기준 시간. `timestamp_ns`가 있으면 장치 시각, 없으면 수신 시각 |
+| `event_time_ns` | `bigint` | 장치가 보낸 ns timestamp 원본 |
+| `received_at` | `timestamptz` | API 수신 시각 |
+| `device_pk` | `bigint` | `devices` surrogate key |
+| `boot_pk` | `bigint` | `device_boot_sessions` surrogate key |
+| `metric_pk` | `bigint` | `metric_definitions` surrogate key |
+| `sequence` | `bigint` | 부팅 세션 내부 이벤트 번호 |
+| `metric_index` | `integer` | 한 이벤트 안에서 metric 순서 |
+| `value_double` | `double precision` | double metric 값 |
+| `value_int` | `bigint` | int metric 값 |
+| `value_bool` | `boolean` | bool metric 값 |
+| `value_string` | `text` | string metric 값 |
+| `value_bytes_hex` | `text` | bytes metric 값의 hex 표현 |
 
 ## Kubernetes 배포
 

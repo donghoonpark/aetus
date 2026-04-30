@@ -71,6 +71,13 @@ def test_virtual_device_can_upload_telemetry() -> None:
     assert event["event_type"] == "telemetry"
     assert event["payload"]["metrics"][0]["key"] == "temperature"
     assert event["timestamp_ns"] is None
+    assert len(publisher.metric_records) == 1
+    metric_payload = publisher.metric_records[0]["payload"]
+    assert metric_payload["metric_index"] == 0
+    assert metric_payload["metric_key"] == "temperature"
+    assert metric_payload["metric_unit"] == "celsius"
+    assert metric_payload["value_type"] == "double"
+    assert metric_payload["value_double"] == 22.25
 
 
 def test_virtual_device_can_upload_telemetry_with_hmac_signature() -> None:
@@ -171,6 +178,7 @@ def test_virtual_device_can_upload_reboot_status() -> None:
     assert response.status_code == 202
     assert publisher.events[0]["event_type"] == "status"
     assert publisher.events[0]["payload"]["reboot_reason"] == "power_on"
+    assert publisher.metric_records == []
 
 
 def test_ingest_rejects_invalid_token() -> None:

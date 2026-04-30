@@ -36,6 +36,7 @@ class ProvisioningResult:
 class IngestResult:
     responses: list[httpx.Response]
     rows: list[tuple]
+    metric_rows: list[tuple]
     provisioned_device: dict[str, Any]
 
 
@@ -89,6 +90,41 @@ def _wait_for_rows(device_id: str, expected_count: int, timeout: float = 120.0) 
                     return rows
         time.sleep(2)
     raise RuntimeError("Timed out waiting for PostgreSQL rows")
+
+
+def _wait_for_metric_rows(device_id: str, expected_count: int, timeout: float = 120.0) -> list[tuple]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with psycopg.connect(POSTGRES_DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        d.device_id,
+                        b.boot_id,
+                        p.sequence,
+                        p.metric_index,
+                        md.metric_key,
+                        md.metric_unit,
+                        md.value_type,
+                        p.value_double,
+                        p.event_time_ns,
+                        p.event_time,
+                        p.received_at
+                    FROM device_metric_points p
+                    JOIN devices d ON d.device_pk = p.device_pk
+                    JOIN device_boot_sessions b ON b.boot_pk = p.boot_pk
+                    JOIN metric_definitions md ON md.metric_pk = p.metric_pk
+                    WHERE d.device_id = %s
+                    ORDER BY p.sequence DESC, p.metric_index ASC
+                    """,
+                    (device_id,),
+                )
+                rows = cur.fetchall()
+                if len(rows) >= expected_count:
+                    return rows
+        time.sleep(2)
+    raise RuntimeError("Timed out waiting for PostgreSQL metric rows")
 
 
 @pytest.fixture(scope="module")
@@ -180,9 +216,11 @@ def ingest_result(provisioning_result: ProvisioningResult) -> IngestResult:
     )
 
     rows = _wait_for_rows(provision_body["device_id"], expected_count=3)
+    metric_rows = _wait_for_metric_rows(provision_body["device_id"], expected_count=3)
     return IngestResult(
         responses=[response_first, response_second, response_third],
         rows=rows,
+        metric_rows=metric_rows,
         provisioned_device=provision_body,
     )
 
@@ -269,3 +307,52 @@ def test_payload_and_metadata_are_persisted(ingest_result: IngestResult) -> None
     parsed_received_at = datetime.fromisoformat(oldest_row[5])
     assert parsed_received_at.tzinfo is not None
     assert parsed_received_at.year >= 2026
+
+
+def test_metric_points_are_persisted_in_normalized_tables(ingest_result: IngestResult) -> None:
+    assert len(ingest_result.metric_rows) >= 3
+    latest_metric = ingest_result.metric_rows[0]
+
+    assert latest_metric[0] == ingest_result.provisioned_device["device_id"]
+    assert latest_metric[1] == "boot-e2e-0001"
+    assert latest_metric[2:8] == (2, 0, "temperature", "celsius", "double", 22.25)
+
+
+def test_metric_points_use_device_timestamp_when_available(ingest_result: IngestResult) -> None:
+    metric_by_sequence = {row[2]: row for row in ingest_result.metric_rows}
+    sequence_zero = metric_by_sequence[0]
+
+    assert sequence_zero[8] == 1_712_345_678_901_234_567
+    assert abs(int(sequence_zero[9].timestamp() * 1_000_000_000) - sequence_zero[8]) < 1_000
+    assert sequence_zero[9] < sequence_zero[10]
+
+
+def test_dimension_tables_deduplicate_device_boot_and_metric_keys(ingest_result: IngestResult) -> None:
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM devices WHERE device_id = %s", (ingest_result.provisioned_device["device_id"],))
+            device_count = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM device_boot_sessions b
+                JOIN devices d ON d.device_pk = b.device_pk
+                WHERE d.device_id = %s AND b.boot_id = %s
+                """,
+                (ingest_result.provisioned_device["device_id"], "boot-e2e-0001"),
+            )
+            boot_count = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM metric_definitions
+                WHERE metric_key = 'temperature'
+                  AND metric_unit = 'celsius'
+                  AND value_type = 'double'
+                """
+            )
+            metric_count = cur.fetchone()[0]
+
+    assert device_count == 1
+    assert boot_count == 1
+    assert metric_count == 1
