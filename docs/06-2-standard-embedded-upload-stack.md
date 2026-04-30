@@ -290,7 +290,8 @@ static void sensor_task(void *arg)
 - nanopb가 생성한 raw protobuf bytes의 SHA256 digest를 계산한다.
 - HMAC은 raw protobuf bytes 전체가 아니라 body SHA256 hex digest를 입력으로 계산한다.
 - `boot_id`, `sequence`는 protobuf body에 이미 있으므로 별도 HMAC header로 반복하지 않는다.
-- HTTP header에는 `X-Device-Id`, `X-Aetus-Auth`, `X-Aetus-Body-SHA256`, `X-Aetus-Signature`를 추가한다.
+- HTTP header에는 `X-Device-Id`, `X-Aetus-Signature: hmac-sha256-v1=<hex>`만 추가한다.
+- auth scheme/version은 `X-Aetus-Signature` 좌변에 통합한다.
 
 권장 서명 입력:
 
@@ -298,6 +299,7 @@ static void sensor_task(void *arg)
 body_sha256_hex = SHA256_HEX(raw_protobuf_body)
 prefix = "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n<device_id>\n"
 signature = HMAC_SHA256(device_secret, prefix || body_sha256_hex)
+header = "X-Aetus-Signature: hmac-sha256-v1=<signature_hex>"
 ```
 
 ESP32-C5 구현 관점:
