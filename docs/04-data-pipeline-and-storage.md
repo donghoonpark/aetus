@@ -28,8 +28,9 @@
 권장 방향:
 
 - 상위 메타데이터는 평평한 필드로 유지
-- protobuf `oneof body`는 서버에서 `payload jsonb`로 평탄화
-- `payload`는 `jsonb` 컬럼으로 그대로 저장
+- protobuf `oneof body`는 서버에서 compact JSON 문자열로 평탄화
+- raw 테이블은 `payload_json text`에 원본 payload를 짧게 보관
+- telemetry metric은 별도 `device.metric.v1` topic으로 1 metric = 1 record 형태로 펼쳐 장기 테이블에 저장
 - 중복 방지 키로 쓸 필드(`device_id`, `boot_id`, `sequence`)는 최상위에 둠
 - 과도한 중첩 JSON은 피함
 - raw 적재는 이벤트 원문 보존에 집중하고, metric 전개는 후속 단계로 분리
@@ -150,46 +151,6 @@ SELECT add_retention_policy('device_metric_points', INTERVAL '1 year', if_not_ex
 - TimescaleDB hypertable의 unique index는 time partition column을 포함해야 한다.
 - 따라서 `device_metric_points`는 `UNIQUE (event_time, request_id, metric_index)`를 사용한다.
 - `point_id`는 row 식별 편의용 sequence이며 primary key로 두지 않는다.
-
-이전 후보 테이블:
-
-- `devices`
-- `device_events`
-- `device_status_history`
-- `ingest_failures`
-
-관계 개요:
-
-```mermaid
-erDiagram
-    DEVICES ||--o{ DEVICE_EVENTS : has
-    DEVICES ||--o{ DEVICE_STATUS_HISTORY : has
-    DEVICES ||--o{ INGEST_FAILURES : has
-
-    DEVICES {
-        uuid id
-        text device_id
-        integer firmware_version
-        text model
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    DEVICE_EVENTS {
-        uuid id
-        uuid device_ref
-        bigint sequence
-        text event_type
-        text boot_id
-        integer firmware_version
-        bigint uptime_ms
-        bigint timestamp_ns
-        timestamptz received_at
-        jsonb payload
-        text request_id
-    }
-}
-```
 
 ## 중복 방지 기준
 
@@ -347,7 +308,7 @@ flowchart LR
 권장 고려 사항:
 
 - device 인증: 장치별 정적 bearer token
-- 공개망 또는 보안 요구가 높은 배포에서는 `POST /v1/ingest`에 HMAC-SHA256 선택 인증 경로를 추가 검토
+- 공개망 또는 보안 요구가 높은 배포를 위해 `POST /v1/ingest`에 HMAC-SHA256 선택 인증 경로를 구현
 - device to API 구간은 `HTTP` 기본, 필요 시 `HTTPS` 사용 가능
 - `HTTPS`를 쓰더라도 장치에서는 인증서 검증을 수행하지 않음
 - API 이후 서버 간 통신은 가능한 한 암호화

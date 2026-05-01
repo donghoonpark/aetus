@@ -102,6 +102,9 @@ firmware/
 
 ```c
 esp_err_t aetus_start(const aetus_config_t *config);
+esp_err_t aetus_update_config(const aetus_config_t *config);
+esp_err_t aetus_get_config(aetus_config_t *config);
+esp_err_t aetus_start_provisioning(const aetus_provisioning_config_t *config);
 esp_err_t aetus_sync_rtc(TickType_t timeout);
 esp_err_t aetus_rtc_timestamp_ns(uint64_t *timestamp_ns);
 esp_err_t aetus_telemetry_set_timestamp_rtc(aetus_telemetry_t *telemetry);
@@ -115,6 +118,8 @@ Thread safety 규칙:
 
 - `aetus_start()`는 부팅 초기에 1회 호출한다.
 - `aetus_sync_rtc()`는 시작 후 필요 시 호출하며, `/v1/time`에서 받은 서버 시간으로 RTC를 설정한다.
+- `aetus_start_provisioning()`은 NimBLE GATT server를 열어 Wi-Fi/API 설정을 런타임에 갱신한다.
+- `aetus_update_config()`는 provisioning apply 또는 앱 정책에 의해 running config를 교체한다.
 - `aetus_enqueue_telemetry()`는 여러 FreeRTOS task에서 동시에 호출해도 된다.
 - `aetus_enqueue_status()`도 여러 FreeRTOS task에서 동시에 호출해도 된다.
 - enqueue API는 메시지를 내부 queue item으로 복사하므로 caller의 stack-local struct를 재사용해도 된다.
@@ -259,6 +264,10 @@ static void sensor_task(void *arg)
 - protobuf encode via nanopb
 - HTTP POST with bearer token
 - optional HMAC-SHA256 ingest auth
+- NimBLE GATT provisioning
+- WPA2-Enterprise PEAP Wi-Fi path
+- optional Wi-Fi connected LED
+- C++20 wrapper API
 - telemetry event
 - status event
 - double, int64, bool, string, bytes metric value
@@ -271,8 +280,8 @@ static void sensor_task(void *arg)
 - 대형 payload용 pointer/blob queue API
 - ISR-safe enqueue API
 - Wi-Fi ownership 분리
-- HTTPS certificate verification bypass option
-- provisioning client
+- HTTPS client/certificate policy
+- server-side provisioning API client
 
 대형 payload용 pointer/blob queue API는 1200B급 센서 샘플처럼 기존 `aetus_telemetry_t` 고정 배열에 담기 부담스러운 데이터를 위한 향후 기능이다. 기본 방향은 `aetus_enqueue_payload_copy()`와 `aetus_enqueue_payload_owned()`를 제공하고, 성공적으로 enqueue된 owned payload는 AETUS uploader task가 소유권을 가져가 업로드 성공 또는 최종 drop 시 release callback으로 해제하는 것이다. 이 기능을 구현할 때는 queue item에는 포인터와 크기만 저장하고, protobuf 인코딩은 가능하면 nanopb callback 또는 HTTP streaming 방식으로 처리해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
 
@@ -360,5 +369,7 @@ flowchart TD
 - protobuf payload 생성
 - `/v1/ingest` HTTP 업로드
 - FastAPI, Kafka, Kafka Connect, PostgreSQL 적재 확인
+- bearer/HMAC mode 선택 빌드
+- random telemetry stream mode로 연속 적재 확인
 
 이 app은 제품 코드가 아니라 표준 스택의 HIL consumer 예제다.

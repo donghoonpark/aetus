@@ -32,7 +32,8 @@
 - 서버 진입점은 `FastAPI`
 - FastAPI는 protobuf를 내부 표준 object로 정규화
 - Kafka에는 운영 친화적인 JSON 이벤트를 publish
-- PostgreSQL 적재는 `Kafka Connect JDBC Sink` 중심이며, TimescaleDB hypertable로 raw 이벤트와 metric point를 분리 저장
+- PostgreSQL 적재는 `Kafka Connect JDBC Sink` 중심이며, raw 이벤트 테이블과 장기 metric point 테이블을 분리 저장
+- 개발 DB는 TimescaleDB 이미지를 사용하고, `device_metric_points`는 선택 Timescale layer에서 hypertable/compression/retention을 적용한다
 - 장기 metric 보관은 `devices`, `device_boot_sessions`, `metric_definitions` dimension key를 통해 문자열 반복을 줄임
 - `device_id + boot_id + sequence`를 기본 중복 방지 키로 사용
 - `sequence`는 각 부팅 세션마다 `0`부터 시작

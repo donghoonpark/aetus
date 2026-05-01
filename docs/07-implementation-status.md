@@ -34,7 +34,7 @@ services/
 - `services/kafka-connect`
   - JDBC Sink 기반 PostgreSQL 적재
 - `services/postgres`
-  - raw event 저장용 PostgreSQL
+  - raw event, metric staging, normalized metric point 저장용 TimescaleDB/PostgreSQL schema
 - `services/mock-device-nanopb`
   - CMake + FetchContent + nanopb + pybind11 기반 mock device
 - `firmware/esp32-qemu-telemetry`
@@ -388,6 +388,9 @@ uv run pytest tests/qemu_e2e -q -s
 현재 공개 API:
 
 - `aetus_start`
+- `aetus_update_config`
+- `aetus_get_config`
+- `aetus_start_provisioning`
 - `aetus_sync_rtc`
 - `aetus_rtc_timestamp_ns`
 - `aetus_telemetry_set_timestamp_rtc`
@@ -407,12 +410,20 @@ uv run pytest tests/qemu_e2e -q -s
 - RTC 기반 `timestamp_ns` helper
 - upload 실패 시 queue front requeue
 - `aetus_flush()` 완료 대기
+- bearer/HMAC ingest auth mode 선택
+- WPA2-Enterprise PEAP Wi-Fi 연결 경로
+- NimBLE GATT provisioning으로 Wi-Fi/API 설정 갱신
+- Wi-Fi connected LED 제어
+- C++20 wrapper API
 
 예제 app:
 
 - `firmware/examples/basic-telemetry`: 최소 telemetry/status enqueue 예제
 - `firmware/examples/multitask-producers`: 여러 FreeRTOS producer task에서 enqueue하는 예제
 - `firmware/examples/metric-types`: int64/double/bool/string/bytes metric type 예제
+- `firmware/examples/cpp-friendly-interface`: repository-level C++ wrapper 예제
+- `firmware/esp32-aetus/examples/cpp-basic`: portable package 내부 C++20 wrapper/HIL 예제
+- `firmware/esp32-aetus/examples/cpp-light-sleep`: tickless idle/light sleep 관찰용 예제
 - 모든 예제는 ESP32-C5, ESP-IDF 6.0, 4MB flash, 3MB factory app partition 기준으로 빌드한다.
 
 현재 미구현:
@@ -421,7 +432,8 @@ uv run pytest tests/qemu_e2e -q -s
 - 대형 payload용 pointer/blob queue API
 - ISR-safe enqueue API
 - Wi-Fi ownership adapter
-- HTTPS certificate verification bypass option
+- HTTPS client/certificate policy
+- server-side provisioning API client
 
 ## 테스트 현황
 
@@ -437,7 +449,7 @@ uv run pytest -q
 
 현재 통과 기준:
 
-- 일반 unit/e2e: `35 passed`
+- 일반 unit/e2e: `46 passed, 1 skipped`
 - QEMU e2e: 기본 실행에서는 skip, `AETUS_RUN_QEMU_E2E=1`일 때 별도 실행
 
 ### unit coverage
@@ -447,11 +459,18 @@ uv run pytest -q
 - 정상 telemetry 업로드
 - 정상 reboot status 업로드
 - invalid token 거부
+- HMAC 정상 업로드
+- invalid HMAC signature 거부
+- 수정된 body에 대한 HMAC 재사용 거부
+- unknown HMAC scheme 거부
 - provisioning 후 발급 token으로 ingest 가능
+- provisioning bootstrap rate limit
 - control JSON API 기반 token 발급/조회
 - control status endpoint component state 확인
+- `/v1/time` 인증 및 응답 형식
 - `timestamp_ns` normalize 보존
 - out-of-order `sequence` 허용
+- ingest rate limit과 allowlist relaxed limit
 - admin page 브랜딩 렌더
 - admin page pagination
 - admin page search + copy token control 렌더
@@ -472,6 +491,10 @@ uv run pytest -q
 10. `received_at`이 서버 수신 시각으로 별도 기록되는지 확인
 11. `sequence`가 `2 -> 1 -> 0`처럼 꼬여 들어와도 각 row가 적재되는지 확인
 12. `source_ip`가 유효한 IP 문자열로 저장되는지 확인
+13. metric별 Kafka topic과 staging trigger를 거쳐 `device_metric_points`에 정규화 적재되는지 확인
+14. `timestamp_ns`가 있으면 metric `event_time`이 장치 timestamp를 따르는지 확인
+15. dimension table이 `device_id`, `boot_id`, `metric_key` 반복 저장을 줄이는지 확인
+16. `device_metric_points`가 TimescaleDB hypertable이며 compression/retention policy job이 존재하는지 확인
 
 ### qemu_e2e coverage
 
@@ -501,6 +524,8 @@ uv run pytest -q
 - startup status event enqueue
 - telemetry event enqueue
 - double/int64/bool/string metric value encode
+- optional HMAC-SHA256 auth mode
+- random telemetry stream mode
 - `/v1/ingest` HTTP POST
 - backend E2E stack을 통한 PostgreSQL 적재
 
@@ -508,13 +533,13 @@ uv run pytest -q
 
 최근 주요 커밋:
 
-- `ad41195` `Restructure repo and add ingest service foundation`
-- `3dbf7ac` `Finalize docs relocation into docs directory`
-- `f5b2a0c` `Complete Kafka-to-Postgres e2e pipeline test`
-- `eb48551` `Add SQLite-backed provisioning and async auth reads`
-- `672f834` `Polish admin console with pagination and AETUS branding`
-- `fd86ec7` `Expand admin tooling and ingest edge-case coverage`
-- `HEAD` 이후: Vue/Naive UI control panel, control status API, JSON device APIs 추가
+- `6637ddb` `Add HMAC ingest authentication`
+- `d067f8b` `Add ESP32 HMAC upload mode`
+- `77ec8af` `Document implemented HMAC auth path`
+- `543cb1e` `Add normalized metric storage pipeline`
+- `48e89c6` `Use TimescaleDB for metric storage`
+- `4d1f437` `Split PostgreSQL base schema and Timescale layer`
+- `c0e3d80` `Add ESP32-C5 random telemetry stream mode`
 
 ## 알려진 제약 / 주의사항
 
@@ -601,3 +626,5 @@ uv run pytest -q
 - control panel 인증/배포 방식 결정
 - provisioning audit log 추가
 - duplicate resend (`same device_id + boot_id + sequence`) E2E 추가
+- FlashDB durable backlog 구현
+- 대형 payload pointer/blob queue API 구현

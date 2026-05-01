@@ -29,7 +29,7 @@
 | `X-Device-Id` | 필수 | 장치 식별자 |
 | `Authorization: Bearer <token>` | 기본 인증 시 필수 | 장치별 정적 토큰 |
 | `X-Aetus-Signature: hmac-sha256-v1=<hex>` | HMAC 인증 시 필수 | auth version과 signature를 함께 담는 HMAC-SHA256 서명 |
-| `Idempotency-Key` | 선택 | HTTP 레벨 중복 방지 보조값 |
+| `Idempotency-Key` | 선택 | HTTP 레벨 중복 방지 보조값. 현재 구현은 저장/검증하지 않음 |
 
 권장 방식:
 
@@ -40,6 +40,7 @@
 - `boot_id`는 항상 포함하고, 서버는 `device_id + boot_id + sequence`를 이벤트 구분 기준으로 사용
 - `sequence`는 각 부팅 세션에서 `0`부터 시작하고, 재부팅 시 다시 `0`으로 초기화
 - 장치 시각이 필요하면 `timestamp_ns`를 선택 필드로 보낼 수 있지만, 서버는 이를 중복 방지 기준으로 사용하지 않음
+- 현재 구현의 실제 중복 방지/적재 기준은 Kafka Connect와 DB의 `(device_id, boot_id, sequence)` upsert 정책이다.
 
 ## RTC time sync API
 

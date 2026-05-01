@@ -13,7 +13,7 @@
 
 ## 표준 임베디드 스택
 
-표준 구현 스택:
+표준 목표 스택:
 
 - `ESP32-C5`
 - `ESP-IDF`
@@ -29,6 +29,8 @@
 - `NimBLE`: BLE 통신이 필요한 경우 표준 BLE 스택
 - `FlashDB`: 로컬 이벤트 버퍼링 및 설정 저장
 - `nanopb`: protobuf 메시지 직렬화
+
+현재 `firmware/esp32-aetus` portable component는 `ESP-IDF`, `FreeRTOS`, `NimBLE`, `nanopb` 기반으로 구현되어 있다. `FlashDB` durable backlog는 설계상 포함되어 있지만 아직 구현되지 않았고, 현재 재시도 버퍼는 메모리 queue 중심이다.
 
 ## 설계 원칙
 

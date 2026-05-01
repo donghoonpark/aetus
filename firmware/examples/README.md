@@ -13,6 +13,7 @@ They are intended to validate the embedded developer experience:
 - `basic-telemetry`: minimal boot status plus one telemetry event.
 - `multitask-producers`: two producer tasks enqueue concurrently to validate the thread-safe API shape.
 - `metric-types`: telemetry using all supported protobuf `oneof` metric types.
+- `cpp-friendly-interface`: C++20 wrapper usage from a repository-level example app.
 
 ## Flash And Partition Assumption
 
@@ -29,6 +30,7 @@ source /Users/donghoonpark/.espressif/v6.0/esp-idf/export.sh
 idf.py -C firmware/examples/basic-telemetry set-target esp32c5 build
 idf.py -C firmware/examples/multitask-producers set-target esp32c5 build
 idf.py -C firmware/examples/metric-types set-target esp32c5 build
+idf.py -C firmware/examples/cpp-friendly-interface set-target esp32c5 build
 ```
 
 The examples use placeholder credentials. Replace the constants in `main/main.c` before flashing to real hardware.
