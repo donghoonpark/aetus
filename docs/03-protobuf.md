@@ -25,6 +25,72 @@
 | `timestamp_ns` | `uint64` | 선택 | 장치 기준 ns 단위 절대시각 |
 | `body` | `oneof` | 필수 | 실제 이벤트 본문 |
 
+현재 `TelemetryPayload`는 두 종류의 데이터를 함께 담을 수 있다.
+
+- `metrics`: 온도, 배터리, RSSI처럼 낮은 빈도의 sparse scalar telemetry
+- `signal_frame`: IMU, 진동, ADC burst처럼 일정 sampling interval을 가진 dense numeric sample block
+
+`signal_frame`은 별도 `event_type`으로 분리하지 않고 `event_type=telemetry`의 하위 payload로 둔다. 이렇게 하면 기존 telemetry 검증, 인증, Kafka raw 적재 흐름을 유지하면서 고주파 샘플만 별도 장기 테이블로 펼칠 수 있다.
+
+현재 구현 기준 핵심 proto 구조:
+
+```proto
+message TelemetryPayload {
+  repeated Metric metrics = 1;
+  SignalFrame signal_frame = 2;
+}
+
+message Metric {
+  string key = 1;
+
+  oneof value {
+    sint64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+    string string_value = 5;
+    bytes bytes_value = 6;
+  }
+
+  string unit = 7;
+}
+
+message SignalFrame {
+  string stream_key = 1;
+  uint64 sample_interval_ns = 2;
+  uint32 sample_count = 3;
+  SignalSampleEncoding encoding = 4;
+  SignalSampleLayout layout = 5;
+  repeated SignalChannel channels = 6;
+  bytes samples = 7;
+}
+
+message SignalChannel {
+  string key = 1;
+  string unit = 2;
+  optional float scale = 3;
+  optional float offset = 4;
+}
+```
+
+`SignalFrame` 필드 의미:
+
+| Field | 타입 | 필수 여부 | 설명 |
+| --- | --- | --- | --- |
+| `stream_key` | `string` | 필수 | 예: `imu.accel`, `laser.range` |
+| `sample_interval_ns` | `uint64` | 필수 | 인접 sample 간격 |
+| `sample_count` | `uint32` | 필수 | 채널별 sample 개수 |
+| `encoding` | `enum` | 필수 | `float32_le`, `int16_le`, `uint16_le`, `int32_le` |
+| `layout` | `enum` | 필수 | `interleaved` 또는 `planar` |
+| `channels` | `repeated` | 필수 | sample block의 channel metadata |
+| `samples` | `bytes` | 필수 | raw little-endian sample bytes |
+
+검증 규칙:
+
+- `samples` 길이는 `sample_count * channel_count * bytes_per_sample(encoding)`과 정확히 일치해야 한다.
+- `timestamp_ns`가 있으면 signal frame의 첫 sample 시각으로 해석한다.
+- `uptime_ms`가 있으면 signal frame의 첫 sample uptime 보조값으로 해석한다.
+- `metrics`와 `signal_frame`은 한 telemetry event 안에 같이 올 수 있지만, 서버는 각각 독립된 장기 적재 경로로 publish한다.
+
 ## 중복 방지 키
 
 여기서 말하는 중복 방지 키는 "같은 이벤트가 재전송되어도 서버가 한 번만 반영하게 만드는 구분 기준"이다.
@@ -97,6 +163,7 @@
 - `sequence = 0`
 - `event_type = EVENT_TYPE_TELEMETRY`
 - `telemetry.metrics = [temperature, humidity, battery]`
+- 또는 `telemetry.signal_frame = imu.accel 200Hz 1초 frame`
 
 ## 서버 내부 이벤트 예시
 

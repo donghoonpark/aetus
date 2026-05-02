@@ -59,6 +59,8 @@ class NanopbMockDevice:
     def _build(self, mode: str, *extra: str, timestamp_ns: int = 0) -> bytes:
         if mode == "telemetry":
             return self.module.encode_telemetry(self.device_id, self.boot_id, self.sequence, timestamp_ns)
+        if mode == "signal_frame":
+            return self.module.encode_signal_frame(self.device_id, self.boot_id, self.sequence, timestamp_ns)
         return self.module.encode_status(
             self.device_id,
             self.boot_id,
@@ -69,6 +71,9 @@ class NanopbMockDevice:
 
     def build_telemetry(self, *, timestamp_ns: int = 0) -> bytes:
         return self._build("telemetry", timestamp_ns=timestamp_ns)
+
+    def build_signal_frame(self, *, timestamp_ns: int = 0) -> bytes:
+        return self._build("signal_frame", timestamp_ns=timestamp_ns)
 
     def build_status(self, reboot_reason: str, *, timestamp_ns: int = 0) -> bytes:
         return self._build("status", reboot_reason, timestamp_ns=timestamp_ns)

@@ -128,7 +128,7 @@ Thread safety 규칙:
 
 ## 데이터 모델
 
-Telemetry는 `repeated Metric + oneof value` protobuf 모델을 따른다.
+Telemetry는 sparse scalar 값에는 `repeated Metric + oneof value` protobuf 모델을 따른다. 고주파 numeric sample block은 같은 `TelemetryPayload` 안의 `SignalFrame`으로 전송하는 방향을 표준 계약에 추가했다.
 
 현재 C API에서 지원하는 metric value:
 
@@ -139,6 +139,8 @@ Telemetry는 `repeated Metric + oneof value` protobuf 모델을 따른다.
 - `AETUS_METRIC_VALUE_BYTES`
 
 Status event는 재부팅, online, degraded, offline 같은 장치 상태를 보낼 때 사용한다.
+
+현재 펌웨어 C/C++ 공개 API는 scalar metric 중심이며, `SignalFrame` 전용 편의 API는 후속 구현 대상이다. 서버와 nanopb mock/e2e 경로는 이미 `SignalFrame`을 수신하고 PostgreSQL/TimescaleDB에 적재한다.
 
 ```mermaid
 classDiagram
@@ -283,7 +285,7 @@ static void sensor_task(void *arg)
 - HTTPS client/certificate policy
 - server-side provisioning API client
 
-대형 payload용 pointer/blob queue API는 1200B급 센서 샘플처럼 기존 `aetus_telemetry_t` 고정 배열에 담기 부담스러운 데이터를 위한 향후 기능이다. 기본 방향은 `aetus_enqueue_payload_copy()`와 `aetus_enqueue_payload_owned()`를 제공하고, 성공적으로 enqueue된 owned payload는 AETUS uploader task가 소유권을 가져가 업로드 성공 또는 최종 drop 시 release callback으로 해제하는 것이다. 이 기능을 구현할 때는 queue item에는 포인터와 크기만 저장하고, protobuf 인코딩은 가능하면 nanopb callback 또는 HTTP streaming 방식으로 처리해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
+대형 payload용 pointer/blob queue API는 1200B급 이상 센서 샘플처럼 고정 배열 복사가 부담스러운 데이터를 위한 향후 기능이다. `SignalFrame`은 이 요구의 서버/스키마 쪽 기반이며, 펌웨어 편의 API에서는 `aetus_enqueue_payload_copy()`와 `aetus_enqueue_payload_owned()` 같은 소유권 기반 enqueue를 검토한다. 성공적으로 enqueue된 owned payload는 AETUS uploader task가 소유권을 가져가 업로드 성공 또는 최종 drop 시 release callback으로 해제한다. 이 기능을 구현할 때는 queue item에는 포인터와 크기만 저장하고, protobuf 인코딩은 가능하면 nanopb callback 또는 HTTP streaming 방식으로 처리해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
 
 ## HMAC 인증 옵션
 

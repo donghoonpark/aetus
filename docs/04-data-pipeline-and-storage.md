@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `device.raw.v1` | API가 받은 원본 이벤트 | 최초 진입 토픽 |
 | `device.metric.v1` | telemetry metric을 1 metric = 1 record로 펼친 장기 적재용 토픽 | Kafka Connect JDBC Sink가 staging에 적재 |
+| `device.signal_frame.v1` | dense sampled signal frame을 1 event = 1 frame record로 적재하는 토픽 | Kafka Connect JDBC Sink가 staging에 적재 |
 | `device.validated.v1` | 검증/정규화 완료 이벤트 | 선택 사항 |
 | `device.dlq.v1` | 처리 실패 이벤트 | 분석 및 재처리 |
 | `device.status.v1` | heartbeat, online/offline 상태 | 운영성 강화 |
@@ -31,6 +32,7 @@
 - protobuf `oneof body`는 서버에서 compact JSON 문자열로 평탄화
 - raw 테이블은 `payload_json text`에 원본 payload를 짧게 보관
 - telemetry metric은 별도 `device.metric.v1` topic으로 1 metric = 1 record 형태로 펼쳐 장기 테이블에 저장
+- telemetry signal frame은 별도 `device.signal_frame.v1` topic으로 1 event = 1 frame record 형태로 펼쳐 장기 테이블에 저장
 - 중복 방지 키로 쓸 필드(`device_id`, `boot_id`, `sequence`)는 최상위에 둠
 - 과도한 중첩 JSON은 피함
 - raw 적재는 이벤트 원문 보존에 집중하고, metric 전개는 후속 단계로 분리
@@ -67,8 +69,10 @@
 
 - `raw_device_events`: 원본 이벤트 확인 및 장애 분석용, 기본 보관 목표 `1일`
 - `metric_ingest_staging`: Kafka Connect가 쓰는 중간 테이블, raw와 같은 짧은 보관 주기
+- `signal_frame_ingest_staging`: Kafka Connect가 쓰는 signal frame 중간 테이블, raw와 같은 짧은 보관 주기
 - `device_metric_points`: 장기 시계열 분석용 TimescaleDB hypertable, 기본 보관 목표 `1년`
-- `devices`, `device_boot_sessions`, `metric_definitions`: 문자열 dimension을 정수 surrogate key로 매핑
+- `device_signal_frames`: dense sampled signal block 저장용 TimescaleDB hypertable, 기본 보관 목표 `1년`
+- `devices`, `device_boot_sessions`, `metric_definitions`, `signal_stream_definitions`: 문자열 dimension을 정수 surrogate key로 매핑
 
 관계 개요:
 
@@ -76,9 +80,13 @@
 erDiagram
     DEVICES ||--o{ DEVICE_BOOT_SESSIONS : has
     DEVICES ||--o{ DEVICE_METRIC_POINTS : owns
+    DEVICES ||--o{ DEVICE_SIGNAL_FRAMES : owns
     DEVICE_BOOT_SESSIONS ||--o{ DEVICE_METRIC_POINTS : groups
+    DEVICE_BOOT_SESSIONS ||--o{ DEVICE_SIGNAL_FRAMES : groups
     METRIC_DEFINITIONS ||--o{ DEVICE_METRIC_POINTS : describes
+    SIGNAL_STREAM_DEFINITIONS ||--o{ DEVICE_SIGNAL_FRAMES : describes
     METRIC_INGEST_STAGING ||--|| DEVICE_METRIC_POINTS : "trigger upserts"
+    SIGNAL_FRAME_INGEST_STAGING ||--|| DEVICE_SIGNAL_FRAMES : "trigger upserts"
 
     DEVICES {
         bigint device_pk PK
@@ -100,6 +108,14 @@ erDiagram
         text value_type
     }
 
+    SIGNAL_STREAM_DEFINITIONS {
+        bigint signal_pk PK
+        text stream_key
+        text encoding
+        text layout
+        text channels_json
+    }
+
     DEVICE_METRIC_POINTS {
         bigint point_id
         timestamptz event_time
@@ -115,6 +131,20 @@ erDiagram
         text value_string
         text value_bytes_hex
     }
+
+    DEVICE_SIGNAL_FRAMES {
+        bigint frame_id
+        timestamptz event_time
+        bigint event_time_ns
+        bigint device_pk FK
+        bigint boot_pk FK
+        bigint signal_pk FK
+        bigint sequence
+        bigint sample_interval_ns
+        integer sample_count
+        bytea samples
+        integer samples_size
+    }
 }
 ```
 
@@ -122,10 +152,13 @@ erDiagram
 
 - 긴 문자열인 `device_id`, `boot_id`, `metric_key` 반복 저장을 장기 point 테이블에서 줄임
 - numeric metric은 `value_double` / `value_int` / `value_bool`에 저장해 JSON 파싱 없이 조회
+- dense signal frame은 channel metadata를 `signal_stream_definitions`로 분리하고 sample bytes는 `device_signal_frames.samples`에 저장
 - 원본 payload는 raw에 짧게 보관해 디버깅 가능성 유지
 - `device_metric_points(event_time)`를 TimescaleDB hypertable로 사용해 시간 기준 chunk 분할
+- `device_signal_frames(event_time)`도 TimescaleDB hypertable로 사용해 시간 기준 chunk 분할
 - `7일`이 지난 metric chunk는 TimescaleDB compression policy로 압축
-- `1년`이 지난 metric point는 TimescaleDB retention policy로 자동 삭제
+- `7일`이 지난 signal frame chunk도 TimescaleDB compression policy로 압축
+- `1년`이 지난 metric point와 signal frame은 TimescaleDB retention policy로 자동 삭제
 
 TimescaleDB 설정:
 
@@ -135,6 +168,7 @@ TimescaleDB 설정:
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 SELECT create_hypertable('device_metric_points', 'event_time', if_not_exists => TRUE);
+SELECT create_hypertable('device_signal_frames', 'event_time', if_not_exists => TRUE);
 
 ALTER TABLE device_metric_points SET (
     timescaledb.compress,
@@ -142,14 +176,23 @@ ALTER TABLE device_metric_points SET (
     timescaledb.compress_orderby = 'event_time DESC'
 );
 
+ALTER TABLE device_signal_frames SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'device_pk, signal_pk',
+    timescaledb.compress_orderby = 'event_time DESC'
+);
+
 SELECT add_compression_policy('device_metric_points', INTERVAL '7 days', if_not_exists => TRUE);
 SELECT add_retention_policy('device_metric_points', INTERVAL '1 year', if_not_exists => TRUE);
+SELECT add_compression_policy('device_signal_frames', INTERVAL '7 days', if_not_exists => TRUE);
+SELECT add_retention_policy('device_signal_frames', INTERVAL '1 year', if_not_exists => TRUE);
 ```
 
 제약 조건 주의:
 
 - TimescaleDB hypertable의 unique index는 time partition column을 포함해야 한다.
 - 따라서 `device_metric_points`는 `UNIQUE (event_time, request_id, metric_index)`를 사용한다.
+- `device_signal_frames`는 한 event당 frame 하나를 저장하므로 `UNIQUE (event_time, request_id)`를 사용한다.
 - `point_id`는 row 식별 편의용 sequence이며 primary key로 두지 않는다.
 
 ## 중복 방지 기준
@@ -164,23 +207,29 @@ SELECT add_retention_policy('device_metric_points', INTERVAL '1 year', if_not_ex
 
 ## Sink 기반 적재 전략
 
-직접 구현 consumer를 피하기 위해 Kafka Connect JDBC Sink를 두 개 사용한다.
+직접 구현 consumer를 피하기 위해 Kafka Connect JDBC Sink를 사용한다.
 
 1. `raw-device-events-sink`: `device.raw.v1` -> `raw_device_events`
 2. `metric-ingest-staging-sink`: `device.metric.v1` -> `metric_ingest_staging`
+3. `signal-frame-ingest-staging-sink`: `device.signal_frame.v1` -> `signal_frame_ingest_staging`
 
-`metric_ingest_staging`에는 PostgreSQL trigger가 걸려 있다. Kafka Connect가 staging row를 upsert하면 trigger가 다음 작업을 DB 내부에서 수행한다.
+`metric_ingest_staging`과 `signal_frame_ingest_staging`에는 PostgreSQL trigger가 걸려 있다. Kafka Connect가 staging row를 upsert하면 trigger가 dimension table과 장기 hypertable 적재를 DB 내부에서 수행한다.
 
 ```mermaid
 flowchart LR
     API["FastAPI"] -->|"raw envelope"| RawTopic["device.raw.v1"]
     API -->|"metric envelope"| MetricTopic["device.metric.v1"]
+    API -->|"signal frame envelope"| SignalTopic["device.signal_frame.v1"]
     RawTopic --> RawSink["raw-device-events-sink"]
     MetricTopic --> MetricSink["metric-ingest-staging-sink"]
+    SignalTopic --> SignalSink["signal-frame-ingest-staging-sink"]
     RawSink --> RawTable["raw_device_events"]
     MetricSink --> Staging["metric_ingest_staging"]
+    SignalSink --> SignalStaging["signal_frame_ingest_staging"]
     Staging -->|"AFTER INSERT/UPDATE trigger"| Dims["devices / boot sessions / metric definitions"]
     Staging -->|"upsert"| Points["device_metric_points"]
+    SignalStaging -->|"AFTER INSERT/UPDATE trigger"| SignalDims["devices / boot sessions / signal stream definitions"]
+    SignalStaging -->|"upsert"| Frames["device_signal_frames"]
 ```
 
 장점:
@@ -222,6 +271,22 @@ metric point 적재 테이블:
 | `value_bool` | `boolean` | bool metric 값 |
 | `value_string` | `text` | string metric 값 |
 | `value_bytes_hex` | `text` | bytes metric 값의 hex 표현 |
+
+signal frame 적재 테이블:
+
+| Column | Type | 설명 |
+| --- | --- | --- |
+| `event_time` | `timestamptz` | frame 첫 sample 기준 시간. `timestamp_ns`가 있으면 장치 시각, 없으면 수신 시각 |
+| `event_time_ns` | `bigint` | 장치가 보낸 ns timestamp 원본 |
+| `received_at` | `timestamptz` | API 수신 시각 |
+| `device_pk` | `bigint` | `devices` surrogate key |
+| `boot_pk` | `bigint` | `device_boot_sessions` surrogate key |
+| `signal_pk` | `bigint` | `signal_stream_definitions` surrogate key |
+| `sequence` | `bigint` | 부팅 세션 내부 이벤트 번호 |
+| `sample_interval_ns` | `bigint` | frame 내부 sample 간격 |
+| `sample_count` | `integer` | 채널별 sample 개수 |
+| `samples` | `bytea` | little-endian raw sample bytes |
+| `samples_size` | `integer` | 저장된 sample byte 크기 |
 
 ## Kubernetes 배포
 
@@ -467,10 +532,10 @@ flowchart TD
 ## 현재 시점 권장 시작안
 
 1. 기기는 기본적으로 `HTTP`로 FastAPI에 `protobuf` 업로드
-2. FastAPI는 protobuf decode와 최소 검증 후 내부 표준 object로 정규화해 `device.raw.v1`과 `device.metric.v1`에 publish
+2. FastAPI는 protobuf decode와 최소 검증 후 내부 표준 object로 정규화해 `device.raw.v1`, `device.metric.v1`, `device.signal_frame.v1`에 publish
 3. `Kafka Connect JDBC Sink`가 TimescaleDB/PostgreSQL에 upsert
 4. 실패 메시지는 `device.dlq.v1`로 이동
 5. `device_id + boot_id + sequence`로 중복 전송을 구분
-6. raw는 짧게 보관하고, metric은 `device_metric_points` hypertable에 장기 보관
+6. raw는 짧게 보관하고, metric/signal frame은 각각 `device_metric_points`, `device_signal_frames` hypertable에 장기 보관
 7. FastAPI control DB는 초기 `SQLite`, 고부하 시 `MySQL`로 전환
 8. `k8s`에는 API와 Kafka Connect를 올리고, Kafka와 PostgreSQL은 분리망 내 self-managed로 운영

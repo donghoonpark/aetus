@@ -10,7 +10,7 @@ int main(int argc, char **argv) {
     if (argc < 5) {
         fprintf(
             stderr,
-            "usage: %s <telemetry|status> <device_id> <boot_id> <sequence> [reboot_reason] [timestamp_ns]\n",
+            "usage: %s <telemetry|status|signal_frame> <device_id> <boot_id> <sequence> [reboot_reason] [timestamp_ns]\n",
             argv[0]
         );
         return 1;
@@ -21,13 +21,24 @@ int main(int argc, char **argv) {
     const char *boot_id = argv[3];
     uint64_t sequence = strtoull(argv[4], NULL, 10);
 
-    uint8_t buffer[512];
+    uint8_t buffer[1024];
     size_t encoded_size = 0;
     bool ok = false;
 
     if (strcmp(mode, "telemetry") == 0) {
         uint64_t timestamp_ns = argc >= 6 ? strtoull(argv[5], NULL, 10) : 0;
         ok = encode_telemetry_event(buffer, sizeof(buffer), &encoded_size, device_id, boot_id, sequence, timestamp_ns);
+    } else if (strcmp(mode, "signal_frame") == 0) {
+        uint64_t timestamp_ns = argc >= 6 ? strtoull(argv[5], NULL, 10) : 0;
+        ok = encode_signal_frame_event(
+            buffer,
+            sizeof(buffer),
+            &encoded_size,
+            device_id,
+            boot_id,
+            sequence,
+            timestamp_ns
+        );
     } else if (strcmp(mode, "status") == 0) {
         const char *reboot_reason = argc >= 6 ? argv[5] : "power_on";
         uint64_t timestamp_ns = argc >= 7 ? strtoull(argv[6], NULL, 10) : 0;

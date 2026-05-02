@@ -214,6 +214,7 @@ message IngestEvent {
 
 message TelemetryPayload {
   repeated Metric metrics = 1;
+  SignalFrame signal_frame = 2;
 }
 
 message Metric {
@@ -228,6 +229,37 @@ message Metric {
   }
 
   string unit = 7;
+}
+
+enum SignalSampleEncoding {
+  SIGNAL_SAMPLE_ENCODING_UNSPECIFIED = 0;
+  SIGNAL_SAMPLE_ENCODING_FLOAT32_LE = 1;
+  SIGNAL_SAMPLE_ENCODING_INT16_LE = 2;
+  SIGNAL_SAMPLE_ENCODING_UINT16_LE = 3;
+  SIGNAL_SAMPLE_ENCODING_INT32_LE = 4;
+}
+
+enum SignalSampleLayout {
+  SIGNAL_SAMPLE_LAYOUT_UNSPECIFIED = 0;
+  SIGNAL_SAMPLE_LAYOUT_INTERLEAVED = 1;
+  SIGNAL_SAMPLE_LAYOUT_PLANAR = 2;
+}
+
+message SignalFrame {
+  string stream_key = 1;
+  uint64 sample_interval_ns = 2;
+  uint32 sample_count = 3;
+  SignalSampleEncoding encoding = 4;
+  SignalSampleLayout layout = 5;
+  repeated SignalChannel channels = 6;
+  bytes samples = 7;
+}
+
+message SignalChannel {
+  string key = 1;
+  string unit = 2;
+  optional float scale = 3;
+  optional float offset = 4;
 }
 ```
 
@@ -338,6 +370,11 @@ IngestEvent.boot_id max_size:32
 Metric.key max_size:24
 Metric.unit max_size:16
 TelemetryPayload.metrics max_count:8
+SignalFrame.stream_key max_size:32
+SignalFrame.channels max_count:8
+SignalFrame.samples max_size:4096
+SignalChannel.key max_size:24
+SignalChannel.unit max_size:16
 StatusPayload.reboot_reason max_size:24
 AlertPayload.code max_size:24
 AlertPayload.message max_size:80

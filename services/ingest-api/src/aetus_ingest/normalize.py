@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 import json
 from typing import Any
@@ -8,6 +9,26 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from aetus_ingest.generated import ingest_pb2
+
+
+SIGNAL_ENCODING_NAMES = {
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_FLOAT32_LE: "float32_le",
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT16_LE: "int16_le",
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_UINT16_LE: "uint16_le",
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT32_LE: "int32_le",
+}
+
+SIGNAL_ENCODING_SAMPLE_BYTES = {
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_FLOAT32_LE: 4,
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT16_LE: 2,
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_UINT16_LE: 2,
+    ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT32_LE: 4,
+}
+
+SIGNAL_LAYOUT_NAMES = {
+    ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED: "interleaved",
+    ingest_pb2.SIGNAL_SAMPLE_LAYOUT_PLANAR: "planar",
+}
 
 
 def _metric_value(metric: ingest_pb2.Metric) -> tuple[str, Any]:
@@ -23,6 +44,52 @@ def _metric_value(metric: ingest_pb2.Metric) -> tuple[str, Any]:
     if value_kind == "bytes_value":
         return "bytes_hex", metric.bytes_value.hex()
     raise HTTPException(status_code=400, detail="metric value missing")
+
+
+def _normalize_signal_frame(frame: ingest_pb2.SignalFrame) -> dict[str, Any]:
+    if not frame.stream_key:
+        raise HTTPException(status_code=400, detail="signal frame stream_key required")
+    if frame.sample_interval_ns == 0:
+        raise HTTPException(status_code=400, detail="signal frame sample_interval_ns required")
+    if frame.sample_count == 0:
+        raise HTTPException(status_code=400, detail="signal frame sample_count required")
+    if frame.encoding not in SIGNAL_ENCODING_NAMES:
+        raise HTTPException(status_code=400, detail="signal frame encoding unsupported")
+    if frame.layout not in SIGNAL_LAYOUT_NAMES:
+        raise HTTPException(status_code=400, detail="signal frame layout unsupported")
+    if not frame.channels:
+        raise HTTPException(status_code=400, detail="signal frame channels required")
+
+    channels = []
+    for channel in frame.channels:
+        if not channel.key:
+            raise HTTPException(status_code=400, detail="signal frame channel key required")
+        normalized_channel: dict[str, Any] = {
+            "key": channel.key,
+            "unit": channel.unit or None,
+        }
+        if channel.HasField("scale"):
+            normalized_channel["scale"] = channel.scale
+        if channel.HasField("offset"):
+            normalized_channel["offset"] = channel.offset
+        channels.append(normalized_channel)
+
+    expected_sample_bytes = frame.sample_count * len(channels) * SIGNAL_ENCODING_SAMPLE_BYTES[frame.encoding]
+    if len(frame.samples) != expected_sample_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"signal frame samples length mismatch: expected {expected_sample_bytes}, got {len(frame.samples)}",
+        )
+
+    return {
+        "stream_key": frame.stream_key,
+        "sample_interval_ns": frame.sample_interval_ns,
+        "sample_count": frame.sample_count,
+        "encoding": SIGNAL_ENCODING_NAMES[frame.encoding],
+        "layout": SIGNAL_LAYOUT_NAMES[frame.layout],
+        "channels": channels,
+        "samples_b64": base64.b64encode(frame.samples).decode("ascii"),
+    }
 
 
 def event_type_name(value: int) -> str:
@@ -49,7 +116,10 @@ def normalize_payload(event: ingest_pb2.IngestEvent) -> dict[str, Any]:
                     "unit": metric.unit or None,
                 }
             )
-        return {"metrics": metrics}
+        payload: dict[str, Any] = {"metrics": metrics}
+        if event.telemetry.HasField("signal_frame"):
+            payload["signal_frame"] = _normalize_signal_frame(event.telemetry.signal_frame)
+        return payload
 
     if body == "status":
         return {

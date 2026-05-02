@@ -88,6 +88,7 @@ flowchart LR
 - 인증/인가 검사
 - protobuf decode
 - 내부 이벤트 object 정규화
+- sparse metric과 dense signal frame을 각 Kafka topic으로 분리 publish
 - 최소 스키마 검증
 - 요청 추적 ID 부여
 - Kafka publish
@@ -131,7 +132,7 @@ sequenceDiagram
 
     Device->>API: HTTP POST /v1/ingest (protobuf)
     API->>API: Auth + protobuf decode + normalize
-    API->>Kafka: Publish normalized JSON event
+    API->>Kafka: Publish raw / metric / signal frame JSON envelope
     Kafka-->>API: Ack
     API-->>Device: 202 Accepted
     Kafka->>Sink: Consume event

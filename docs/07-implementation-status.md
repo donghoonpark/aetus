@@ -213,6 +213,7 @@ npm run build
 - [[../services/kafka-connect/sink-config.json]]
 - [[../services/kafka-connect/connectors/raw-device-events-sink.json]]
 - [[../services/kafka-connect/connectors/metric-ingest-staging-sink.json]]
+- [[../services/kafka-connect/connectors/signal-frame-ingest-staging-sink.json]]
 - [[../services/postgres/initdb/00-base.sql]]
 - [[../services/postgres/initdb/10-timescale.sql]]
 
@@ -220,10 +221,11 @@ npm run build
 
 `FastAPI -> Kafka -> Kafka Connect JDBC Sink -> TimescaleDB/PostgreSQL`
 
-현재 Kafka Connect sink는 두 개다.
+현재 Kafka Connect sink는 세 개다.
 
 - `raw-device-events-sink`: `device.raw.v1`을 `raw_device_events`에 upsert
 - `metric-ingest-staging-sink`: `device.metric.v1`을 `metric_ingest_staging`에 upsert
+- `signal-frame-ingest-staging-sink`: `device.signal_frame.v1`을 `signal_frame_ingest_staging`에 upsert
 
 ### Kafka publish 형식
 
@@ -271,15 +273,18 @@ npm run build
 
 ### TimescaleDB metric tables
 
-장기 분석용 metric은 raw JSON과 분리해 TimescaleDB hypertable에 저장한다.
+장기 분석용 metric과 signal frame은 raw JSON과 분리해 TimescaleDB hypertable에 저장한다.
 
 테이블:
 
 - `metric_ingest_staging`
+- `signal_frame_ingest_staging`
 - `devices`
 - `device_boot_sessions`
 - `metric_definitions`
+- `signal_stream_definitions`
 - `device_metric_points` hypertable
+- `device_signal_frames` hypertable
 
 흐름:
 
@@ -287,10 +292,14 @@ npm run build
 2. Kafka Connect JDBC Sink가 `metric_ingest_staging`에 upsert
 3. PostgreSQL trigger `ingest_metric_staging_row()`가 dimension table을 upsert
 4. 같은 trigger가 `device_metric_points`에 정수 key 기반 point row를 upsert
+5. FastAPI가 telemetry payload의 `signal_frame`을 `device.signal_frame.v1`에 publish
+6. Kafka Connect JDBC Sink가 `signal_frame_ingest_staging`에 upsert
+7. PostgreSQL trigger `ingest_signal_frame_staging_row()`가 `device_signal_frames`에 sample block을 upsert
 
 시간 처리:
 
 - `timestamp_ns`가 있으면 `device_metric_points.event_time`은 장치 timestamp 기준
+- `timestamp_ns`가 있으면 `device_signal_frames.event_time`도 frame 첫 sample의 장치 timestamp 기준
 - `timestamp_ns`가 없으면 `received_at` 기준
 - 원본 ns 값은 `event_time_ns`에 그대로 보관
 
@@ -298,7 +307,9 @@ npm run build
 
 - `raw_device_events`: 1일 수준의 짧은 디버깅 보관
 - `metric_ingest_staging`: raw와 같은 짧은 보관
+- `signal_frame_ingest_staging`: raw와 같은 짧은 보관
 - `device_metric_points`: TimescaleDB retention policy로 1년 수준의 장기 보관
+- `device_signal_frames`: TimescaleDB retention policy로 1년 수준의 장기 보관
 
 TimescaleDB 설정:
 
@@ -306,9 +317,11 @@ TimescaleDB 설정:
 - `10-timescale.sql`은 TimescaleDB extension, hypertable, compression, retention 정책 정의
 - `CREATE EXTENSION IF NOT EXISTS timescaledb`
 - `device_metric_points(event_time)` hypertable
+- `device_signal_frames(event_time)` hypertable
 - `7일` 경과 chunk compression policy
-- `1년` 경과 metric retention policy
+- `1년` 경과 metric/signal frame retention policy
 - hypertable unique 제약 조건은 time partition column을 포함하기 위해 `UNIQUE (event_time, request_id, metric_index)` 사용
+- signal frame hypertable unique 제약 조건은 `UNIQUE (event_time, request_id)` 사용
 
 ## 5. Mock Device
 
@@ -495,6 +508,12 @@ uv run pytest -q
 14. `timestamp_ns`가 있으면 metric `event_time`이 장치 timestamp를 따르는지 확인
 15. dimension table이 `device_id`, `boot_id`, `metric_key` 반복 저장을 줄이는지 확인
 16. `device_metric_points`가 TimescaleDB hypertable이며 compression/retention policy job이 존재하는지 확인
+17. nanopb mock이 만든 `signal_frame` payload를 ingest API가 수락하는지 확인
+18. raw payload에 `signal_frame` compact JSON이 보존되는지 확인
+19. `device.signal_frame.v1` topic과 staging trigger를 거쳐 `device_signal_frames`에 정규화 적재되는지 확인
+20. `timestamp_ns`가 있으면 signal frame `event_time`이 장치 timestamp를 따르는지 확인
+21. `signal_stream_definitions`가 stream metadata 반복 저장을 줄이는지 확인
+22. `device_signal_frames`가 TimescaleDB hypertable이며 compression/retention policy job이 존재하는지 확인
 
 ### qemu_e2e coverage
 

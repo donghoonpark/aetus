@@ -54,6 +54,7 @@ class Settings:
     kafka_bootstrap_servers: str = "127.0.0.1:19092"
     kafka_topic: str = "device.raw.v1"
     kafka_metric_topic: str = "device.metric.v1"
+    kafka_signal_frame_topic: str = "device.signal_frame.v1"
     kafka_connect_url: str = "http://127.0.0.1:18083"
     postgres_dsn: str = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
     status_timeout_seconds: float = 2.0
@@ -85,6 +86,7 @@ class Settings:
             kafka_bootstrap_servers=os.getenv("AETUS_KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:19092"),
             kafka_topic=os.getenv("AETUS_KAFKA_TOPIC", "device.raw.v1"),
             kafka_metric_topic=os.getenv("AETUS_KAFKA_METRIC_TOPIC", "device.metric.v1"),
+            kafka_signal_frame_topic=os.getenv("AETUS_KAFKA_SIGNAL_FRAME_TOPIC", "device.signal_frame.v1"),
             kafka_connect_url=os.getenv("AETUS_KAFKA_CONNECT_URL", "http://127.0.0.1:18083"),
             postgres_dsn=os.getenv("AETUS_POSTGRES_DSN", "postgresql://aetus:aetus@127.0.0.1:15432/aetus"),
             status_timeout_seconds=float(os.getenv("AETUS_STATUS_TIMEOUT_SECONDS", "2")),

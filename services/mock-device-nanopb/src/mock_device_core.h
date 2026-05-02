@@ -24,3 +24,13 @@ bool encode_status_event(
     const char *reboot_reason,
     uint64_t timestamp_ns
 );
+
+bool encode_signal_frame_event(
+    uint8_t *buffer,
+    size_t buffer_size,
+    size_t *encoded_size,
+    const char *device_id,
+    const char *boot_id,
+    uint64_t sequence,
+    uint64_t timestamp_ns
+);

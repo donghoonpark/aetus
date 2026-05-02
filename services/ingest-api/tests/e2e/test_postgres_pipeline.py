@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import subprocess
 import time
@@ -38,6 +39,14 @@ class IngestResult:
     rows: list[tuple]
     metric_rows: list[tuple]
     provisioned_device: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SignalFrameResult:
+    response: httpx.Response
+    raw_rows: list[tuple]
+    signal_frame_rows: list[tuple]
+    device_id: str
 
 
 def _docker_compose(*args: str) -> subprocess.CompletedProcess[str]:
@@ -125,6 +134,43 @@ def _wait_for_metric_rows(device_id: str, expected_count: int, timeout: float = 
                     return rows
         time.sleep(2)
     raise RuntimeError("Timed out waiting for PostgreSQL metric rows")
+
+
+def _wait_for_signal_frame_rows(device_id: str, expected_count: int, timeout: float = 120.0) -> list[tuple]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with psycopg.connect(POSTGRES_DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        d.device_id,
+                        b.boot_id,
+                        f.sequence,
+                        sd.stream_key,
+                        sd.encoding,
+                        sd.layout,
+                        f.sample_interval_ns,
+                        f.sample_count,
+                        f.samples_size,
+                        f.event_time_ns,
+                        f.event_time,
+                        f.received_at,
+                        sd.channels_json
+                    FROM device_signal_frames f
+                    JOIN devices d ON d.device_pk = f.device_pk
+                    JOIN device_boot_sessions b ON b.boot_pk = f.boot_pk
+                    JOIN signal_stream_definitions sd ON sd.signal_pk = f.signal_pk
+                    WHERE d.device_id = %s
+                    ORDER BY f.sequence DESC, f.created_at DESC
+                    """,
+                    (device_id,),
+                )
+                rows = cur.fetchall()
+                if len(rows) >= expected_count:
+                    return rows
+        time.sleep(2)
+    raise RuntimeError("Timed out waiting for PostgreSQL signal frame rows")
 
 
 @pytest.fixture(scope="module")
@@ -222,6 +268,37 @@ def ingest_result(provisioning_result: ProvisioningResult) -> IngestResult:
         rows=rows,
         metric_rows=metric_rows,
         provisioned_device=provision_body,
+    )
+
+
+@pytest.fixture(scope="module")
+def signal_frame_result(e2e_stack: None) -> SignalFrameResult:
+    del e2e_stack
+    device = NanopbMockDevice(
+        device_id="esp32c5-test-001",
+        token="devtok_test_001",
+        boot_id="boot-e2e-signal-0001",
+    )
+    headers = {
+        "Content-Type": "application/x-protobuf",
+        "X-Device-Id": device.device_id,
+        "Authorization": f"Bearer {device.token}",
+    }
+
+    response = httpx.post(
+        f"{INGEST_API_URL}/v1/ingest",
+        content=device.build_signal_frame(timestamp_ns=1_712_345_679_111_000_000),
+        headers=headers,
+        timeout=10.0,
+    )
+
+    raw_rows = _wait_for_rows(device.device_id, expected_count=1)
+    signal_frame_rows = _wait_for_signal_frame_rows(device.device_id, expected_count=1)
+    return SignalFrameResult(
+        response=response,
+        raw_rows=raw_rows,
+        signal_frame_rows=signal_frame_rows,
+        device_id=device.device_id,
     )
 
 
@@ -327,6 +404,47 @@ def test_metric_points_use_device_timestamp_when_available(ingest_result: Ingest
     assert sequence_zero[9] < sequence_zero[10]
 
 
+def test_nanopb_signal_frame_upload_is_accepted(signal_frame_result: SignalFrameResult) -> None:
+    assert signal_frame_result.response.status_code == 202, signal_frame_result.response.text
+
+
+def test_signal_frame_raw_payload_is_persisted(signal_frame_result: SignalFrameResult) -> None:
+    raw_row = signal_frame_result.raw_rows[0]
+    payload = json.loads(raw_row[7])
+
+    assert raw_row[0:4] == (signal_frame_result.device_id, "boot-e2e-signal-0001", 0, "telemetry")
+    assert payload["metrics"] == []
+    assert payload["signal_frame"]["stream_key"] == "imu.accel"
+    assert payload["signal_frame"]["sample_count"] == 4
+    assert "samples_b64" in payload["signal_frame"]
+
+
+def test_signal_frame_is_persisted_in_normalized_table(signal_frame_result: SignalFrameResult) -> None:
+    signal_frame = signal_frame_result.signal_frame_rows[0]
+    channels = json.loads(signal_frame[12])
+
+    assert signal_frame[0] == signal_frame_result.device_id
+    assert signal_frame[1:9] == (
+        "boot-e2e-signal-0001",
+        0,
+        "imu.accel",
+        "float32_le",
+        "interleaved",
+        5_000_000,
+        4,
+        48,
+    )
+    assert [channel["key"] for channel in channels] == ["accel_x", "accel_y", "accel_z"]
+
+
+def test_signal_frame_uses_device_timestamp_when_available(signal_frame_result: SignalFrameResult) -> None:
+    signal_frame = signal_frame_result.signal_frame_rows[0]
+
+    assert signal_frame[9] == 1_712_345_679_111_000_000
+    assert abs(int(signal_frame[10].timestamp() * 1_000_000_000) - signal_frame[9]) < 1_000
+    assert signal_frame[10] < signal_frame[11]
+
+
 def test_dimension_tables_deduplicate_device_boot_and_metric_keys(ingest_result: IngestResult) -> None:
     with psycopg.connect(POSTGRES_DSN) as conn:
         with conn.cursor() as cur:
@@ -356,6 +474,26 @@ def test_dimension_tables_deduplicate_device_boot_and_metric_keys(ingest_result:
     assert device_count == 1
     assert boot_count == 1
     assert metric_count == 1
+
+
+def test_signal_frame_dimension_table_deduplicates_stream_definition(
+    signal_frame_result: SignalFrameResult,
+) -> None:
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM signal_stream_definitions
+                WHERE stream_key = 'imu.accel'
+                  AND encoding = 'float32_le'
+                  AND layout = 'interleaved'
+                """
+            )
+            stream_count = cur.fetchone()[0]
+
+    assert signal_frame_result.signal_frame_rows
+    assert stream_count == 1
 
 
 def test_metric_points_table_is_timescaledb_hypertable(ingest_result: IngestResult) -> None:
@@ -391,6 +529,39 @@ def test_metric_points_table_is_timescaledb_hypertable(ingest_result: IngestResu
     assert ("event_time", "request_id", "metric_index") in unique_indexes
 
 
+def test_signal_frames_table_is_timescaledb_hypertable(signal_frame_result: SignalFrameResult) -> None:
+    del signal_frame_result
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb')")
+            extension_exists = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT compression_enabled
+                FROM timescaledb_information.hypertables
+                WHERE hypertable_schema = 'public'
+                  AND hypertable_name = 'device_signal_frames'
+                """
+            )
+            hypertable_row = cur.fetchone()
+            cur.execute(
+                """
+                SELECT array_agg(a.attname ORDER BY array_position(i.indkey, a.attnum))
+                FROM pg_class t
+                JOIN pg_index i ON i.indrelid = t.oid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+                WHERE t.relname = 'device_signal_frames'
+                  AND i.indisunique
+                GROUP BY i.indexrelid
+                """
+            )
+            unique_indexes = [tuple(row[0]) for row in cur.fetchall()]
+
+    assert extension_exists is True
+    assert hypertable_row == (True,)
+    assert ("event_time", "request_id") in unique_indexes
+
+
 def test_timescaledb_metric_retention_and_compression_jobs_exist(ingest_result: IngestResult) -> None:
     del ingest_result
     with psycopg.connect(POSTGRES_DSN) as conn:
@@ -401,6 +572,27 @@ def test_timescaledb_metric_retention_and_compression_jobs_exist(ingest_result: 
                 FROM timescaledb_information.jobs
                 WHERE hypertable_schema = 'public'
                   AND hypertable_name = 'device_metric_points'
+                  AND proc_name IN ('policy_compression', 'policy_retention')
+                ORDER BY proc_name
+                """
+            )
+            job_names = {row[0] for row in cur.fetchall()}
+
+    assert job_names == {"policy_compression", "policy_retention"}
+
+
+def test_timescaledb_signal_frame_retention_and_compression_jobs_exist(
+    signal_frame_result: SignalFrameResult,
+) -> None:
+    del signal_frame_result
+    with psycopg.connect(POSTGRES_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT proc_name
+                FROM timescaledb_information.jobs
+                WHERE hypertable_schema = 'public'
+                  AND hypertable_name = 'device_signal_frames'
                   AND proc_name IN ('policy_compression', 'policy_retention')
                 ORDER BY proc_name
                 """

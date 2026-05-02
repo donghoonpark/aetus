@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import ipaddress
 from pathlib import Path
 import tempfile
@@ -78,6 +80,37 @@ def test_virtual_device_can_upload_telemetry() -> None:
     assert metric_payload["metric_unit"] == "celsius"
     assert metric_payload["value_type"] == "double"
     assert metric_payload["value_double"] == 22.25
+
+
+def test_virtual_device_can_upload_signal_frame() -> None:
+    client, publisher = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    response = device.upload(client, device.build_signal_frame(timestamp_ns=1_712_345_678_901_234_567))
+
+    assert response.status_code == 202
+    event = publisher.events[0]
+    assert event["device_id"] == "esp32c5-test-001"
+    assert event["event_type"] == "telemetry"
+    assert event["timestamp_ns"] == 1_712_345_678_901_234_567
+    assert event["payload"]["metrics"] == []
+
+    signal_frame = event["payload"]["signal_frame"]
+    assert signal_frame["stream_key"] == "imu.accel"
+    assert signal_frame["sample_interval_ns"] == 5_000_000
+    assert signal_frame["sample_count"] == 4
+    assert signal_frame["encoding"] == "float32_le"
+    assert signal_frame["layout"] == "interleaved"
+    assert [channel["key"] for channel in signal_frame["channels"]] == ["accel_x", "accel_y", "accel_z"]
+    assert len(base64.b64decode(signal_frame["samples_b64"])) == 48
+
+    assert publisher.metric_records == []
+    assert len(publisher.signal_frame_records) == 1
+    signal_payload = publisher.signal_frame_records[0]["payload"]
+    assert signal_payload["stream_key"] == "imu.accel"
+    assert signal_payload["sample_count"] == 4
+    assert json.loads(signal_payload["channels_json"])[0]["key"] == "accel_x"
+    assert len(base64.b64decode(signal_payload["samples_b64"])) == 48
 
 
 def test_virtual_device_can_upload_telemetry_with_hmac_signature() -> None:
@@ -487,6 +520,42 @@ def test_ingest_rejects_missing_body() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "body missing"
+
+
+def test_ingest_rejects_signal_frame_sample_length_mismatch() -> None:
+    client, _ = make_client()
+    event = ingest_pb2.IngestEvent(
+        schema_version=1,
+        device_id="esp32c5-test-001",
+        boot_id="boot-unit-0001",
+        sequence=0,
+        event_type=ingest_pb2.EVENT_TYPE_TELEMETRY,
+        timestamp_ns=1_712_345_678_901_234_567,
+    )
+    frame = event.telemetry.signal_frame
+    frame.stream_key = "imu.accel"
+    frame.sample_interval_ns = 5_000_000
+    frame.sample_count = 4
+    frame.encoding = ingest_pb2.SIGNAL_SAMPLE_ENCODING_FLOAT32_LE
+    frame.layout = ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED
+    for key in ("accel_x", "accel_y", "accel_z"):
+        channel = frame.channels.add()
+        channel.key = key
+        channel.unit = "g"
+    frame.samples = b"\x00" * 47
+
+    response = client.post(
+        "/v1/ingest",
+        content=event.SerializeToString(),
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "signal frame samples length mismatch: expected 48, got 47"
 
 
 def test_control_devices_json_endpoints_work() -> None:

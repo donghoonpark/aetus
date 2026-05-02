@@ -99,6 +99,7 @@ services:
       AETUS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       AETUS_KAFKA_TOPIC: device.raw.v1
       AETUS_KAFKA_METRIC_TOPIC: device.metric.v1
+      AETUS_KAFKA_SIGNAL_FRAME_TOPIC: device.signal_frame.v1
       AETUS_KAFKA_CONNECT_URL: http://kafka-connect:8083
       AETUS_POSTGRES_DSN: postgresql://aetus:aetus@postgres:5432/aetus
       AETUS_ALLOWED_SOURCE_CIDRS: 0.0.0.0/0

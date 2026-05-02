@@ -60,6 +60,29 @@ py::bytes encode_status(
     return py::bytes(reinterpret_cast<const char *>(buffer.data()), encoded_size);
 }
 
+py::bytes encode_signal_frame(
+    const std::string &device_id,
+    const std::string &boot_id,
+    std::uint64_t sequence,
+    std::uint64_t timestamp_ns
+) {
+    std::vector<std::uint8_t> buffer(1024);
+    std::size_t encoded_size = 0;
+    if (!encode_signal_frame_event(
+            buffer.data(),
+            buffer.size(),
+            &encoded_size,
+            device_id.c_str(),
+            boot_id.c_str(),
+            sequence,
+            timestamp_ns
+        )) {
+        throw std::runtime_error("nanopb signal frame encoding failed");
+    }
+
+    return py::bytes(reinterpret_cast<const char *>(buffer.data()), encoded_size);
+}
+
 }  // namespace
 
 PYBIND11_MODULE(mock_device_py, m) {
@@ -79,6 +102,14 @@ PYBIND11_MODULE(mock_device_py, m) {
         py::arg("boot_id"),
         py::arg("sequence"),
         py::arg("reboot_reason") = "power_on",
+        py::arg("timestamp_ns") = 0
+    );
+    m.def(
+        "encode_signal_frame",
+        &encode_signal_frame,
+        py::arg("device_id"),
+        py::arg("boot_id"),
+        py::arg("sequence"),
         py::arg("timestamp_ns") = 0
     );
 }

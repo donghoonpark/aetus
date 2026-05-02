@@ -31,7 +31,7 @@
 
 AETUS is an end-to-end telemetry stack for devices and software clients that need to upload structured sensor data with small client-side overhead.
 
-Clients encode telemetry with protobuf, send it to a FastAPI ingest service, publish normalized records to Kafka, and persist both raw events and normalized metric points into PostgreSQL. TimescaleDB is supported as an optional layer for hypertables, compression, and retention policies.
+Clients encode telemetry with protobuf, send it to a FastAPI ingest service, publish normalized records to Kafka, and persist raw events, normalized metric points, and dense signal frames into PostgreSQL. TimescaleDB is supported as an optional layer for hypertables, compression, and retention policies.
 
 This repository is still early, but it already contains a working backend pipeline, ESP-IDF firmware components, hardware-in-the-loop firmware, QEMU-oriented firmware tests, and a portable Vue control panel. `ESP32-C5` is the current reference hardware target, not the intended boundary of the project.
 
@@ -46,7 +46,7 @@ AETUS tries to keep those seams clean:
 - FastAPI only authenticates, parses, normalizes, and publishes.
 - Kafka absorbs bursts and decouples ingest from storage.
 - Kafka Connect JDBC Sink performs DB writes with minimal custom consumer code.
-- PostgreSQL stores short-lived raw events and long-lived normalized metric points separately.
+- PostgreSQL stores short-lived raw events and long-lived normalized metric points / signal frames separately.
 
 ## Architecture
 
@@ -55,12 +55,17 @@ flowchart LR
     Client["Device or software client<br/>protobuf payload"] -->|"HTTP protobuf"| API["FastAPI ingest"]
     API -->|"raw event JSON"| RawTopic["Kafka topic<br/>device.raw.v1"]
     API -->|"1 metric = 1 record"| MetricTopic["Kafka topic<br/>device.metric.v1"]
+    API -->|"1 frame = 1 record"| SignalTopic["Kafka topic<br/>device.signal_frame.v1"]
     RawTopic --> RawSink["Kafka Connect<br/>raw sink"]
     MetricTopic --> MetricSink["Kafka Connect<br/>metric staging sink"]
+    SignalTopic --> SignalSink["Kafka Connect<br/>signal frame staging sink"]
     RawSink --> RawTable["raw_device_events"]
     MetricSink --> Staging["metric_ingest_staging"]
+    SignalSink --> SignalStaging["signal_frame_ingest_staging"]
     Staging -->|"PostgreSQL trigger"| Dims["devices / boot sessions / metric definitions"]
     Staging -->|"upsert"| Points["device_metric_points"]
+    SignalStaging -->|"PostgreSQL trigger"| SignalDims["devices / boot sessions / signal stream definitions"]
+    SignalStaging -->|"upsert"| Frames["device_signal_frames"]
 ```
 
 ## Current Features
@@ -73,9 +78,11 @@ flowchart LR
 - In-memory rate limiting for ingest and provisioning
 - SQLite-backed control DB for early deployments
 - Kafka publisher for raw events and expanded metric records
+- SignalFrame ingest path for dense sampled numeric blocks
 - Kafka Connect JDBC Sink configs for PostgreSQL
 - Plain PostgreSQL base schema plus optional TimescaleDB layer
 - Normalized metric storage with dimension tables for devices, boot sessions, and metric definitions
+- Normalized signal frame storage with stream definition dimension tables
 - Vue 3 + Naive UI control panel component
 - ESP-IDF 6.0 portable firmware component for ESP32-class devices
 - FreeRTOS queue based uploader task
@@ -201,17 +208,20 @@ See [firmware/esp32-aetus](firmware/esp32-aetus/README.md) for the full embedded
 
 ## Data Model
 
-AETUS stores two shapes of data:
+AETUS stores three shapes of data:
 
 - `raw_device_events`: short-retention debugging and replay inspection table
 - `device_metric_points`: long-retention normalized time-series metric table
+- `device_signal_frames`: long-retention dense sampled signal frame table
 
-Metric points use integer surrogate keys for repeated strings such as `device_id`, `boot_id`, and metric names:
+Metric points and signal frames use integer surrogate keys for repeated strings such as `device_id`, `boot_id`, metric names, and signal stream definitions:
 
 - `devices`
 - `device_boot_sessions`
 - `metric_definitions`
+- `signal_stream_definitions`
 - `device_metric_points`
+- `device_signal_frames`
 
 The base schema in `services/postgres/initdb/00-base.sql` runs on plain PostgreSQL. The optional TimescaleDB layer in `services/postgres/initdb/10-timescale.sql` adds hypertable, compression, and retention policies.
 
