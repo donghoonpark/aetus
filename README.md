@@ -5,7 +5,7 @@
 <h1 align="center">AETUS</h1>
 
 <p align="center">
-  ESP32-C5 telemetry ingestion stack with protobuf, FastAPI, Kafka, Kafka Connect, and PostgreSQL/TimescaleDB.
+  Device telemetry ingestion stack with protobuf, FastAPI, Kafka, Kafka Connect, and PostgreSQL/TimescaleDB.
 </p>
 
 <p align="center">
@@ -29,20 +29,20 @@
 
 ## What Is AETUS?
 
-AETUS is an end-to-end embedded telemetry stack for devices that need to upload structured sensor data with very small firmware overhead.
+AETUS is an end-to-end telemetry stack for devices and software clients that need to upload structured sensor data with small client-side overhead.
 
-The current reference target is `ESP32-C5`. Devices encode telemetry with `nanopb` protobuf, send it to a FastAPI ingest service, publish normalized records to Kafka, and persist both raw events and normalized metric points into PostgreSQL. TimescaleDB is supported as an optional layer for hypertables, compression, and retention policies.
+Clients encode telemetry with protobuf, send it to a FastAPI ingest service, publish normalized records to Kafka, and persist both raw events and normalized metric points into PostgreSQL. TimescaleDB is supported as an optional layer for hypertables, compression, and retention policies.
 
-This repository is still early, but it already contains a working backend pipeline, ESP-IDF firmware components, hardware-in-the-loop firmware, QEMU-oriented firmware tests, and a portable Vue control panel.
+This repository is still early, but it already contains a working backend pipeline, ESP-IDF firmware components, hardware-in-the-loop firmware, QEMU-oriented firmware tests, and a portable Vue control panel. `ESP32-C5` is the current reference hardware target, not the intended boundary of the project.
 
 ## Why This Exists
 
-Embedded telemetry stacks often start simple and then become tangled: business logic starts doing HTTP, upload retries block sensor work, JSON gets expensive on tiny devices, and backend consumers slowly become bespoke glue code.
+Telemetry stacks often start simple and then become tangled: business logic starts doing HTTP, upload retries block sensor work, JSON gets expensive on constrained clients, and backend consumers slowly become bespoke glue code.
 
 AETUS tries to keep those seams clean:
 
-- Device firmware calls a thread-safe enqueue API and lets a dedicated uploader task handle transport.
-- Protobuf keeps device payloads compact and schema-aware without forcing JSON handling onto the MCU.
+- Device firmware or client SDKs can expose simple enqueue/write APIs and let a dedicated uploader handle transport.
+- Protobuf keeps payloads compact and schema-aware without forcing JSON handling onto constrained devices.
 - FastAPI only authenticates, parses, normalizes, and publishes.
 - Kafka absorbs bursts and decouples ingest from storage.
 - Kafka Connect JDBC Sink performs DB writes with minimal custom consumer code.
@@ -52,7 +52,7 @@ AETUS tries to keep those seams clean:
 
 ```mermaid
 flowchart LR
-    Device["ESP32-C5 firmware<br/>FreeRTOS + nanopb"] -->|"HTTP protobuf"| API["FastAPI ingest"]
+    Client["Device or software client<br/>protobuf payload"] -->|"HTTP protobuf"| API["FastAPI ingest"]
     API -->|"raw event JSON"| RawTopic["Kafka topic<br/>device.raw.v1"]
     API -->|"1 metric = 1 record"| MetricTopic["Kafka topic<br/>device.metric.v1"]
     RawTopic --> RawSink["Kafka Connect<br/>raw sink"]
@@ -77,13 +77,21 @@ flowchart LR
 - Plain PostgreSQL base schema plus optional TimescaleDB layer
 - Normalized metric storage with dimension tables for devices, boot sessions, and metric definitions
 - Vue 3 + Naive UI control panel component
-- ESP-IDF 6.0 portable firmware component for ESP32-C5
+- ESP-IDF 6.0 portable firmware component for ESP32-class devices
 - FreeRTOS queue based uploader task
 - nanopb protobuf encoding
 - C and C++20 firmware APIs
 - NimBLE GATT provisioning path
 - WPA2-Enterprise PEAP Wi-Fi path
 - ESP32-C5 hardware-in-the-loop upload firmware
+
+## Current Reference Clients
+
+- ESP-IDF firmware component for ESP32-class devices
+- ESP32-C5 hardware-in-the-loop firmware used for real-device validation
+- RISC-V ESP32 QEMU firmware stream generator for heavier E2E validation
+- nanopb + pybind11 mock device used by Python tests
+- Python client SDK is planned but not implemented yet
 
 ## Repository Layout
 
