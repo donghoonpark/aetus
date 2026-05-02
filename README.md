@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/ingest-control-panel/src/assets/aetus-mark.png" alt="AETUS mark" width="180" />
+  <img src="docs/assets/aetus-mark-readme.svg" alt="AETUS mark" width="180" />
 </p>
 
 <h1 align="center">AETUS</h1>
