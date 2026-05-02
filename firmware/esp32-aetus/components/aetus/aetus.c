@@ -721,10 +721,15 @@ static bool encode_telemetry(
     if (metric_count > AETUS_MAX_METRICS) {
         metric_count = AETUS_MAX_METRICS;
     }
-    event.body.telemetry.metrics_count = metric_count;
+    event.body.telemetry.which_payload = aetus_ingest_v1_TelemetryPayload_metric_set_tag;
+    event.body.telemetry.payload.metric_set.metrics_count = metric_count;
 
     for (uint32_t index = 0; index < metric_count; index++) {
-        fill_metric(&event.body.telemetry.metrics[index], &telemetry->metrics[index], &bytes_args[index]);
+        fill_metric(
+            &event.body.telemetry.payload.metric_set.metrics[index],
+            &telemetry->metrics[index],
+            &bytes_args[index]
+        );
     }
 
     pb_ostream_t stream = pb_ostream_from_buffer(buffer, buffer_size);

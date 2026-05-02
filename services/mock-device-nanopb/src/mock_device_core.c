@@ -36,9 +36,10 @@ bool encode_telemetry_event(
     fill_common(&event, device_id, boot_id, sequence, timestamp_ns);
     event.event_type = aetus_ingest_v1_EventType_EVENT_TYPE_TELEMETRY;
     event.which_body = aetus_ingest_v1_IngestEvent_telemetry_tag;
-    event.body.telemetry.metrics_count = 1;
+    event.body.telemetry.which_payload = aetus_ingest_v1_TelemetryPayload_metric_set_tag;
+    event.body.telemetry.payload.metric_set.metrics_count = 1;
 
-    aetus_ingest_v1_Metric *metric = &event.body.telemetry.metrics[0];
+    aetus_ingest_v1_Metric *metric = &event.body.telemetry.payload.metric_set.metrics[0];
     strncpy(metric->key, "temperature", sizeof(metric->key) - 1);
     metric->which_value = aetus_ingest_v1_Metric_double_value_tag;
     metric->value.double_value = 22.25;
@@ -103,9 +104,9 @@ bool encode_signal_frame_event(
     event.which_body = aetus_ingest_v1_IngestEvent_telemetry_tag;
 
     aetus_ingest_v1_TelemetryPayload *telemetry = &event.body.telemetry;
-    telemetry->has_signal_frame = true;
+    telemetry->which_payload = aetus_ingest_v1_TelemetryPayload_signal_frame_tag;
 
-    aetus_ingest_v1_SignalFrame *frame = &telemetry->signal_frame;
+    aetus_ingest_v1_SignalFrame *frame = &telemetry->payload.signal_frame;
     strncpy(frame->stream_key, "imu.accel", sizeof(frame->stream_key) - 1);
     frame->sample_interval_ns = 5000000;
     frame->sample_count = 4;

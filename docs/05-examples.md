@@ -21,36 +21,49 @@ app = FastAPI()
 def normalize_payload(event: IngestEvent) -> dict[str, Any]:
     body = event.WhichOneof("body")
     if body == "telemetry":
-        metrics = []
-        for metric in event.telemetry.metrics:
-            value_kind = metric.WhichOneof("value")
-            if value_kind == "int_value":
-                value = metric.int_value
-                value_type = "int"
-            elif value_kind == "double_value":
-                value = metric.double_value
-                value_type = "double"
-            elif value_kind == "bool_value":
-                value = metric.bool_value
-                value_type = "bool"
-            elif value_kind == "string_value":
-                value = metric.string_value
-                value_type = "string"
-            elif value_kind == "bytes_value":
-                value = metric.bytes_value.hex()
-                value_type = "bytes_hex"
-            else:
-                raise HTTPException(status_code=400, detail="metric value missing")
+        telemetry_kind = event.telemetry.WhichOneof("payload")
+        if telemetry_kind == "metric_set":
+            metrics = []
+            for metric in event.telemetry.metric_set.metrics:
+                value_kind = metric.WhichOneof("value")
+                if value_kind == "int_value":
+                    value = metric.int_value
+                    value_type = "int"
+                elif value_kind == "double_value":
+                    value = metric.double_value
+                    value_type = "double"
+                elif value_kind == "bool_value":
+                    value = metric.bool_value
+                    value_type = "bool"
+                elif value_kind == "string_value":
+                    value = metric.string_value
+                    value_type = "string"
+                elif value_kind == "bytes_value":
+                    value = metric.bytes_value.hex()
+                    value_type = "bytes_hex"
+                else:
+                    raise HTTPException(status_code=400, detail="metric value missing")
 
-            metrics.append(
-                {
-                    "key": metric.key,
-                    "type": value_type,
-                    "value": value,
-                    "unit": metric.unit or None,
-                }
-            )
-        return {"metrics": metrics}
+                metrics.append(
+                    {
+                        "key": metric.key,
+                        "type": value_type,
+                        "value": value,
+                        "unit": metric.unit or None,
+                    }
+                )
+            return {"kind": "metric_set", "metrics": metrics}
+
+        if telemetry_kind == "signal_frame":
+            return {
+                "kind": "signal_frame",
+                "signal_frame": {
+                    "stream_key": event.telemetry.signal_frame.stream_key,
+                    "sample_count": event.telemetry.signal_frame.sample_count,
+                },
+            }
+
+        raise HTTPException(status_code=400, detail="telemetry payload missing")
 
     if body == "status":
         return {
@@ -213,8 +226,14 @@ message IngestEvent {
 }
 
 message TelemetryPayload {
+  oneof payload {
+    MetricSet metric_set = 1;
+    SignalFrame signal_frame = 2;
+  }
+}
+
+message MetricSet {
   repeated Metric metrics = 1;
-  SignalFrame signal_frame = 2;
 }
 
 message Metric {
@@ -314,21 +333,22 @@ bool build_telemetry_event(uint8_t *out_buf, size_t out_buf_size, size_t *encode
     event.timestamp_ns = 1777242001000000000ULL;
 
     event.which_body = aetus_ingest_v1_IngestEvent_telemetry_tag;
-    event.body.telemetry.metrics_count = 3;
+    event.body.telemetry.which_payload = aetus_ingest_v1_TelemetryPayload_metric_set_tag;
+    event.body.telemetry.payload.metric_set.metrics_count = 3;
 
-    aetus_ingest_v1_Metric *m0 = &event.body.telemetry.metrics[0];
+    aetus_ingest_v1_Metric *m0 = &event.body.telemetry.payload.metric_set.metrics[0];
     strncpy(m0->key, "temperature", sizeof(m0->key) - 1);
     m0->which_value = aetus_ingest_v1_Metric_double_value_tag;
     m0->value.double_value = 21.4;
     strncpy(m0->unit, "celsius", sizeof(m0->unit) - 1);
 
-    aetus_ingest_v1_Metric *m1 = &event.body.telemetry.metrics[1];
+    aetus_ingest_v1_Metric *m1 = &event.body.telemetry.payload.metric_set.metrics[1];
     strncpy(m1->key, "humidity", sizeof(m1->key) - 1);
     m1->which_value = aetus_ingest_v1_Metric_double_value_tag;
     m1->value.double_value = 44.8;
     strncpy(m1->unit, "percent", sizeof(m1->unit) - 1);
 
-    aetus_ingest_v1_Metric *m2 = &event.body.telemetry.metrics[2];
+    aetus_ingest_v1_Metric *m2 = &event.body.telemetry.payload.metric_set.metrics[2];
     strncpy(m2->key, "battery", sizeof(m2->key) - 1);
     m2->which_value = aetus_ingest_v1_Metric_double_value_tag;
     m2->value.double_value = 3.82;
@@ -369,10 +389,10 @@ IngestEvent.device_id max_size:32
 IngestEvent.boot_id max_size:32
 Metric.key max_size:24
 Metric.unit max_size:16
-TelemetryPayload.metrics max_count:8
+MetricSet.metrics max_count:8
 SignalFrame.stream_key max_size:32
-SignalFrame.channels max_count:8
-SignalFrame.samples max_size:4096
+SignalFrame.channels type:FT_CALLBACK
+SignalFrame.samples type:FT_CALLBACK
 SignalChannel.key max_size:24
 SignalChannel.unit max_size:16
 StatusPayload.reboot_reason max_size:24

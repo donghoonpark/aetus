@@ -37,7 +37,7 @@
 - `event_type`과 `schema_version`으로 이벤트 종류와 포맷 버전을 구분
 - 서버는 응답을 짧게 유지하고 DB 적재 결과는 동기 반환하지 않음
 - 디바이스는 protobuf를 보내고, 서버는 이를 내부 object로 변환해 Kafka에 JSON으로 publish
-- `TelemetryPayload.metrics`는 scalar metric, `TelemetryPayload.signal_frame`은 dense sampled block으로 처리
+- `TelemetryPayload.metric_set`는 scalar metric, `TelemetryPayload.signal_frame`은 dense sampled block으로 처리
 - `boot_id`는 항상 포함하고, 서버는 `device_id + boot_id + sequence`를 이벤트 구분 기준으로 사용
 - `sequence`는 각 부팅 세션에서 `0`부터 시작하고, 재부팅 시 다시 `0`으로 초기화
 - 장치 시각이 필요하면 `timestamp_ns`를 선택 필드로 보낼 수 있지만, 서버는 이를 중복 방지 기준으로 사용하지 않음

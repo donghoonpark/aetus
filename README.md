@@ -47,6 +47,7 @@ AETUS tries to keep those seams clean:
 - Kafka absorbs bursts and decouples ingest from storage.
 - Kafka Connect JDBC Sink performs DB writes with minimal custom consumer code.
 - PostgreSQL stores short-lived raw events and long-lived normalized metric points / signal frames separately.
+- Telemetry payloads stay explicit: one telemetry event is either a scalar `metric_set` or a dense `signal_frame`.
 
 ## Architecture
 

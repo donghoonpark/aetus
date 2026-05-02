@@ -105,21 +105,29 @@ def event_type_name(value: int) -> str:
 def normalize_payload(event: ingest_pb2.IngestEvent) -> dict[str, Any]:
     body = event.WhichOneof("body")
     if body == "telemetry":
-        metrics = []
-        for metric in event.telemetry.metrics:
-            value_type, value = _metric_value(metric)
-            metrics.append(
-                {
-                    "key": metric.key,
-                    "type": value_type,
-                    "value": value,
-                    "unit": metric.unit or None,
-                }
-            )
-        payload: dict[str, Any] = {"metrics": metrics}
-        if event.telemetry.HasField("signal_frame"):
-            payload["signal_frame"] = _normalize_signal_frame(event.telemetry.signal_frame)
-        return payload
+        telemetry_kind = event.telemetry.WhichOneof("payload")
+        if telemetry_kind == "metric_set":
+            metrics = []
+            for metric in event.telemetry.metric_set.metrics:
+                value_type, value = _metric_value(metric)
+                metrics.append(
+                    {
+                        "key": metric.key,
+                        "type": value_type,
+                        "value": value,
+                        "unit": metric.unit or None,
+                    }
+                )
+            return {
+                "kind": "metric_set",
+                "metrics": metrics,
+            }
+        if telemetry_kind == "signal_frame":
+            return {
+                "kind": "signal_frame",
+                "signal_frame": _normalize_signal_frame(event.telemetry.signal_frame),
+            }
+        raise HTTPException(status_code=400, detail="telemetry payload missing")
 
     if body == "status":
         return {

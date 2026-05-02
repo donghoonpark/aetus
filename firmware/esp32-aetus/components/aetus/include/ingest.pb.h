@@ -32,6 +32,20 @@ typedef enum _aetus_ingest_v1_Severity {
     aetus_ingest_v1_Severity_SEVERITY_CRITICAL = 4
 } aetus_ingest_v1_Severity;
 
+typedef enum _aetus_ingest_v1_SignalSampleEncoding {
+    aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_UNSPECIFIED = 0,
+    aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_FLOAT32_LE = 1,
+    aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_INT16_LE = 2,
+    aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_UINT16_LE = 3,
+    aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_INT32_LE = 4
+} aetus_ingest_v1_SignalSampleEncoding;
+
+typedef enum _aetus_ingest_v1_SignalSampleLayout {
+    aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_UNSPECIFIED = 0,
+    aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_INTERLEAVED = 1,
+    aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_PLANAR = 2
+} aetus_ingest_v1_SignalSampleLayout;
+
 /* Struct definitions */
 typedef struct _aetus_ingest_v1_Metric {
     char key[24];
@@ -46,10 +60,10 @@ typedef struct _aetus_ingest_v1_Metric {
     char unit[16];
 } aetus_ingest_v1_Metric;
 
-typedef struct _aetus_ingest_v1_TelemetryPayload {
+typedef struct _aetus_ingest_v1_MetricSet {
     pb_size_t metrics_count;
     aetus_ingest_v1_Metric metrics[8];
-} aetus_ingest_v1_TelemetryPayload;
+} aetus_ingest_v1_MetricSet;
 
 typedef struct _aetus_ingest_v1_StatusPayload {
     aetus_ingest_v1_DeviceStatus status;
@@ -63,6 +77,24 @@ typedef struct _aetus_ingest_v1_AlertPayload {
     aetus_ingest_v1_Severity severity;
     char message[80];
 } aetus_ingest_v1_AlertPayload;
+
+typedef struct _aetus_ingest_v1_SignalFrame {
+    char stream_key[32];
+    uint64_t sample_interval_ns;
+    uint32_t sample_count;
+    aetus_ingest_v1_SignalSampleEncoding encoding;
+    aetus_ingest_v1_SignalSampleLayout layout;
+    pb_callback_t channels;
+    pb_callback_t samples;
+} aetus_ingest_v1_SignalFrame;
+
+typedef struct _aetus_ingest_v1_TelemetryPayload {
+    pb_size_t which_payload;
+    union {
+        aetus_ingest_v1_MetricSet metric_set;
+        aetus_ingest_v1_SignalFrame signal_frame;
+    } payload;
+} aetus_ingest_v1_TelemetryPayload;
 
 typedef struct _aetus_ingest_v1_IngestEvent {
     uint32_t schema_version;
@@ -80,6 +112,15 @@ typedef struct _aetus_ingest_v1_IngestEvent {
         aetus_ingest_v1_AlertPayload alert;
     } body;
 } aetus_ingest_v1_IngestEvent;
+
+typedef struct _aetus_ingest_v1_SignalChannel {
+    char key[24];
+    char unit[16];
+    bool has_scale;
+    float scale;
+    bool has_offset;
+    float offset;
+} aetus_ingest_v1_SignalChannel;
 
 
 #ifdef __cplusplus
@@ -99,7 +140,16 @@ extern "C" {
 #define _aetus_ingest_v1_Severity_MAX aetus_ingest_v1_Severity_SEVERITY_CRITICAL
 #define _aetus_ingest_v1_Severity_ARRAYSIZE ((aetus_ingest_v1_Severity)(aetus_ingest_v1_Severity_SEVERITY_CRITICAL+1))
 
+#define _aetus_ingest_v1_SignalSampleEncoding_MIN aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_UNSPECIFIED
+#define _aetus_ingest_v1_SignalSampleEncoding_MAX aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_INT32_LE
+#define _aetus_ingest_v1_SignalSampleEncoding_ARRAYSIZE ((aetus_ingest_v1_SignalSampleEncoding)(aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_INT32_LE+1))
+
+#define _aetus_ingest_v1_SignalSampleLayout_MIN aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_UNSPECIFIED
+#define _aetus_ingest_v1_SignalSampleLayout_MAX aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_PLANAR
+#define _aetus_ingest_v1_SignalSampleLayout_ARRAYSIZE ((aetus_ingest_v1_SignalSampleLayout)(aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_PLANAR+1))
+
 #define aetus_ingest_v1_IngestEvent_event_type_ENUMTYPE aetus_ingest_v1_EventType
+
 
 
 
@@ -107,18 +157,28 @@ extern "C" {
 
 #define aetus_ingest_v1_AlertPayload_severity_ENUMTYPE aetus_ingest_v1_Severity
 
+#define aetus_ingest_v1_SignalFrame_encoding_ENUMTYPE aetus_ingest_v1_SignalSampleEncoding
+#define aetus_ingest_v1_SignalFrame_layout_ENUMTYPE aetus_ingest_v1_SignalSampleLayout
+
+
 
 /* Initializer values for message structs */
 #define aetus_ingest_v1_IngestEvent_init_default {0, "", 0, _aetus_ingest_v1_EventType_MIN, "", 0, 0, 0, 0, {aetus_ingest_v1_TelemetryPayload_init_default}}
-#define aetus_ingest_v1_TelemetryPayload_init_default {0, {aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default}}
+#define aetus_ingest_v1_TelemetryPayload_init_default {0, {aetus_ingest_v1_MetricSet_init_default}}
+#define aetus_ingest_v1_MetricSet_init_default   {0, {aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default}}
 #define aetus_ingest_v1_Metric_init_default      {"", 0, {0}, ""}
 #define aetus_ingest_v1_StatusPayload_init_default {_aetus_ingest_v1_DeviceStatus_MIN, 0, 0, ""}
 #define aetus_ingest_v1_AlertPayload_init_default {"", _aetus_ingest_v1_Severity_MIN, ""}
+#define aetus_ingest_v1_SignalFrame_init_default {"", 0, 0, _aetus_ingest_v1_SignalSampleEncoding_MIN, _aetus_ingest_v1_SignalSampleLayout_MIN, {{NULL}, NULL}, {{NULL}, NULL}}
+#define aetus_ingest_v1_SignalChannel_init_default {"", "", false, 0, false, 0}
 #define aetus_ingest_v1_IngestEvent_init_zero    {0, "", 0, _aetus_ingest_v1_EventType_MIN, "", 0, 0, 0, 0, {aetus_ingest_v1_TelemetryPayload_init_zero}}
-#define aetus_ingest_v1_TelemetryPayload_init_zero {0, {aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero}}
+#define aetus_ingest_v1_TelemetryPayload_init_zero {0, {aetus_ingest_v1_MetricSet_init_zero}}
+#define aetus_ingest_v1_MetricSet_init_zero      {0, {aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero}}
 #define aetus_ingest_v1_Metric_init_zero         {"", 0, {0}, ""}
 #define aetus_ingest_v1_StatusPayload_init_zero  {_aetus_ingest_v1_DeviceStatus_MIN, 0, 0, ""}
 #define aetus_ingest_v1_AlertPayload_init_zero   {"", _aetus_ingest_v1_Severity_MIN, ""}
+#define aetus_ingest_v1_SignalFrame_init_zero    {"", 0, 0, _aetus_ingest_v1_SignalSampleEncoding_MIN, _aetus_ingest_v1_SignalSampleLayout_MIN, {{NULL}, NULL}, {{NULL}, NULL}}
+#define aetus_ingest_v1_SignalChannel_init_zero  {"", "", false, 0, false, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define aetus_ingest_v1_Metric_key_tag           1
@@ -128,7 +188,7 @@ extern "C" {
 #define aetus_ingest_v1_Metric_string_value_tag  5
 #define aetus_ingest_v1_Metric_bytes_value_tag   6
 #define aetus_ingest_v1_Metric_unit_tag          7
-#define aetus_ingest_v1_TelemetryPayload_metrics_tag 1
+#define aetus_ingest_v1_MetricSet_metrics_tag    1
 #define aetus_ingest_v1_StatusPayload_status_tag 1
 #define aetus_ingest_v1_StatusPayload_rssi_tag   2
 #define aetus_ingest_v1_StatusPayload_free_heap_tag 3
@@ -136,6 +196,15 @@ extern "C" {
 #define aetus_ingest_v1_AlertPayload_code_tag    1
 #define aetus_ingest_v1_AlertPayload_severity_tag 2
 #define aetus_ingest_v1_AlertPayload_message_tag 3
+#define aetus_ingest_v1_SignalFrame_stream_key_tag 1
+#define aetus_ingest_v1_SignalFrame_sample_interval_ns_tag 2
+#define aetus_ingest_v1_SignalFrame_sample_count_tag 3
+#define aetus_ingest_v1_SignalFrame_encoding_tag 4
+#define aetus_ingest_v1_SignalFrame_layout_tag   5
+#define aetus_ingest_v1_SignalFrame_channels_tag 6
+#define aetus_ingest_v1_SignalFrame_samples_tag  7
+#define aetus_ingest_v1_TelemetryPayload_metric_set_tag 1
+#define aetus_ingest_v1_TelemetryPayload_signal_frame_tag 2
 #define aetus_ingest_v1_IngestEvent_schema_version_tag 1
 #define aetus_ingest_v1_IngestEvent_device_id_tag 2
 #define aetus_ingest_v1_IngestEvent_sequence_tag 3
@@ -147,6 +216,10 @@ extern "C" {
 #define aetus_ingest_v1_IngestEvent_telemetry_tag 10
 #define aetus_ingest_v1_IngestEvent_status_tag   11
 #define aetus_ingest_v1_IngestEvent_alert_tag    12
+#define aetus_ingest_v1_SignalChannel_key_tag    1
+#define aetus_ingest_v1_SignalChannel_unit_tag   2
+#define aetus_ingest_v1_SignalChannel_scale_tag  3
+#define aetus_ingest_v1_SignalChannel_offset_tag 4
 
 /* Struct field encoding specification for nanopb */
 #define aetus_ingest_v1_IngestEvent_FIELDLIST(X, a) \
@@ -168,10 +241,18 @@ X(a, STATIC,   ONEOF,    MESSAGE,  (body,alert,body.alert),  12)
 #define aetus_ingest_v1_IngestEvent_body_alert_MSGTYPE aetus_ingest_v1_AlertPayload
 
 #define aetus_ingest_v1_TelemetryPayload_FIELDLIST(X, a) \
-X(a, STATIC,   REPEATED, MESSAGE,  metrics,           1)
+X(a, STATIC,   ONEOF,    MESSAGE,  (payload,metric_set,payload.metric_set),   1) \
+X(a, STATIC,   ONEOF,    MESSAGE,  (payload,signal_frame,payload.signal_frame),   2)
 #define aetus_ingest_v1_TelemetryPayload_CALLBACK NULL
 #define aetus_ingest_v1_TelemetryPayload_DEFAULT NULL
-#define aetus_ingest_v1_TelemetryPayload_metrics_MSGTYPE aetus_ingest_v1_Metric
+#define aetus_ingest_v1_TelemetryPayload_payload_metric_set_MSGTYPE aetus_ingest_v1_MetricSet
+#define aetus_ingest_v1_TelemetryPayload_payload_signal_frame_MSGTYPE aetus_ingest_v1_SignalFrame
+
+#define aetus_ingest_v1_MetricSet_FIELDLIST(X, a) \
+X(a, STATIC,   REPEATED, MESSAGE,  metrics,           1)
+#define aetus_ingest_v1_MetricSet_CALLBACK NULL
+#define aetus_ingest_v1_MetricSet_DEFAULT NULL
+#define aetus_ingest_v1_MetricSet_metrics_MSGTYPE aetus_ingest_v1_Metric
 
 #define aetus_ingest_v1_Metric_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, STRING,   key,               1) \
@@ -199,25 +280,54 @@ X(a, STATIC,   SINGULAR, STRING,   message,           3)
 #define aetus_ingest_v1_AlertPayload_CALLBACK NULL
 #define aetus_ingest_v1_AlertPayload_DEFAULT NULL
 
+#define aetus_ingest_v1_SignalFrame_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, STRING,   stream_key,        1) \
+X(a, STATIC,   SINGULAR, UINT64,   sample_interval_ns,   2) \
+X(a, STATIC,   SINGULAR, UINT32,   sample_count,      3) \
+X(a, STATIC,   SINGULAR, UENUM,    encoding,          4) \
+X(a, STATIC,   SINGULAR, UENUM,    layout,            5) \
+X(a, CALLBACK, REPEATED, MESSAGE,  channels,          6) \
+X(a, CALLBACK, SINGULAR, BYTES,    samples,           7)
+#define aetus_ingest_v1_SignalFrame_CALLBACK pb_default_field_callback
+#define aetus_ingest_v1_SignalFrame_DEFAULT NULL
+#define aetus_ingest_v1_SignalFrame_channels_MSGTYPE aetus_ingest_v1_SignalChannel
+
+#define aetus_ingest_v1_SignalChannel_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, STRING,   key,               1) \
+X(a, STATIC,   SINGULAR, STRING,   unit,              2) \
+X(a, STATIC,   OPTIONAL, FLOAT,    scale,             3) \
+X(a, STATIC,   OPTIONAL, FLOAT,    offset,            4)
+#define aetus_ingest_v1_SignalChannel_CALLBACK NULL
+#define aetus_ingest_v1_SignalChannel_DEFAULT NULL
+
 extern const pb_msgdesc_t aetus_ingest_v1_IngestEvent_msg;
 extern const pb_msgdesc_t aetus_ingest_v1_TelemetryPayload_msg;
+extern const pb_msgdesc_t aetus_ingest_v1_MetricSet_msg;
 extern const pb_msgdesc_t aetus_ingest_v1_Metric_msg;
 extern const pb_msgdesc_t aetus_ingest_v1_StatusPayload_msg;
 extern const pb_msgdesc_t aetus_ingest_v1_AlertPayload_msg;
+extern const pb_msgdesc_t aetus_ingest_v1_SignalFrame_msg;
+extern const pb_msgdesc_t aetus_ingest_v1_SignalChannel_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define aetus_ingest_v1_IngestEvent_fields &aetus_ingest_v1_IngestEvent_msg
 #define aetus_ingest_v1_TelemetryPayload_fields &aetus_ingest_v1_TelemetryPayload_msg
+#define aetus_ingest_v1_MetricSet_fields &aetus_ingest_v1_MetricSet_msg
 #define aetus_ingest_v1_Metric_fields &aetus_ingest_v1_Metric_msg
 #define aetus_ingest_v1_StatusPayload_fields &aetus_ingest_v1_StatusPayload_msg
 #define aetus_ingest_v1_AlertPayload_fields &aetus_ingest_v1_AlertPayload_msg
+#define aetus_ingest_v1_SignalFrame_fields &aetus_ingest_v1_SignalFrame_msg
+#define aetus_ingest_v1_SignalChannel_fields &aetus_ingest_v1_SignalChannel_msg
 
 /* Maximum encoded size of messages (where known) */
 /* aetus_ingest_v1_IngestEvent_size depends on runtime parameters */
 /* aetus_ingest_v1_TelemetryPayload_size depends on runtime parameters */
+/* aetus_ingest_v1_MetricSet_size depends on runtime parameters */
 /* aetus_ingest_v1_Metric_size depends on runtime parameters */
+/* aetus_ingest_v1_SignalFrame_size depends on runtime parameters */
 #define AETUS_INGEST_V1_INGEST_PB_H_MAX_SIZE     aetus_ingest_v1_AlertPayload_size
 #define aetus_ingest_v1_AlertPayload_size        108
+#define aetus_ingest_v1_SignalChannel_size       52
 #define aetus_ingest_v1_StatusPayload_size       39
 
 #ifdef __cplusplus

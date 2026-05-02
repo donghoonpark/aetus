@@ -378,9 +378,11 @@ def test_timestamp_ns_is_persisted(ingest_result: IngestResult) -> None:
 def test_payload_and_metadata_are_persisted(ingest_result: IngestResult) -> None:
     latest_row = ingest_result.rows[0]
     oldest_row = ingest_result.rows[2]
+    payload = json.loads(latest_row[7])
 
     ipaddress.ip_address(latest_row[6])
-    assert '"metrics"' in latest_row[7]
+    assert payload["kind"] == "metric_set"
+    assert payload["metrics"][0]["key"] == "temperature"
     parsed_received_at = datetime.fromisoformat(oldest_row[5])
     assert parsed_received_at.tzinfo is not None
     assert parsed_received_at.year >= 2026
@@ -413,7 +415,7 @@ def test_signal_frame_raw_payload_is_persisted(signal_frame_result: SignalFrameR
     payload = json.loads(raw_row[7])
 
     assert raw_row[0:4] == (signal_frame_result.device_id, "boot-e2e-signal-0001", 0, "telemetry")
-    assert payload["metrics"] == []
+    assert payload["kind"] == "signal_frame"
     assert payload["signal_frame"]["stream_key"] == "imu.accel"
     assert payload["signal_frame"]["sample_count"] == 4
     assert "samples_b64" in payload["signal_frame"]

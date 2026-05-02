@@ -107,6 +107,8 @@ def build_sink_record(event: dict[str, Any]) -> dict[str, Any]:
 def build_metric_records(event: dict[str, Any]) -> list[dict[str, Any]]:
     if event["event_type"] != "telemetry":
         return []
+    if event["payload"].get("kind") != "metric_set":
+        return []
 
     metric_records = []
     for index, metric in enumerate(event["payload"].get("metrics", [])):
@@ -140,6 +142,8 @@ def build_metric_records(event: dict[str, Any]) -> list[dict[str, Any]]:
 
 def build_signal_frame_records(event: dict[str, Any]) -> list[dict[str, Any]]:
     if event["event_type"] != "telemetry":
+        return []
+    if event["payload"].get("kind") != "signal_frame":
         return []
 
     signal_frame = event["payload"].get("signal_frame")

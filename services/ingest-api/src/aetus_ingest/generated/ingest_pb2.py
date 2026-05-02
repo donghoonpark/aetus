@@ -24,35 +24,37 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cingest.proto\x12\x0f\x61\x65tus.ingest.v1\"\xf0\x02\n\x0bIngestEvent\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x11\n\tdevice_id\x18\x02 \x01(\t\x12\x10\n\x08sequence\x18\x03 \x01(\x04\x12.\n\nevent_type\x18\x04 \x01(\x0e\x32\x1a.aetus.ingest.v1.EventType\x12\x0f\n\x07\x62oot_id\x18\x05 \x01(\t\x12\x18\n\x10\x66irmware_version\x18\x06 \x01(\r\x12\x11\n\tuptime_ms\x18\x07 \x01(\x04\x12\x14\n\x0ctimestamp_ns\x18\x08 \x01(\x04\x12\x36\n\ttelemetry\x18\n \x01(\x0b\x32!.aetus.ingest.v1.TelemetryPayloadH\x00\x12\x30\n\x06status\x18\x0b \x01(\x0b\x32\x1e.aetus.ingest.v1.StatusPayloadH\x00\x12.\n\x05\x61lert\x18\x0c \x01(\x0b\x32\x1d.aetus.ingest.v1.AlertPayloadH\x00\x42\x06\n\x04\x62ody\"p\n\x10TelemetryPayload\x12(\n\x07metrics\x18\x01 \x03(\x0b\x32\x17.aetus.ingest.v1.Metric\x12\x32\n\x0csignal_frame\x18\x02 \x01(\x0b\x32\x1c.aetus.ingest.v1.SignalFrame\"\x9e\x01\n\x06Metric\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x13\n\tint_value\x18\x02 \x01(\x12H\x00\x12\x16\n\x0c\x64ouble_value\x18\x03 \x01(\x01H\x00\x12\x14\n\nbool_value\x18\x04 \x01(\x08H\x00\x12\x16\n\x0cstring_value\x18\x05 \x01(\tH\x00\x12\x15\n\x0b\x62ytes_value\x18\x06 \x01(\x0cH\x00\x12\x0c\n\x04unit\x18\x07 \x01(\tB\x07\n\x05value\"v\n\rStatusPayload\x12-\n\x06status\x18\x01 \x01(\x0e\x32\x1d.aetus.ingest.v1.DeviceStatus\x12\x0c\n\x04rssi\x18\x02 \x01(\x11\x12\x11\n\tfree_heap\x18\x03 \x01(\r\x12\x15\n\rreboot_reason\x18\x04 \x01(\t\"Z\n\x0c\x41lertPayload\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12+\n\x08severity\x18\x02 \x01(\x0e\x32\x19.aetus.ingest.v1.Severity\x12\x0f\n\x07message\x18\x03 \x01(\t\"\x84\x02\n\x0bSignalFrame\x12\x12\n\nstream_key\x18\x01 \x01(\t\x12\x1a\n\x12sample_interval_ns\x18\x02 \x01(\x04\x12\x14\n\x0csample_count\x18\x03 \x01(\r\x12\x37\n\x08\x65ncoding\x18\x04 \x01(\x0e\x32%.aetus.ingest.v1.SignalSampleEncoding\x12\x33\n\x06layout\x18\x05 \x01(\x0e\x32#.aetus.ingest.v1.SignalSampleLayout\x12\x30\n\x08\x63hannels\x18\x06 \x03(\x0b\x32\x1e.aetus.ingest.v1.SignalChannel\x12\x0f\n\x07samples\x18\x07 \x01(\x0c\"h\n\rSignalChannel\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x0c\n\x04unit\x18\x02 \x01(\t\x12\x12\n\x05scale\x18\x03 \x01(\x02H\x00\x88\x01\x01\x12\x13\n\x06offset\x18\x04 \x01(\x02H\x01\x88\x01\x01\x42\x08\n\x06_scaleB\t\n\x07_offset*n\n\tEventType\x12\x1a\n\x16\x45VENT_TYPE_UNSPECIFIED\x10\x00\x12\x18\n\x14\x45VENT_TYPE_TELEMETRY\x10\x01\x12\x15\n\x11\x45VENT_TYPE_STATUS\x10\x02\x12\x14\n\x10\x45VENT_TYPE_ALERT\x10\x03*~\n\x0c\x44\x65viceStatus\x12\x1d\n\x19\x44\x45VICE_STATUS_UNSPECIFIED\x10\x00\x12\x18\n\x14\x44\x45VICE_STATUS_ONLINE\x10\x01\x12\x1a\n\x16\x44\x45VICE_STATUS_DEGRADED\x10\x02\x12\x19\n\x15\x44\x45VICE_STATUS_OFFLINE\x10\x03*u\n\x08Severity\x12\x18\n\x14SEVERITY_UNSPECIFIED\x10\x00\x12\x11\n\rSEVERITY_INFO\x10\x01\x12\x11\n\rSEVERITY_WARN\x10\x02\x12\x12\n\x0eSEVERITY_ERROR\x10\x03\x12\x15\n\x11SEVERITY_CRITICAL\x10\x04*\xd5\x01\n\x14SignalSampleEncoding\x12&\n\"SIGNAL_SAMPLE_ENCODING_UNSPECIFIED\x10\x00\x12%\n!SIGNAL_SAMPLE_ENCODING_FLOAT32_LE\x10\x01\x12#\n\x1fSIGNAL_SAMPLE_ENCODING_INT16_LE\x10\x02\x12$\n SIGNAL_SAMPLE_ENCODING_UINT16_LE\x10\x03\x12#\n\x1fSIGNAL_SAMPLE_ENCODING_INT32_LE\x10\x04*\x81\x01\n\x12SignalSampleLayout\x12$\n SIGNAL_SAMPLE_LAYOUT_UNSPECIFIED\x10\x00\x12$\n SIGNAL_SAMPLE_LAYOUT_INTERLEAVED\x10\x01\x12\x1f\n\x1bSIGNAL_SAMPLE_LAYOUT_PLANAR\x10\x02\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cingest.proto\x12\x0f\x61\x65tus.ingest.v1\"\xf0\x02\n\x0bIngestEvent\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x11\n\tdevice_id\x18\x02 \x01(\t\x12\x10\n\x08sequence\x18\x03 \x01(\x04\x12.\n\nevent_type\x18\x04 \x01(\x0e\x32\x1a.aetus.ingest.v1.EventType\x12\x0f\n\x07\x62oot_id\x18\x05 \x01(\t\x12\x18\n\x10\x66irmware_version\x18\x06 \x01(\r\x12\x11\n\tuptime_ms\x18\x07 \x01(\x04\x12\x14\n\x0ctimestamp_ns\x18\x08 \x01(\x04\x12\x36\n\ttelemetry\x18\n \x01(\x0b\x32!.aetus.ingest.v1.TelemetryPayloadH\x00\x12\x30\n\x06status\x18\x0b \x01(\x0b\x32\x1e.aetus.ingest.v1.StatusPayloadH\x00\x12.\n\x05\x61lert\x18\x0c \x01(\x0b\x32\x1d.aetus.ingest.v1.AlertPayloadH\x00\x42\x06\n\x04\x62ody\"\x85\x01\n\x10TelemetryPayload\x12\x30\n\nmetric_set\x18\x01 \x01(\x0b\x32\x1a.aetus.ingest.v1.MetricSetH\x00\x12\x34\n\x0csignal_frame\x18\x02 \x01(\x0b\x32\x1c.aetus.ingest.v1.SignalFrameH\x00\x42\t\n\x07payload\"5\n\tMetricSet\x12(\n\x07metrics\x18\x01 \x03(\x0b\x32\x17.aetus.ingest.v1.Metric\"\x9e\x01\n\x06Metric\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x13\n\tint_value\x18\x02 \x01(\x12H\x00\x12\x16\n\x0c\x64ouble_value\x18\x03 \x01(\x01H\x00\x12\x14\n\nbool_value\x18\x04 \x01(\x08H\x00\x12\x16\n\x0cstring_value\x18\x05 \x01(\tH\x00\x12\x15\n\x0b\x62ytes_value\x18\x06 \x01(\x0cH\x00\x12\x0c\n\x04unit\x18\x07 \x01(\tB\x07\n\x05value\"v\n\rStatusPayload\x12-\n\x06status\x18\x01 \x01(\x0e\x32\x1d.aetus.ingest.v1.DeviceStatus\x12\x0c\n\x04rssi\x18\x02 \x01(\x11\x12\x11\n\tfree_heap\x18\x03 \x01(\r\x12\x15\n\rreboot_reason\x18\x04 \x01(\t\"Z\n\x0c\x41lertPayload\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12+\n\x08severity\x18\x02 \x01(\x0e\x32\x19.aetus.ingest.v1.Severity\x12\x0f\n\x07message\x18\x03 \x01(\t\"\x84\x02\n\x0bSignalFrame\x12\x12\n\nstream_key\x18\x01 \x01(\t\x12\x1a\n\x12sample_interval_ns\x18\x02 \x01(\x04\x12\x14\n\x0csample_count\x18\x03 \x01(\r\x12\x37\n\x08\x65ncoding\x18\x04 \x01(\x0e\x32%.aetus.ingest.v1.SignalSampleEncoding\x12\x33\n\x06layout\x18\x05 \x01(\x0e\x32#.aetus.ingest.v1.SignalSampleLayout\x12\x30\n\x08\x63hannels\x18\x06 \x03(\x0b\x32\x1e.aetus.ingest.v1.SignalChannel\x12\x0f\n\x07samples\x18\x07 \x01(\x0c\"h\n\rSignalChannel\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x0c\n\x04unit\x18\x02 \x01(\t\x12\x12\n\x05scale\x18\x03 \x01(\x02H\x00\x88\x01\x01\x12\x13\n\x06offset\x18\x04 \x01(\x02H\x01\x88\x01\x01\x42\x08\n\x06_scaleB\t\n\x07_offset*n\n\tEventType\x12\x1a\n\x16\x45VENT_TYPE_UNSPECIFIED\x10\x00\x12\x18\n\x14\x45VENT_TYPE_TELEMETRY\x10\x01\x12\x15\n\x11\x45VENT_TYPE_STATUS\x10\x02\x12\x14\n\x10\x45VENT_TYPE_ALERT\x10\x03*~\n\x0c\x44\x65viceStatus\x12\x1d\n\x19\x44\x45VICE_STATUS_UNSPECIFIED\x10\x00\x12\x18\n\x14\x44\x45VICE_STATUS_ONLINE\x10\x01\x12\x1a\n\x16\x44\x45VICE_STATUS_DEGRADED\x10\x02\x12\x19\n\x15\x44\x45VICE_STATUS_OFFLINE\x10\x03*u\n\x08Severity\x12\x18\n\x14SEVERITY_UNSPECIFIED\x10\x00\x12\x11\n\rSEVERITY_INFO\x10\x01\x12\x11\n\rSEVERITY_WARN\x10\x02\x12\x12\n\x0eSEVERITY_ERROR\x10\x03\x12\x15\n\x11SEVERITY_CRITICAL\x10\x04*\xd5\x01\n\x14SignalSampleEncoding\x12&\n\"SIGNAL_SAMPLE_ENCODING_UNSPECIFIED\x10\x00\x12%\n!SIGNAL_SAMPLE_ENCODING_FLOAT32_LE\x10\x01\x12#\n\x1fSIGNAL_SAMPLE_ENCODING_INT16_LE\x10\x02\x12$\n SIGNAL_SAMPLE_ENCODING_UINT16_LE\x10\x03\x12#\n\x1fSIGNAL_SAMPLE_ENCODING_INT32_LE\x10\x04*\x81\x01\n\x12SignalSampleLayout\x12$\n SIGNAL_SAMPLE_LAYOUT_UNSPECIFIED\x10\x00\x12$\n SIGNAL_SAMPLE_LAYOUT_INTERLEAVED\x10\x01\x12\x1f\n\x1bSIGNAL_SAMPLE_LAYOUT_PLANAR\x10\x02\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'ingest_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_EVENTTYPE']._serialized_start=1260
-  _globals['_EVENTTYPE']._serialized_end=1370
-  _globals['_DEVICESTATUS']._serialized_start=1372
-  _globals['_DEVICESTATUS']._serialized_end=1498
-  _globals['_SEVERITY']._serialized_start=1500
-  _globals['_SEVERITY']._serialized_end=1617
-  _globals['_SIGNALSAMPLEENCODING']._serialized_start=1620
-  _globals['_SIGNALSAMPLEENCODING']._serialized_end=1833
-  _globals['_SIGNALSAMPLELAYOUT']._serialized_start=1836
-  _globals['_SIGNALSAMPLELAYOUT']._serialized_end=1965
+  _globals['_EVENTTYPE']._serialized_start=1337
+  _globals['_EVENTTYPE']._serialized_end=1447
+  _globals['_DEVICESTATUS']._serialized_start=1449
+  _globals['_DEVICESTATUS']._serialized_end=1575
+  _globals['_SEVERITY']._serialized_start=1577
+  _globals['_SEVERITY']._serialized_end=1694
+  _globals['_SIGNALSAMPLEENCODING']._serialized_start=1697
+  _globals['_SIGNALSAMPLEENCODING']._serialized_end=1910
+  _globals['_SIGNALSAMPLELAYOUT']._serialized_start=1913
+  _globals['_SIGNALSAMPLELAYOUT']._serialized_end=2042
   _globals['_INGESTEVENT']._serialized_start=34
   _globals['_INGESTEVENT']._serialized_end=402
-  _globals['_TELEMETRYPAYLOAD']._serialized_start=404
-  _globals['_TELEMETRYPAYLOAD']._serialized_end=516
-  _globals['_METRIC']._serialized_start=519
-  _globals['_METRIC']._serialized_end=677
-  _globals['_STATUSPAYLOAD']._serialized_start=679
-  _globals['_STATUSPAYLOAD']._serialized_end=797
-  _globals['_ALERTPAYLOAD']._serialized_start=799
-  _globals['_ALERTPAYLOAD']._serialized_end=889
-  _globals['_SIGNALFRAME']._serialized_start=892
-  _globals['_SIGNALFRAME']._serialized_end=1152
-  _globals['_SIGNALCHANNEL']._serialized_start=1154
-  _globals['_SIGNALCHANNEL']._serialized_end=1258
+  _globals['_TELEMETRYPAYLOAD']._serialized_start=405
+  _globals['_TELEMETRYPAYLOAD']._serialized_end=538
+  _globals['_METRICSET']._serialized_start=540
+  _globals['_METRICSET']._serialized_end=593
+  _globals['_METRIC']._serialized_start=596
+  _globals['_METRIC']._serialized_end=754
+  _globals['_STATUSPAYLOAD']._serialized_start=756
+  _globals['_STATUSPAYLOAD']._serialized_end=874
+  _globals['_ALERTPAYLOAD']._serialized_start=876
+  _globals['_ALERTPAYLOAD']._serialized_end=966
+  _globals['_SIGNALFRAME']._serialized_start=969
+  _globals['_SIGNALFRAME']._serialized_end=1229
+  _globals['_SIGNALCHANNEL']._serialized_start=1231
+  _globals['_SIGNALCHANNEL']._serialized_end=1335
 # @@protoc_insertion_point(module_scope)

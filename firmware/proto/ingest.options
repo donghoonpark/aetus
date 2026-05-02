@@ -4,8 +4,8 @@ aetus.ingest.v1.MetricSet.metrics max_count:8
 aetus.ingest.v1.Metric.key max_size:24
 aetus.ingest.v1.Metric.unit max_size:16
 aetus.ingest.v1.SignalFrame.stream_key max_size:32
-aetus.ingest.v1.SignalFrame.channels max_count:8
-aetus.ingest.v1.SignalFrame.samples max_size:4096
+aetus.ingest.v1.SignalFrame.channels type:FT_CALLBACK
+aetus.ingest.v1.SignalFrame.samples type:FT_CALLBACK
 aetus.ingest.v1.SignalChannel.key max_size:24
 aetus.ingest.v1.SignalChannel.unit max_size:16
 aetus.ingest.v1.StatusPayload.reboot_reason max_size:24

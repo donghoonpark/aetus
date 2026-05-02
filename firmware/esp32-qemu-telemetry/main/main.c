@@ -38,9 +38,10 @@ static bool encode_telemetry_event(uint8_t *buffer, size_t buffer_size, size_t *
     event.timestamp_ns = AETUS_QEMU_TIMESTAMP_NS;
 
     event.which_body = aetus_ingest_v1_IngestEvent_telemetry_tag;
-    event.body.telemetry.metrics_count = 1;
+    event.body.telemetry.which_payload = aetus_ingest_v1_TelemetryPayload_metric_set_tag;
+    event.body.telemetry.payload.metric_set.metrics_count = 1;
 
-    aetus_ingest_v1_Metric *metric = &event.body.telemetry.metrics[0];
+    aetus_ingest_v1_Metric *metric = &event.body.telemetry.payload.metric_set.metrics[0];
     copy_string(metric->key, sizeof(metric->key), "temperature");
     metric->which_value = aetus_ingest_v1_Metric_double_value_tag;
     metric->value.double_value = 22.25;

@@ -128,7 +128,7 @@ Thread safety 규칙:
 
 ## 데이터 모델
 
-Telemetry는 sparse scalar 값에는 `repeated Metric + oneof value` protobuf 모델을 따른다. 고주파 numeric sample block은 같은 `TelemetryPayload` 안의 `SignalFrame`으로 전송하는 방향을 표준 계약에 추가했다.
+Telemetry는 `TelemetryPayload` 내부에서 상호 배타적인 두 경로를 가진다. sparse scalar 값에는 `MetricSet { repeated Metric + oneof value }`를 쓰고, 고주파 numeric sample block은 `SignalFrame`으로 전송한다.
 
 현재 C API에서 지원하는 metric value:
 
@@ -237,12 +237,9 @@ static void sensor_task(void *arg)
 
     while (true) {
         aetus_telemetry_t telemetry = {0};
-        telemetry.metric_count = 1;
-
-        strncpy(telemetry.metrics[0].key, "temperature", sizeof(telemetry.metrics[0].key) - 1);
-        telemetry.metrics[0].type = AETUS_METRIC_VALUE_DOUBLE;
-        telemetry.metrics[0].value.double_value = 22.5;
-        strncpy(telemetry.metrics[0].unit, "celsius", sizeof(telemetry.metrics[0].unit) - 1);
+        aetus_telemetry_init(&telemetry);
+        aetus_telemetry_set_timestamp_rtc(&telemetry);
+        aetus_telemetry_add_double(&telemetry, "temperature", 22.5, "celsius");
 
         esp_err_t err = aetus_enqueue_telemetry(&telemetry, pdMS_TO_TICKS(50));
         if (err != ESP_OK) {
@@ -253,6 +250,8 @@ static void sensor_task(void *arg)
     }
 }
 ```
+
+위 API는 현재 scalar metric 편의 계층이다. uploader task는 이를 protobuf `TelemetryPayload.metric_set`으로 인코딩해 서버로 전송한다. `SignalFrame` 전용 enqueue/helper API는 후속 구현 대상으로 남겨둔다.
 
 ## 현재 구현 범위
 

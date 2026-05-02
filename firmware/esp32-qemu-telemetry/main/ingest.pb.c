@@ -12,6 +12,9 @@ PB_BIND(aetus_ingest_v1_IngestEvent, aetus_ingest_v1_IngestEvent, 2)
 PB_BIND(aetus_ingest_v1_TelemetryPayload, aetus_ingest_v1_TelemetryPayload, 2)
 
 
+PB_BIND(aetus_ingest_v1_MetricSet, aetus_ingest_v1_MetricSet, 2)
+
+
 PB_BIND(aetus_ingest_v1_Metric, aetus_ingest_v1_Metric, AUTO)
 
 
@@ -19,6 +22,16 @@ PB_BIND(aetus_ingest_v1_StatusPayload, aetus_ingest_v1_StatusPayload, AUTO)
 
 
 PB_BIND(aetus_ingest_v1_AlertPayload, aetus_ingest_v1_AlertPayload, AUTO)
+
+
+PB_BIND(aetus_ingest_v1_SignalFrame, aetus_ingest_v1_SignalFrame, AUTO)
+
+
+PB_BIND(aetus_ingest_v1_SignalChannel, aetus_ingest_v1_SignalChannel, AUTO)
+
+
+
+
 
 
 

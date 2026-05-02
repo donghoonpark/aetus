@@ -42,8 +42,14 @@ message IngestEvent {
 }
 
 message TelemetryPayload {
+  oneof payload {
+    MetricSet metric_set = 1;
+    SignalFrame signal_frame = 2;
+  }
+}
+
+message MetricSet {
   repeated Metric metrics = 1;
-  SignalFrame signal_frame = 2;
 }
 
 message Metric {

@@ -25,7 +25,7 @@
 | `timestamp_ns` | `uint64` | 선택 | 장치 기준 ns 단위 절대시각 |
 | `body` | `oneof` | 필수 | 실제 이벤트 본문 |
 
-현재 `TelemetryPayload`는 두 종류의 데이터를 함께 담을 수 있다.
+현재 `TelemetryPayload`는 두 종류의 데이터를 상호 배타적으로 담는다.
 
 - `metrics`: 온도, 배터리, RSSI처럼 낮은 빈도의 sparse scalar telemetry
 - `signal_frame`: IMU, 진동, ADC burst처럼 일정 sampling interval을 가진 dense numeric sample block
@@ -36,8 +36,14 @@
 
 ```proto
 message TelemetryPayload {
+  oneof payload {
+    MetricSet metric_set = 1;
+    SignalFrame signal_frame = 2;
+  }
+}
+
+message MetricSet {
   repeated Metric metrics = 1;
-  SignalFrame signal_frame = 2;
 }
 
 message Metric {
@@ -89,7 +95,8 @@ message SignalChannel {
 - `samples` 길이는 `sample_count * channel_count * bytes_per_sample(encoding)`과 정확히 일치해야 한다.
 - `timestamp_ns`가 있으면 signal frame의 첫 sample 시각으로 해석한다.
 - `uptime_ms`가 있으면 signal frame의 첫 sample uptime 보조값으로 해석한다.
-- `metrics`와 `signal_frame`은 한 telemetry event 안에 같이 올 수 있지만, 서버는 각각 독립된 장기 적재 경로로 publish한다.
+- 한 telemetry event는 `metric_set` 또는 `signal_frame` 중 하나만 가진다.
+- 서버는 telemetry payload kind에 따라 metric pipeline 또는 signal frame pipeline 중 하나로 publish한다.
 
 ## 중복 방지 키
 
@@ -162,7 +169,7 @@ message SignalChannel {
 - `boot_id = "boot-20260427-01"`
 - `sequence = 0`
 - `event_type = EVENT_TYPE_TELEMETRY`
-- `telemetry.metrics = [temperature, humidity, battery]`
+- `telemetry.metric_set.metrics = [temperature, humidity, battery]`
 - 또는 `telemetry.signal_frame = imu.accel 200Hz 1초 frame`
 
 ## 서버 내부 이벤트 예시
@@ -181,6 +188,7 @@ message SignalChannel {
   "firmware_version": 1002003,
   "timestamp_ns": 1777242001000000000,
   "payload": {
+    "kind": "metric_set",
     "metrics": [
       {
         "key": "temperature",

@@ -71,6 +71,7 @@ def test_virtual_device_can_upload_telemetry() -> None:
     assert event["device_id"] == "esp32c5-test-001"
     assert event["sequence"] == 0
     assert event["event_type"] == "telemetry"
+    assert event["payload"]["kind"] == "metric_set"
     assert event["payload"]["metrics"][0]["key"] == "temperature"
     assert event["timestamp_ns"] is None
     assert len(publisher.metric_records) == 1
@@ -93,7 +94,7 @@ def test_virtual_device_can_upload_signal_frame() -> None:
     assert event["device_id"] == "esp32c5-test-001"
     assert event["event_type"] == "telemetry"
     assert event["timestamp_ns"] == 1_712_345_678_901_234_567
-    assert event["payload"]["metrics"] == []
+    assert event["payload"]["kind"] == "signal_frame"
 
     signal_frame = event["payload"]["signal_frame"]
     assert signal_frame["stream_key"] == "imu.accel"
@@ -480,7 +481,7 @@ def test_ingest_rejects_missing_boot_id() -> None:
         sequence=0,
         event_type=ingest_pb2.EVENT_TYPE_TELEMETRY,
     )
-    metric = event.telemetry.metrics.add()
+    metric = event.telemetry.metric_set.metrics.add()
     metric.key = "temperature"
     metric.double_value = 24.5
 
@@ -520,6 +521,31 @@ def test_ingest_rejects_missing_body() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "body missing"
+
+
+def test_ingest_rejects_missing_telemetry_payload_kind() -> None:
+    client, _ = make_client()
+    event = ingest_pb2.IngestEvent(
+        schema_version=1,
+        device_id="esp32c5-test-001",
+        boot_id="boot-unit-0001",
+        sequence=0,
+        event_type=ingest_pb2.EVENT_TYPE_TELEMETRY,
+    )
+    event.telemetry.SetInParent()
+
+    response = client.post(
+        "/v1/ingest",
+        content=event.SerializeToString(),
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "telemetry payload missing"
 
 
 def test_ingest_rejects_signal_frame_sample_length_mismatch() -> None:
