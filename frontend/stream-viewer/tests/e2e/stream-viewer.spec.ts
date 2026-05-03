@@ -21,19 +21,19 @@ test.beforeEach(async ({ page }) => {
     window.Date = MockDate as DateConstructor;
   }, now.toISOString());
 
-  await page.route("http://127.0.0.1:18001/v1/query/devices/query-device-1/streams", async (route) => {
+  await page.route("**/v1/query/devices/dense-device-1/streams", async (route) => {
     await route.fulfill({
       json: {
-        device_id: "query-device-1",
+        device_id: "dense-device-1",
         streams: [
           {
-            key: "temperature",
+            key: "dense.temperature",
             kind: "scalar",
             unit: "celsius",
             latest_event_time: "2026-05-03T01:00:00Z",
           },
           {
-            key: "imu.accel",
+            key: "dense.vibration",
             kind: "sampled",
             unit: "g",
             nominal_rate_hz: 277.8,
@@ -50,11 +50,11 @@ test.beforeEach(async ({ page }) => {
     });
   });
 
-  await page.route(/\/v1\/query\/devices\/query-device-1\/streams\/imu\.accel\/series.*/, async (route) => {
+  await page.route(/\/v1\/query\/devices\/dense-device-1\/streams\/dense\.vibration\/series.*/, async (route) => {
     await route.fulfill({
       json: {
-        device_id: "query-device-1",
-        key: "imu.accel",
+        device_id: "dense-device-1",
+        key: "dense.vibration",
         kind: "sampled",
         resolution: "4s",
         mode: "envelope",
@@ -80,11 +80,11 @@ test.beforeEach(async ({ page }) => {
     });
   });
 
-  await page.route(/\/v1\/query\/devices\/query-device-1\/streams\/temperature\/series.*/, async (route) => {
+  await page.route(/\/v1\/query\/devices\/dense-device-1\/streams\/dense\.temperature\/series.*/, async (route) => {
     await route.fulfill({
       json: {
-        device_id: "query-device-1",
-        key: "temperature",
+        device_id: "dense-device-1",
+        key: "dense.temperature",
         kind: "scalar",
         resolution: "raw",
         points: [
@@ -99,7 +99,7 @@ test.beforeEach(async ({ page }) => {
 test("renders sampled stream chart from query server URL", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "imu.accel" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
   await expect(page.locator("header").getByText("sampled")).toBeVisible();
   await expect(page.getByText("4 plotted points")).toBeVisible();
   await expect(page.locator("[data-testid='stream-chart'] canvas")).toBeVisible();
@@ -107,9 +107,9 @@ test("renders sampled stream chart from query server URL", async ({ page }) => {
 
 test("switches to scalar stream without changing component props", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /temperature/ }).click();
+  await page.getByRole("button", { name: /dense.temperature/ }).click();
 
-  await expect(page.getByRole("heading", { name: "temperature" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "dense.temperature" })).toBeVisible();
   await expect(page.locator("header").getByText("scalar")).toBeVisible();
   await expect(page.getByText("2 plotted points")).toBeVisible();
 });

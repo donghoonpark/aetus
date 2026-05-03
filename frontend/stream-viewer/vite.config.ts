@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 
 export default defineConfig({
   plugins: [vue()],
+  server: {
+    proxy: {
+      "/v1": "http://127.0.0.1:18001",
+    },
+  },
   build: {
     sourcemap: true,
     lib: {
