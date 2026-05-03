@@ -1,4 +1,5 @@
 .env.hil
+.DS_Store
 .obsidian/
 .playwright-cli/
 playwright-report/
@@ -9,6 +10,7 @@ __pycache__/
 .venv/
 node_modules/
 dist/
+target/
 data/
 panel*.png
 sdkconfig.old

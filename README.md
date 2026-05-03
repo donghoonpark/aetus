@@ -15,6 +15,8 @@
   ·
   <a href="clients/python-ingest">Python Client</a>
   ·
+  <a href="clients/rust-ingest">Rust Client</a>
+  ·
   <a href="frontend/ingest-control-panel">Control Panel</a>
 </p>
 
@@ -102,6 +104,7 @@ flowchart LR
 - RISC-V ESP32 QEMU firmware stream generator for heavier E2E validation
 - nanopb + pybind11 mock device used by Python tests
 - Python ingest client SDK for gateways, simulators, and non-ESP producers
+- Rust ingest client SDK for native gateways and high-throughput edge agents
 
 ## Repository Layout
 
@@ -109,6 +112,7 @@ flowchart LR
 compose/                    # Docker Compose stack for E2E testing
 clients/
   python-ingest/            # Python protobuf ingest client SDK
+  rust-ingest/              # Rust protobuf ingest client SDK
 docs/                       # Architecture, API, protobuf, storage, firmware notes
 firmware/
   esp32-aetus/              # Portable ESP-IDF upload component
