@@ -56,7 +56,7 @@ AETUS tries to keep those seams clean:
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     Device["Devices & SDK clients<br/>ESP-IDF / Python / Rust"] -->|"HTTP + protobuf"| Ingest["FastAPI ingest<br/>auth, parse, normalize"]
     Ingest -->|"raw, metric, signal events"| Kafka["Kafka topics"]
     Kafka -->|"JDBC Sink"| Storage["PostgreSQL / TimescaleDB<br/>raw short-retention + normalized time-series"]
@@ -64,7 +64,7 @@ flowchart LR
     Query --> UI["Vue dashboards<br/>control panel / stream viewer"]
 
     Admin["Admin / provisioning"] --> Ingest
-    Storage --> Admin
+    Admin -.-> Storage
 ```
 
 Detailed Kafka topic, staging table, trigger, and retention design lives in `docs/04-data-pipeline-and-storage.md`.
