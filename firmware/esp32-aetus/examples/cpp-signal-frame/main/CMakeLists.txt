@@ -72,7 +72,6 @@ idf_component_register(
         "${CMAKE_CURRENT_BINARY_DIR}"
     REQUIRES
         aetus
-        efuse
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -std=gnu++20)

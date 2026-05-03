@@ -32,10 +32,10 @@
 #define AETUS_UPLOAD_FLUSH_BIT BIT2
 #define AETUS_UPLOAD_DONE_BIT BIT3
 #define AETUS_HTTP_TIMEOUT_MS 10000
-#define AETUS_TASK_STACK_BYTES 8192
+#define AETUS_TASK_STACK_BYTES 12288
 #define AETUS_TASK_PRIORITY 5
 #define AETUS_WIFI_CONNECT_TIMEOUT_MS 15000
-#define AETUS_ENCODE_BUFFER_BYTES 1024
+#define AETUS_ENCODE_BUFFER_BYTES 4096
 #define AETUS_TIME_RESPONSE_BUFFER_BYTES 512
 #define AETUS_INGEST_PATH "/v1/ingest"
 #define AETUS_TIME_PATH "/v1/time"
@@ -47,6 +47,7 @@ static const char *TAG = "aetus";
 typedef enum {
     AETUS_QUEUE_ITEM_TELEMETRY = 0,
     AETUS_QUEUE_ITEM_STATUS = 1,
+    AETUS_QUEUE_ITEM_SIGNAL_FRAME = 2,
 } aetus_queue_item_kind_t;
 
 typedef struct {
@@ -54,6 +55,7 @@ typedef struct {
     union {
         aetus_telemetry_t telemetry;
         aetus_status_t status;
+        aetus_signal_frame_t signal_frame;
     } body;
 } aetus_queue_item_t;
 
@@ -61,6 +63,10 @@ typedef struct {
     const uint8_t *data;
     size_t size;
 } aetus_bytes_arg_t;
+
+typedef struct {
+    const aetus_signal_frame_t *frame;
+} aetus_signal_frame_arg_t;
 
 typedef struct {
     char *data;
@@ -307,6 +313,40 @@ static bool encode_bytes_callback(pb_ostream_t *stream, const pb_field_t *field,
     return pb_encode_string(stream, (const pb_byte_t *)value->data, value->size);
 }
 
+static bool encode_signal_channels_callback(pb_ostream_t *stream, const pb_field_t *field, void *const *arg)
+{
+    const aetus_signal_frame_arg_t *value = (const aetus_signal_frame_arg_t *)(*arg);
+    if (value == NULL || value->frame == NULL) {
+        return true;
+    }
+
+    uint32_t channel_count = value->frame->channel_count;
+    if (channel_count > AETUS_SIGNAL_CHANNELS_MAX) {
+        channel_count = AETUS_SIGNAL_CHANNELS_MAX;
+    }
+
+    for (uint32_t index = 0; index < channel_count; index++) {
+        const aetus_signal_channel_t *source = &value->frame->channels[index];
+        aetus_ingest_v1_SignalChannel channel = aetus_ingest_v1_SignalChannel_init_zero;
+
+        copy_string(channel.key, sizeof(channel.key), source->key);
+        copy_string(channel.unit, sizeof(channel.unit), source->unit);
+        channel.has_scale = source->has_scale;
+        channel.scale = source->scale;
+        channel.has_offset = source->has_offset;
+        channel.offset = source->offset;
+
+        if (!pb_encode_tag_for_field(stream, field)) {
+            return false;
+        }
+        if (!pb_encode_submessage(stream, aetus_ingest_v1_SignalChannel_fields, &channel)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static aetus_ingest_v1_DeviceStatus map_device_status(aetus_device_status_t status)
 {
     switch (status) {
@@ -319,6 +359,87 @@ static aetus_ingest_v1_DeviceStatus map_device_status(aetus_device_status_t stat
     default:
         return aetus_ingest_v1_DeviceStatus_DEVICE_STATUS_UNSPECIFIED;
     }
+}
+
+static aetus_ingest_v1_SignalSampleEncoding map_signal_encoding(aetus_signal_encoding_t encoding)
+{
+    switch (encoding) {
+    case AETUS_SIGNAL_ENCODING_INT16_LE:
+        return aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_INT16_LE;
+    case AETUS_SIGNAL_ENCODING_UINT16_LE:
+        return aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_UINT16_LE;
+    case AETUS_SIGNAL_ENCODING_INT32_LE:
+        return aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_INT32_LE;
+    case AETUS_SIGNAL_ENCODING_FLOAT32_LE:
+    default:
+        return aetus_ingest_v1_SignalSampleEncoding_SIGNAL_SAMPLE_ENCODING_FLOAT32_LE;
+    }
+}
+
+static aetus_ingest_v1_SignalSampleLayout map_signal_layout(aetus_signal_layout_t layout)
+{
+    switch (layout) {
+    case AETUS_SIGNAL_LAYOUT_PLANAR:
+        return aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_PLANAR;
+    case AETUS_SIGNAL_LAYOUT_INTERLEAVED:
+    default:
+        return aetus_ingest_v1_SignalSampleLayout_SIGNAL_SAMPLE_LAYOUT_INTERLEAVED;
+    }
+}
+
+static size_t signal_sample_width_bytes(aetus_signal_encoding_t encoding)
+{
+    switch (encoding) {
+    case AETUS_SIGNAL_ENCODING_INT16_LE:
+    case AETUS_SIGNAL_ENCODING_UINT16_LE:
+        return 2U;
+    case AETUS_SIGNAL_ENCODING_FLOAT32_LE:
+    case AETUS_SIGNAL_ENCODING_INT32_LE:
+        return 4U;
+    default:
+        return 0U;
+    }
+}
+
+static esp_err_t expected_signal_samples_size(const aetus_signal_frame_t *frame, size_t *expected_size)
+{
+    ESP_RETURN_ON_FALSE(frame != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame is required");
+    ESP_RETURN_ON_FALSE(expected_size != NULL, ESP_ERR_INVALID_ARG, TAG, "expected size output is required");
+
+    size_t sample_width = signal_sample_width_bytes(frame->encoding);
+    ESP_RETURN_ON_FALSE(sample_width > 0U, ESP_ERR_INVALID_ARG, TAG, "signal encoding unsupported");
+    ESP_RETURN_ON_FALSE(
+        frame->channel_count == 0U || (size_t)frame->sample_count <= (SIZE_MAX / (size_t)frame->channel_count),
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "signal frame size overflow"
+    );
+
+    size_t total = (size_t)frame->sample_count * (size_t)frame->channel_count;
+    ESP_RETURN_ON_FALSE(total == 0U || total <= (SIZE_MAX / sample_width), ESP_ERR_INVALID_ARG, TAG, "signal frame byte size overflow");
+    *expected_size = total * sample_width;
+    return ESP_OK;
+}
+
+static esp_err_t validate_signal_frame(const aetus_signal_frame_t *frame)
+{
+    ESP_RETURN_ON_FALSE(frame != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame is required");
+    ESP_RETURN_ON_FALSE(frame->stream_key[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "signal frame stream key is required");
+    ESP_RETURN_ON_FALSE(frame->sample_interval_ns > 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame sample interval is required");
+    ESP_RETURN_ON_FALSE(frame->sample_count > 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame sample count is required");
+    ESP_RETURN_ON_FALSE(frame->channel_count > 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame channel count is required");
+    ESP_RETURN_ON_FALSE(frame->channel_count <= AETUS_SIGNAL_CHANNELS_MAX, ESP_ERR_INVALID_ARG, TAG, "too many signal channels");
+    ESP_RETURN_ON_FALSE(frame->samples_size > 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame samples are required");
+    ESP_RETURN_ON_FALSE(frame->samples_size <= AETUS_SIGNAL_SAMPLES_MAX, ESP_ERR_INVALID_ARG, TAG, "signal frame samples too large");
+
+    for (uint32_t index = 0; index < frame->channel_count; index++) {
+        ESP_RETURN_ON_FALSE(frame->channels[index].key[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "signal channel key is required");
+    }
+
+    size_t expected_size = 0;
+    ESP_RETURN_ON_ERROR(expected_signal_samples_size(frame, &expected_size), TAG, "signal frame size validation failed");
+    ESP_RETURN_ON_FALSE(expected_size == frame->samples_size, ESP_ERR_INVALID_ARG, TAG, "signal frame sample size mismatch");
+    return ESP_OK;
 }
 
 static void wifi_event_handler(
@@ -742,6 +863,54 @@ static bool encode_telemetry(
     return true;
 }
 
+static bool encode_signal_frame(
+    aetus_ctx_t *ctx,
+    const aetus_signal_frame_t *frame,
+    uint8_t *buffer,
+    size_t buffer_size,
+    size_t *encoded_size
+)
+{
+    if (validate_signal_frame(frame) != ESP_OK) {
+        return false;
+    }
+
+    aetus_ingest_v1_IngestEvent event = aetus_ingest_v1_IngestEvent_init_zero;
+    aetus_signal_frame_arg_t channel_arg = {
+        .frame = frame,
+    };
+    aetus_bytes_arg_t samples_arg = {
+        .data = frame->samples,
+        .size = frame->samples_size,
+    };
+
+    fill_event_header(ctx, &event);
+    event.event_type = aetus_ingest_v1_EventType_EVENT_TYPE_TELEMETRY;
+    event.timestamp_ns = frame->timestamp_ns;
+    event.which_body = aetus_ingest_v1_IngestEvent_telemetry_tag;
+    event.body.telemetry.which_payload = aetus_ingest_v1_TelemetryPayload_signal_frame_tag;
+
+    aetus_ingest_v1_SignalFrame *target = &event.body.telemetry.payload.signal_frame;
+    copy_string(target->stream_key, sizeof(target->stream_key), frame->stream_key);
+    target->sample_interval_ns = frame->sample_interval_ns;
+    target->sample_count = frame->sample_count;
+    target->encoding = map_signal_encoding(frame->encoding);
+    target->layout = map_signal_layout(frame->layout);
+    target->channels.funcs.encode = encode_signal_channels_callback;
+    target->channels.arg = &channel_arg;
+    target->samples.funcs.encode = encode_bytes_callback;
+    target->samples.arg = &samples_arg;
+
+    pb_ostream_t stream = pb_ostream_from_buffer(buffer, buffer_size);
+    if (!pb_encode(&stream, aetus_ingest_v1_IngestEvent_fields, &event)) {
+        ESP_LOGE(TAG, "protobuf signal frame encode failed");
+        return false;
+    }
+
+    *encoded_size = stream.bytes_written;
+    return true;
+}
+
 static bool encode_status(
     aetus_ctx_t *ctx,
     const aetus_status_t *status,
@@ -780,6 +949,9 @@ static bool encode_queue_item(
 {
     if (item->kind == AETUS_QUEUE_ITEM_STATUS) {
         return encode_status(ctx, &item->body.status, buffer, buffer_size, encoded_size);
+    }
+    if (item->kind == AETUS_QUEUE_ITEM_SIGNAL_FRAME) {
+        return encode_signal_frame(ctx, &item->body.signal_frame, buffer, buffer_size, encoded_size);
     }
     return encode_telemetry(ctx, &item->body.telemetry, buffer, buffer_size, encoded_size);
 }
@@ -901,6 +1073,16 @@ void aetus_telemetry_init(aetus_telemetry_t *telemetry)
     memset(telemetry, 0, sizeof(*telemetry));
 }
 
+void aetus_signal_frame_init(aetus_signal_frame_t *frame)
+{
+    if (frame == NULL) {
+        return;
+    }
+    memset(frame, 0, sizeof(*frame));
+    frame->encoding = AETUS_SIGNAL_ENCODING_FLOAT32_LE;
+    frame->layout = AETUS_SIGNAL_LAYOUT_INTERLEAVED;
+}
+
 void aetus_status_init(aetus_status_t *status, aetus_device_status_t device_status)
 {
     if (status == NULL) {
@@ -945,6 +1127,12 @@ esp_err_t aetus_telemetry_set_timestamp_rtc(aetus_telemetry_t *telemetry)
 {
     ESP_RETURN_ON_FALSE(telemetry != NULL, ESP_ERR_INVALID_ARG, TAG, "telemetry is required");
     return aetus_rtc_timestamp_ns(&telemetry->timestamp_ns);
+}
+
+esp_err_t aetus_signal_frame_set_timestamp_rtc(aetus_signal_frame_t *frame)
+{
+    ESP_RETURN_ON_FALSE(frame != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame is required");
+    return aetus_rtc_timestamp_ns(&frame->timestamp_ns);
 }
 
 esp_err_t aetus_status_set_timestamp_rtc(aetus_status_t *status)
@@ -1060,6 +1248,59 @@ esp_err_t aetus_telemetry_add_bytes(
         memcpy(metric->value.bytes_value.data, value, value_size);
     }
     metric->value.bytes_value.size = value_size;
+    return ESP_OK;
+}
+
+esp_err_t aetus_signal_frame_set_stream_key(aetus_signal_frame_t *frame, const char *stream_key)
+{
+    ESP_RETURN_ON_FALSE(frame != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame is required");
+    ESP_RETURN_ON_FALSE(stream_key != NULL && stream_key[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "signal stream key is required");
+    ESP_RETURN_ON_FALSE(string_fits(stream_key, sizeof(frame->stream_key)), ESP_ERR_INVALID_ARG, TAG, "signal stream key too long");
+    copy_string(frame->stream_key, sizeof(frame->stream_key), stream_key);
+    return ESP_OK;
+}
+
+esp_err_t aetus_signal_frame_add_channel(
+    aetus_signal_frame_t *frame,
+    const char *key,
+    const char *unit,
+    const float *scale,
+    const float *offset
+)
+{
+    ESP_RETURN_ON_FALSE(frame != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame is required");
+    ESP_RETURN_ON_FALSE(key != NULL && key[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "signal channel key is required");
+    ESP_RETURN_ON_FALSE(string_fits(key, AETUS_METRIC_KEY_MAX), ESP_ERR_INVALID_ARG, TAG, "signal channel key too long");
+    ESP_RETURN_ON_FALSE(string_fits(unit, AETUS_METRIC_UNIT_MAX), ESP_ERR_INVALID_ARG, TAG, "signal channel unit too long");
+    ESP_RETURN_ON_FALSE(frame->channel_count < AETUS_SIGNAL_CHANNELS_MAX, ESP_ERR_INVALID_ARG, TAG, "too many signal channels");
+
+    aetus_signal_channel_t *channel = &frame->channels[frame->channel_count];
+    memset(channel, 0, sizeof(*channel));
+    copy_string(channel->key, sizeof(channel->key), key);
+    copy_string(channel->unit, sizeof(channel->unit), unit);
+    if (scale != NULL) {
+        channel->has_scale = true;
+        channel->scale = *scale;
+    }
+    if (offset != NULL) {
+        channel->has_offset = true;
+        channel->offset = *offset;
+    }
+
+    frame->channel_count++;
+    return ESP_OK;
+}
+
+esp_err_t aetus_signal_frame_set_samples(aetus_signal_frame_t *frame, const void *samples, size_t samples_size)
+{
+    ESP_RETURN_ON_FALSE(frame != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame is required");
+    ESP_RETURN_ON_FALSE(samples != NULL || samples_size == 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame samples are required");
+    ESP_RETURN_ON_FALSE(samples_size <= AETUS_SIGNAL_SAMPLES_MAX, ESP_ERR_INVALID_ARG, TAG, "signal frame samples too large");
+
+    if (samples_size > 0U) {
+        memcpy(frame->samples, samples, samples_size);
+    }
+    frame->samples_size = samples_size;
     return ESP_OK;
 }
 
@@ -1252,6 +1493,19 @@ esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t
     aetus_queue_item_t item = {
         .kind = AETUS_QUEUE_ITEM_TELEMETRY,
         .body.telemetry = *telemetry,
+    };
+    return xQueueSend(s_ctx.queue, &item, timeout) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+esp_err_t aetus_enqueue_signal_frame(const aetus_signal_frame_t *frame, TickType_t timeout)
+{
+    ESP_RETURN_ON_FALSE(frame != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame is required");
+    ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
+    ESP_RETURN_ON_ERROR(validate_signal_frame(frame), TAG, "signal frame validation failed");
+
+    aetus_queue_item_t item = {
+        .kind = AETUS_QUEUE_ITEM_SIGNAL_FRAME,
+        .body.signal_frame = *frame,
     };
     return xQueueSend(s_ctx.queue, &item, timeout) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }

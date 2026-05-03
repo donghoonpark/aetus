@@ -16,6 +16,9 @@ extern "C" {
 #define AETUS_METRIC_UNIT_MAX 16
 #define AETUS_METRIC_STRING_MAX 64
 #define AETUS_METRIC_BYTES_MAX 64
+#define AETUS_SIGNAL_STREAM_KEY_MAX 32
+#define AETUS_SIGNAL_CHANNELS_MAX 4
+#define AETUS_SIGNAL_SAMPLES_MAX 2048
 #define AETUS_WIFI_SSID_MAX 32
 #define AETUS_WIFI_PASSWORD_MAX 64
 #define AETUS_WIFI_IDENTITY_MAX 127
@@ -56,6 +59,40 @@ typedef struct {
     uint32_t metric_count;
     aetus_metric_t metrics[AETUS_MAX_METRICS];
 } aetus_telemetry_t;
+
+typedef enum {
+    AETUS_SIGNAL_ENCODING_FLOAT32_LE = 0,
+    AETUS_SIGNAL_ENCODING_INT16_LE = 1,
+    AETUS_SIGNAL_ENCODING_UINT16_LE = 2,
+    AETUS_SIGNAL_ENCODING_INT32_LE = 3,
+} aetus_signal_encoding_t;
+
+typedef enum {
+    AETUS_SIGNAL_LAYOUT_INTERLEAVED = 0,
+    AETUS_SIGNAL_LAYOUT_PLANAR = 1,
+} aetus_signal_layout_t;
+
+typedef struct {
+    char key[AETUS_METRIC_KEY_MAX];
+    char unit[AETUS_METRIC_UNIT_MAX];
+    bool has_scale;
+    float scale;
+    bool has_offset;
+    float offset;
+} aetus_signal_channel_t;
+
+typedef struct {
+    uint64_t timestamp_ns;
+    char stream_key[AETUS_SIGNAL_STREAM_KEY_MAX];
+    uint64_t sample_interval_ns;
+    uint32_t sample_count;
+    aetus_signal_encoding_t encoding;
+    aetus_signal_layout_t layout;
+    uint32_t channel_count;
+    aetus_signal_channel_t channels[AETUS_SIGNAL_CHANNELS_MAX];
+    uint8_t samples[AETUS_SIGNAL_SAMPLES_MAX];
+    size_t samples_size;
+} aetus_signal_frame_t;
 
 typedef enum {
     AETUS_DEVICE_STATUS_ONLINE = 0,
@@ -116,10 +153,12 @@ typedef struct {
 } aetus_provisioning_config_t;
 
 void aetus_telemetry_init(aetus_telemetry_t *telemetry);
+void aetus_signal_frame_init(aetus_signal_frame_t *frame);
 void aetus_status_init(aetus_status_t *status, aetus_device_status_t device_status);
 esp_err_t aetus_status_set_reboot_reason(aetus_status_t *status, const char *reboot_reason);
 esp_err_t aetus_rtc_timestamp_ns(uint64_t *timestamp_ns);
 esp_err_t aetus_telemetry_set_timestamp_rtc(aetus_telemetry_t *telemetry);
+esp_err_t aetus_signal_frame_set_timestamp_rtc(aetus_signal_frame_t *frame);
 esp_err_t aetus_status_set_timestamp_rtc(aetus_status_t *status);
 esp_err_t aetus_telemetry_add_int64(
     aetus_telemetry_t *telemetry,
@@ -152,12 +191,22 @@ esp_err_t aetus_telemetry_add_bytes(
     size_t value_size,
     const char *unit
 );
+esp_err_t aetus_signal_frame_set_stream_key(aetus_signal_frame_t *frame, const char *stream_key);
+esp_err_t aetus_signal_frame_add_channel(
+    aetus_signal_frame_t *frame,
+    const char *key,
+    const char *unit,
+    const float *scale,
+    const float *offset
+);
+esp_err_t aetus_signal_frame_set_samples(aetus_signal_frame_t *frame, const void *samples, size_t samples_size);
 esp_err_t aetus_start(const aetus_config_t *config);
 esp_err_t aetus_update_config(const aetus_config_t *config);
 esp_err_t aetus_get_config(aetus_config_t *config);
 esp_err_t aetus_start_provisioning(const aetus_provisioning_config_t *config);
 esp_err_t aetus_sync_rtc(TickType_t timeout);
 esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t timeout);
+esp_err_t aetus_enqueue_signal_frame(const aetus_signal_frame_t *frame, TickType_t timeout);
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout);
 esp_err_t aetus_flush(TickType_t timeout);
 

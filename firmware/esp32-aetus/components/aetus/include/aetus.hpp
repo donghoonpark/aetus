@@ -265,6 +265,179 @@ private:
     esp_err_t error_{ESP_OK};
 };
 
+class SignalFrame {
+public:
+    SignalFrame()
+    {
+        aetus_signal_frame_init(&value_);
+    }
+
+    SignalFrame &timestamp(uint64_t timestamp_ns)
+    {
+        value_.timestamp_ns = timestamp_ns;
+        return *this;
+    }
+
+    SignalFrame &timestamp_from_rtc()
+    {
+        remember(try_timestamp_from_rtc());
+        return *this;
+    }
+
+    esp_err_t try_timestamp_from_rtc()
+    {
+        return aetus_signal_frame_set_timestamp_rtc(&value_);
+    }
+
+    SignalFrame &stream_key(std::string_view stream_key_value)
+    {
+        char buffer[AETUS_SIGNAL_STREAM_KEY_MAX] = {};
+        if (!copy_string(buffer, stream_key_value)) {
+            remember(ESP_ERR_INVALID_ARG);
+            return *this;
+        }
+        remember(aetus_signal_frame_set_stream_key(&value_, buffer));
+        return *this;
+    }
+
+    SignalFrame &sample_interval_ns(uint64_t interval_ns)
+    {
+        value_.sample_interval_ns = interval_ns;
+        return *this;
+    }
+
+    SignalFrame &sample_count(uint32_t count)
+    {
+        value_.sample_count = count;
+        return *this;
+    }
+
+    SignalFrame &encoding_float32_le()
+    {
+        value_.encoding = AETUS_SIGNAL_ENCODING_FLOAT32_LE;
+        return *this;
+    }
+
+    SignalFrame &encoding_int16_le()
+    {
+        value_.encoding = AETUS_SIGNAL_ENCODING_INT16_LE;
+        return *this;
+    }
+
+    SignalFrame &encoding_uint16_le()
+    {
+        value_.encoding = AETUS_SIGNAL_ENCODING_UINT16_LE;
+        return *this;
+    }
+
+    SignalFrame &encoding_int32_le()
+    {
+        value_.encoding = AETUS_SIGNAL_ENCODING_INT32_LE;
+        return *this;
+    }
+
+    SignalFrame &layout_interleaved()
+    {
+        value_.layout = AETUS_SIGNAL_LAYOUT_INTERLEAVED;
+        return *this;
+    }
+
+    SignalFrame &layout_planar()
+    {
+        value_.layout = AETUS_SIGNAL_LAYOUT_PLANAR;
+        return *this;
+    }
+
+    SignalFrame &add_channel(std::string_view key, std::string_view unit = {})
+    {
+        return add_channel_internal(key, unit, nullptr, nullptr);
+    }
+
+    SignalFrame &add_channel_with_scale(std::string_view key, std::string_view unit, float scale)
+    {
+        return add_channel_internal(key, unit, &scale, nullptr);
+    }
+
+    SignalFrame &add_channel_with_affine(std::string_view key, std::string_view unit, float scale, float offset)
+    {
+        return add_channel_internal(key, unit, &scale, &offset);
+    }
+
+    SignalFrame &set_sample_bytes(std::span<const uint8_t> bytes)
+    {
+        remember(aetus_signal_frame_set_samples(&value_, bytes.data(), bytes.size()));
+        return *this;
+    }
+
+    template <typename T>
+    SignalFrame &set_samples(std::span<const T> samples)
+    {
+        const auto *bytes = reinterpret_cast<const uint8_t *>(samples.data());
+        const size_t byte_size = samples.size_bytes();
+        remember(aetus_signal_frame_set_samples(&value_, bytes, byte_size));
+        return *this;
+    }
+
+    [[nodiscard]] const aetus_signal_frame_t &get() const
+    {
+        return value_;
+    }
+
+    [[nodiscard]] esp_err_t error() const
+    {
+        return error_;
+    }
+
+    [[nodiscard]] esp_err_t enqueue(TickType_t timeout) const
+    {
+        if (error_ != ESP_OK) {
+            return error_;
+        }
+        return aetus_enqueue_signal_frame(&value_, timeout);
+    }
+
+private:
+    void remember(esp_err_t err)
+    {
+        if (error_ == ESP_OK && err != ESP_OK) {
+            error_ = err;
+        }
+    }
+
+    SignalFrame &add_channel_internal(
+        std::string_view key,
+        std::string_view unit,
+        const float *scale,
+        const float *offset
+    )
+    {
+        char key_buffer[AETUS_METRIC_KEY_MAX] = {};
+        char unit_buffer[AETUS_METRIC_UNIT_MAX] = {};
+        if (!copy_string(key_buffer, key) || !copy_string(unit_buffer, unit)) {
+            remember(ESP_ERR_INVALID_ARG);
+            return *this;
+        }
+        remember(aetus_signal_frame_add_channel(&value_, key_buffer, unit_buffer, scale, offset));
+        return *this;
+    }
+
+    template <size_t N>
+    static bool copy_string(char (&target)[N], std::string_view source)
+    {
+        static_assert(N > 0);
+        if (source.size() >= N) {
+            target[0] = '\0';
+            return false;
+        }
+        std::memcpy(target, source.data(), source.size());
+        target[source.size()] = '\0';
+        return true;
+    }
+
+    aetus_signal_frame_t value_{};
+    esp_err_t error_{ESP_OK};
+};
+
 class Status {
 public:
     explicit Status(aetus_device_status_t status = AETUS_DEVICE_STATUS_ONLINE)
