@@ -550,32 +550,63 @@ flowchart LR
 
 ## 표준 컴포넌트 경계
 
-권장 방향은 query frontend를 페이지가 아니라 재사용 가능한 컴포넌트로 두는 것이다.
+query frontend는 페이지가 아니라 재사용 가능한 컴포넌트로 둔다.
 
-예시:
+현재 구현:
 
+- 위치: `frontend/stream-viewer`
 - package name: `@aetus/stream-viewer`
 - framework: `Vue 3`
+- UI: `Naive UI`
 - chart engine: `ECharts`
+- export: `AetusStreamViewer`
 
-기본 props 예시:
+기본 props:
 
 | Prop | 설명 |
 | --- | --- |
-| `baseUrl` | query-api base URL |
-| `deviceId` | 현재 장치 ID |
-| `streamKey` | 현재 stream key |
-| `defaultFrom` | 초기 시작 시각 |
-| `defaultTo` | 초기 종료 시각 |
-| `authToken` | 조회용 bearer token 또는 session token |
-| `maxPointsPerRequest` | 기본 차트 해상도 상한 |
+| `queryServerUrl` | query-api base URL |
+| `deviceId` | 초기 장치 ID. 컴포넌트 안에서 수정 가능 |
+| `initialStreamKey` | 초기 stream key |
+| `maxPointsPerRequest` | 기본 차트 해상도 상한. 기본값 `1500` |
 
-컴포넌트가 외부로 내보내는 이벤트 예시:
+사용 예:
+
+```vue
+<script setup lang="ts">
+import { AetusStreamViewer } from "@aetus/stream-viewer";
+import "@aetus/stream-viewer/style.css";
+</script>
+
+<template>
+  <AetusStreamViewer
+    query-server-url="http://127.0.0.1:18001"
+    device-id="dense-device-1"
+    initial-stream-key="dense.vibration"
+  />
+</template>
+```
+
+현재 컴포넌트 동작:
+
+- `GET /v1/query/devices/{device_id}/streams`로 stream metadata 조회
+- `GET /v1/query/devices/{device_id}/streams/{key}/series`로 chart series 조회
+- `scalar` stream은 단일 line series로 렌더링
+- `sampled` stream은 channel별 min/max envelope로 렌더링
+- `10m`, `1h`, `6h`, `1d` 범위 preset과 `max_points` 제어 제공
+
+향후 host application 연동 시 추가할 수 있는 이벤트:
 
 - `range-change`
 - `stream-change`
 - `point-click`
 - `request-error`
+
+현재 e2e 검증:
+
+- query-api base URL을 prop으로만 받아 mocked query-api와 통신
+- sampled stream 렌더링
+- scalar stream 전환 렌더링
 
 ## 인증/인가 방향
 
@@ -636,17 +667,48 @@ flowchart TB
 
 ## 권장 구현 순서
 
+완료:
+
 1. `query-api` read-only FastAPI service 생성
 2. `GET /streams`, `GET /summary` JSON 엔드포인트 구현
 3. `GET /series`, `GET /frames` JSON 엔드포인트 구현
-4. `gzip` / `br` 응답 압축과 threshold 정책 적용
-5. raw frame 기반의 좁은 구간 조회부터 구현
-6. 고정 `x4` tier rollup table과 DB internal job 추가
-7. `Redis` cache 연결
-8. `signal_frame_features` on-demand materialization 추가
-9. `Vue + ECharts` 표준 viewer 컴포넌트 작성
-10. overview, zoom, drill-down UX 연결
-11. feature-based search/filter 추가
+4. `gzip` 응답 압축 적용
+5. raw frame 기반의 좁은 구간 조회 구현
+6. `Redis` cache 연결
+7. `signal_frame_features` on-demand materialization 추가
+8. `Vue + Naive UI + ECharts` 표준 viewer 컴포넌트 작성
+9. frontend mocked e2e 추가
+
+남은 작업:
+
+1. 고정 `x4` tier rollup 생성 job 구현
+2. overview, zoom, drill-down UX 연결
+3. feature-based search/filter 추가
+4. query-api 인증/인가 구현
+5. `br` 압축 또는 reverse proxy 압축 정책 확정
+
+## 고밀도 테스트 데이터 생성
+
+대량 signal query와 frontend 렌더링을 확인하기 위해 `services/query-api/tools/seed_dense_query_data.py`를 둔다.
+
+기본값은 `1시간` 구간에 `1,002,000` sample point를 생성한다.
+
+```bash
+cd services/query-api
+uv run python tools/seed_dense_query_data.py \
+  --dsn postgresql://aetus:aetus@127.0.0.1:15432/aetus \
+  --device-id dense-device-1 \
+  --stream-key dense.vibration \
+  --points 1002000 \
+  --duration-seconds 3600
+```
+
+생성 방식:
+
+- `devices`, `device_boot_sessions`, `signal_stream_definitions` dimension row 생성 또는 재사용
+- `device_signal_frames`에 `float32_le` / `interleaved` frame block 삽입
+- 기본 `frame_samples=1000`이므로 100만 point는 약 1002개 frame row로 저장
+- frontend는 `dense-device-1`과 `dense.vibration`을 지정해 query-api 경유로 조회할 수 있다
 
 ## 현재 시점의 권장 결정
 
@@ -669,5 +731,5 @@ flowchart TB
 
 아래는 구현 전에 한 번 더 합의하면 좋다.
 
-1. `signal_frame_features` on-demand materialization 시 raw `BYTEA`를 어디서 decode할지
-2. query-api 인증을 최종적으로 내부망 세션으로 둘지, 별도 read-only token도 둘지
+1. query-api 인증을 최종적으로 내부망 세션으로 둘지, 별도 read-only token도 둘지
+2. rollup 생성 job을 Timescale background job으로 둘지, 별도 worker로 둘지

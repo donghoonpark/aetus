@@ -44,6 +44,7 @@
 - 표준 업로드 컴포넌트는 `firmware/esp32-aetus`에 위치하며 유저 task는 thread-safe enqueue API만 호출한다
 - `firmware/examples`는 표준 컴포넌트를 실제 ESP-IDF app으로 소비하는 빌드 가능한 예제를 제공한다
 - signal visualization은 ingest API와 분리된 `query-api`에서 고정 `x4` rollup tier, `Redis` cache, `JSON + gzip/br` 압축 응답을 사용하는 방향을 기본안으로 둔다
+- 조회용 표준 프론트엔드는 `frontend/stream-viewer`의 `@aetus/stream-viewer` Vue 컴포넌트로 제공하며, query-api URL만 지정해 이식할 수 있다
 - bootstrap token은 단일 공용 token이며 유출/공유를 전제로 매우 가혹한 제한만 둔다
 - provisioning allowlist는 `source IP + hardware_id` 기준으로 FastAPI에서 관리한다
 - HMAC-SHA256 ingest 인증은 bearer token과 병행하는 선택 경로로 구현되어 있다

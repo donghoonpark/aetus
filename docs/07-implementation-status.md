@@ -46,6 +46,8 @@ services/
   - ESP-IDF portable upload stack component
 - `firmware/esp32c5-upload-smoke`
   - `firmware/esp32-aetus`를 소비하는 ESP32-C5 HIL app
+- `frontend/stream-viewer`
+  - query-api용 portable Vue stream viewer component
 - `compose/e2e-compose.yml`
   - 전체 파이프라인 및 query-api E2E 실행용 compose
 
@@ -365,6 +367,48 @@ TimescaleDB 설정:
 - PostgreSQL은 raw 저장, 범위 조회, feature/rollup upsert, retention을 담당
 - query-api 인증은 아직 구현 범위 밖이며 open decision으로 남아 있다
 
+고밀도 테스트 데이터:
+
+- [[../services/query-api/tools/seed_dense_query_data.py]]
+- 기본값은 `1시간 / 1,002,000 sample point / float32_le / interleaved` signal frame을 생성한다.
+- `device_signal_frames`에 frame block 단위로 삽입하므로 대량 point를 row-per-sample로 만들지 않는다.
+
+## 4-2. Portable Vue Stream Viewer
+
+구현 위치:
+
+- [[../frontend/stream-viewer/src/AetusStreamViewer.vue]]
+- [[../frontend/stream-viewer/src/index.ts]]
+- [[../frontend/stream-viewer/src/demo/App.vue]]
+- [[../frontend/stream-viewer/tests/e2e/stream-viewer.spec.ts]]
+
+현재 방향:
+
+- `Vue 3 + Naive UI + ECharts`
+- 단일 컴포넌트 export: `AetusStreamViewer`
+- `queryServerUrl` prop 기반
+- 다른 운영 콘솔에 이식 가능한 구조
+
+현재 지원 기능:
+
+- device ID 입력
+- stream 목록 조회
+- scalar/sampled stream 구분 표기
+- `GET /series` 기반 chart 렌더링
+- scalar stream line chart
+- sampled stream channel별 min/max envelope chart
+- `10m`, `1h`, `6h`, `1d` 범위 preset
+- `max_points` 제어
+
+로컬 빌드와 테스트:
+
+```bash
+cd frontend/stream-viewer
+npm install
+npm run build
+npm run test:e2e
+```
+
 ## 5. Mock Device
 
 구현 위치:
@@ -508,6 +552,7 @@ uv run pytest -q
 - ingest unit: `34 passed`
 - ingest PostgreSQL/Kafka e2e: `22 passed`
 - query-api unit/e2e: `15 passed`
+- stream-viewer frontend e2e: `2 passed`
 - QEMU e2e: 기본 실행에서는 skip, `AETUS_RUN_QEMU_E2E=1`일 때 별도 실행
 
 ### unit coverage
@@ -579,6 +624,16 @@ uv run pytest -q
 13. compose 기반 PostgreSQL/Redis/query-api 기동
 14. 실제 `signal_frame_features` row 생성 확인
 15. 실제 `BYTEA samples` decode 후 raw frame JSON 반환 확인
+
+### stream-viewer frontend coverage
+
+현재 frontend e2e는 다음을 커버한다.
+
+1. mocked query-api URL을 `queryServerUrl` prop으로 전달
+2. stream metadata 조회
+3. sampled stream의 channel min/max envelope chart 렌더링
+4. scalar stream으로 전환
+5. scalar stream chart 렌더링
 
 ### qemu_e2e coverage
 
@@ -701,6 +756,8 @@ uv run pytest -q
 - [[../firmware/esp32-aetus/components/aetus/aetus.c]]
 - [[../firmware/esp32c5-upload-smoke/main/main.c]]
 - [[../frontend/ingest-control-panel/src/IngestControlPanel.vue]]
+- [[../frontend/stream-viewer/src/AetusStreamViewer.vue]]
+- [[../services/query-api/tools/seed_dense_query_data.py]]
 - [[../compose/e2e-compose.yml]]
 
 ## 추천 다음 작업
@@ -708,6 +765,7 @@ uv run pytest -q
 - admin page 보호 방식 결정
 - query-api 인증 방식 결정
 - query rollup background job 구현
+- stream viewer zoom/drill-down UX 구현
 - control DB backend abstraction
 - control panel 인증/배포 방식 결정
 - provisioning audit log 추가
