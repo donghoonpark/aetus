@@ -19,6 +19,7 @@ compose/
 firmware/
 services/
   ingest-api/
+  query-api/
   kafka/
   kafka-connect/
   postgres/
@@ -29,6 +30,8 @@ services/
 
 - `services/ingest-api`
   - FastAPI 기반 ingest/provisioning/control plane
+- `services/query-api`
+  - FastAPI 기반 stream 조회, server-side downsampling, on-demand feature materialization
 - `services/kafka`
   - self-managed Kafka 브로커 이미지
 - `services/kafka-connect`
@@ -44,7 +47,7 @@ services/
 - `firmware/esp32c5-upload-smoke`
   - `firmware/esp32-aetus`를 소비하는 ESP32-C5 HIL app
 - `compose/e2e-compose.yml`
-  - 전체 파이프라인 E2E 실행용 compose
+  - 전체 파이프라인 및 query-api E2E 실행용 compose
 
 ## 구현 완료 범위
 
@@ -310,6 +313,8 @@ npm run build
 - `signal_frame_ingest_staging`: raw와 같은 짧은 보관
 - `device_metric_points`: TimescaleDB retention policy로 1년 수준의 장기 보관
 - `device_signal_frames`: TimescaleDB retention policy로 1년 수준의 장기 보관
+- `signal_frame_features`: query 시점에 생성되는 on-demand materialized cache, 자체 retention으로 삭제
+- `signal_rollup_points`: 고정 `x4` tier 기반 query-serving rollup table
 
 TimescaleDB 설정:
 
@@ -318,10 +323,47 @@ TimescaleDB 설정:
 - `CREATE EXTENSION IF NOT EXISTS timescaledb`
 - `device_metric_points(event_time)` hypertable
 - `device_signal_frames(event_time)` hypertable
+- `signal_rollup_points(bucket_start)` hypertable
 - `7일` 경과 chunk compression policy
 - `1년` 경과 metric/signal frame retention policy
 - hypertable unique 제약 조건은 time partition column을 포함하기 위해 `UNIQUE (event_time, request_id, metric_index)` 사용
 - signal frame hypertable unique 제약 조건은 `UNIQUE (event_time, request_id)` 사용
+
+## 4-1. Query API
+
+구현 파일:
+
+- [[../services/query-api/src/aetus_query/app.py]]
+- [[../services/query-api/src/aetus_query/repository.py]]
+- [[../services/query-api/src/aetus_query/signal_decode.py]]
+- [[../services/query-api/src/aetus_query/cache.py]]
+
+현재 구현된 endpoint:
+
+- `GET /v1/healthz`
+- `GET /v1/readyz`
+- `GET /v1/query/devices/{device_id}/streams`
+- `GET /v1/query/devices/{device_id}/streams/{key}/series`
+- `GET /v1/query/devices/{device_id}/streams/{key}/summary`
+- `GET /v1/query/devices/{device_id}/streams/{key}/frames`
+
+현재 구현된 동작:
+
+- 공개 조회 모델은 `metric`과 `signal frame`를 숨기고 `stream`으로 통합 노출
+- `kind=scalar` stream은 `device_metric_points`에서 series 조회
+- `kind=sampled` stream은 `device_signal_frames` 또는 `signal_rollup_points`에서 series 조회
+- rollup row가 없으면 raw frame을 query-api에서 decode해 frame-level envelope 반환
+- `summary` 요청은 query-api 런타임에서 raw `BYTEA samples`를 decode해 `signal_frame_features`를 on-demand upsert
+- 만료된 `signal_frame_features`는 query-api가 materialization 시 삭제
+- `frames`는 좁은 구간의 sampled stream에 대해서만 raw decoded sample JSON 반환
+- `Redis` cache를 선택적으로 사용하며, 실패 시 DB 조회 경로로 fallback
+- JSON 응답은 `GZipMiddleware` 기반 `Accept-Encoding` 압축을 지원
+
+중요한 구현 결정:
+
+- raw binary format 해석은 PostgreSQL 내부 함수가 아니라 query-api 애플리케이션 코드에서 수행
+- PostgreSQL은 raw 저장, 범위 조회, feature/rollup upsert, retention을 담당
+- query-api 인증은 아직 구현 범위 밖이며 open decision으로 남아 있다
 
 ## 5. Mock Device
 
@@ -453,6 +495,7 @@ uv run pytest tests/qemu_e2e -q -s
 테스트 실행 위치:
 
 - [[../services/ingest-api]]
+- [[../services/query-api]]
 
 실행 명령:
 
@@ -462,7 +505,9 @@ uv run pytest -q
 
 현재 통과 기준:
 
-- 일반 unit/e2e: `46 passed, 1 skipped`
+- ingest unit: `34 passed`
+- ingest PostgreSQL/Kafka e2e: `22 passed`
+- query-api unit/e2e: `15 passed`
 - QEMU e2e: 기본 실행에서는 skip, `AETUS_RUN_QEMU_E2E=1`일 때 별도 실행
 
 ### unit coverage
@@ -514,6 +559,26 @@ uv run pytest -q
 20. `timestamp_ns`가 있으면 signal frame `event_time`이 장치 timestamp를 따르는지 확인
 21. `signal_stream_definitions`가 stream metadata 반복 저장을 줄이는지 확인
 22. `device_signal_frames`가 TimescaleDB hypertable이며 compression/retention policy job이 존재하는지 확인
+
+### query-api coverage
+
+현재 query-api test는 다음을 커버한다.
+
+1. signal sample binary decode
+2. interleaved/planar layout decode
+3. scale/offset 적용
+4. channel feature 통계 계산
+5. unified stream 목록 응답
+6. scalar stream series 조회
+7. sampled stream series 조회
+8. Redis-compatible cache hit 경로
+9. sampled summary 요청 시 on-demand feature materialization 호출
+10. scalar stream에 대한 raw frames 요청 거부
+11. raw drill-down window 제한
+12. invalid time range 거부
+13. compose 기반 PostgreSQL/Redis/query-api 기동
+14. 실제 `signal_frame_features` row 생성 확인
+15. 실제 `BYTEA samples` decode 후 raw frame JSON 반환 확인
 
 ### qemu_e2e coverage
 
@@ -641,6 +706,8 @@ uv run pytest -q
 ## 추천 다음 작업
 
 - admin page 보호 방식 결정
+- query-api 인증 방식 결정
+- query rollup background job 구현
 - control DB backend abstraction
 - control panel 인증/배포 방식 결정
 - provisioning audit log 추가
