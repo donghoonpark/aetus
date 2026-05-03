@@ -141,12 +141,51 @@ CREATE TABLE IF NOT EXISTS device_signal_frames (
     UNIQUE (event_time, request_id)
 );
 
+CREATE TABLE IF NOT EXISTS signal_frame_features (
+    feature_id BIGSERIAL NOT NULL,
+    device_pk BIGINT NOT NULL REFERENCES devices(device_pk),
+    signal_pk BIGINT NOT NULL REFERENCES signal_stream_definitions(signal_pk),
+    window_start TIMESTAMPTZ NOT NULL,
+    window_end TIMESTAMPTZ NOT NULL,
+    channel_key TEXT NOT NULL,
+    channel_unit TEXT NULL,
+    sample_count BIGINT NOT NULL,
+    min_value DOUBLE PRECISION NOT NULL,
+    max_value DOUBLE PRECISION NOT NULL,
+    avg_value DOUBLE PRECISION NOT NULL,
+    rms_value DOUBLE PRECISION NOT NULL,
+    stddev_value DOUBLE PRECISION NOT NULL,
+    peak_abs_value DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (device_pk, signal_pk, window_start, window_end, channel_key)
+);
+
+CREATE TABLE IF NOT EXISTS signal_rollup_points (
+    rollup_id BIGSERIAL NOT NULL,
+    bucket_start TIMESTAMPTZ NOT NULL,
+    bucket_ns BIGINT NOT NULL,
+    device_pk BIGINT NOT NULL REFERENCES devices(device_pk),
+    signal_pk BIGINT NOT NULL REFERENCES signal_stream_definitions(signal_pk),
+    channel_key TEXT NOT NULL,
+    channel_unit TEXT NULL,
+    sample_count BIGINT NOT NULL,
+    min_value DOUBLE PRECISION NOT NULL,
+    max_value DOUBLE PRECISION NOT NULL,
+    avg_value DOUBLE PRECISION NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (bucket_start, bucket_ns, device_pk, signal_pk, channel_key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_metric_points_time ON device_metric_points(event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_metric_points_device_time ON device_metric_points(device_pk, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_metric_points_metric_time ON device_metric_points(metric_pk, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_frames_time ON device_signal_frames(event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_frames_device_time ON device_signal_frames(device_pk, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_frames_stream_time ON device_signal_frames(signal_pk, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_signal_features_lookup ON signal_frame_features(device_pk, signal_pk, window_start, window_end);
+CREATE INDEX IF NOT EXISTS idx_signal_features_expires ON signal_frame_features(expires_at);
+CREATE INDEX IF NOT EXISTS idx_signal_rollups_lookup ON signal_rollup_points(device_pk, signal_pk, bucket_ns, bucket_start);
 CREATE INDEX IF NOT EXISTS idx_signal_stream_key ON signal_stream_definitions(stream_key);
 CREATE INDEX IF NOT EXISTS idx_boot_sessions_device ON device_boot_sessions(device_pk);
 
