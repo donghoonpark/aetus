@@ -14,6 +14,16 @@ services:
       timeout: 5s
       retries: 20
 
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   kafka:
     build:
       context: ../services/kafka
@@ -113,6 +123,22 @@ services:
       - ingest-control-data:/data
     ports:
       - "18000:8000"
+
+  query-api:
+    build:
+      context: ../services/query-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      AETUS_POSTGRES_DSN: postgresql://aetus:aetus@postgres:5432/aetus
+      AETUS_QUERY_REDIS_URL: redis://redis:6379/0
+      AETUS_HOST: 0.0.0.0
+      AETUS_PORT: 8000
+    ports:
+      - "18001:8000"
 
 volumes:
   ingest-control-data:
