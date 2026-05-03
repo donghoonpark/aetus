@@ -16,9 +16,6 @@ firmware/esp32-aetus/
   components/
     aetus/      # Thread-safe upload API, uploader task, nanopb encode, HTTP client
     nanopb/     # Minimal nanopb runtime used by the aetus component
-  examples/
-    cpp-basic/        # Standalone ESP-IDF app showing the C++20 wrapper API
-    cpp-light-sleep/  # C++20 app with ESP-IDF PM, tickless idle, and auto light sleep enabled
 ```
 
 ## Add To An ESP-IDF App
@@ -212,7 +209,7 @@ export AETUS_WIFI_AUTH=peap
 export AETUS_WIFI_SSID=enterprise-ssid
 export AETUS_WIFI_ID=device-or-user-id
 export AETUS_WIFI_PASSWORD=enterprise-password
-idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 reconfigure build
+idf.py -C firmware/examples/cpp-basic set-target esp32c5 reconfigure build
 ```
 
 PEAP has not been live-tested in this repository yet because no Enterprise AP/RADIUS environment is currently available. Treat it as a compile-verified integration path until HIL coverage is added.
@@ -292,14 +289,15 @@ extern "C" void app_main(void)
 
 ## Current Consumer
 
-`firmware/esp32c5-upload-smoke` is the HIL app that consumes this portable stack on a real ESP32-C5 board.
+`firmware/test-apps/esp32c5-upload-smoke` is the HIL app that consumes this portable stack on a real ESP32-C5 board.
 
 ## Example Apps
 
-This package includes local C++ examples:
+Repository-level firmware examples include C++ examples that consume this package:
 
-- `firmware/esp32-aetus/examples/cpp-basic`: standalone ESP-IDF app using the C++20 wrapper, RTC sync, status event, telemetry metrics, and immediate flush.
-- `firmware/esp32-aetus/examples/cpp-light-sleep`: standalone ESP-IDF app with `CONFIG_PM_ENABLE`, FreeRTOS tickless idle, Wi-Fi power save, and automatic light sleep enabled. It registers ESP-IDF light-sleep callbacks and logs `light_sleep_stats` so HIL runs can confirm that the idle windows are actually entering light sleep.
+- `firmware/examples/cpp-basic`: standalone ESP-IDF app using the C++20 wrapper, RTC sync, status event, telemetry metrics, BLE provisioning, and immediate flush.
+- `firmware/examples/cpp-signal-frame`: standalone ESP-IDF app using the C++20 wrapper to upload dense `SignalFrame` payloads.
+- `firmware/examples/cpp-light-sleep`: standalone ESP-IDF app with `CONFIG_PM_ENABLE`, FreeRTOS tickless idle, Wi-Fi power save, and automatic light sleep enabled. It registers ESP-IDF light-sleep callbacks and logs `light_sleep_stats` so HIL runs can confirm that the idle windows are actually entering light sleep.
 
 The example reads Wi-Fi/API credentials from environment variables at CMake configure time. For local HIL testing, keep those values in the untracked repository-level `.env.hil` file and build it with:
 
@@ -308,7 +306,7 @@ set -a
 source .env.hil
 set +a
 source "$IDF_PATH/export.sh"
-idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 reconfigure build
+idf.py -C firmware/examples/cpp-basic set-target esp32c5 reconfigure build
 ```
 
 Set `AETUS_AUTH=hmac` to build the same example or the HIL smoke app with HMAC-SHA256 ingest authentication. If `AETUS_AUTH` is omitted, examples use bearer token authentication.
@@ -322,8 +320,8 @@ set -a
 source .env.hil
 set +a
 source "$IDF_PATH/export.sh"
-idf.py -C firmware/esp32-aetus/examples/cpp-light-sleep set-target esp32c5 reconfigure build
-idf.py -C firmware/esp32-aetus/examples/cpp-light-sleep -p /dev/cu.usbmodem1101 flash monitor
+idf.py -C firmware/examples/cpp-light-sleep set-target esp32c5 reconfigure build
+idf.py -C firmware/examples/cpp-light-sleep -p /dev/cu.usbmodem1101 flash monitor
 ```
 
 Expected boot logs include:
@@ -338,7 +336,7 @@ On ESP32-C5 boards using the native USB-Serial/JTAG console, successful light sl
 
 The example intentionally does not start BLE provisioning by default. Continuous BLE advertising or a connected central can hold radio/PM locks and make light-sleep behavior harder to observe. Keep provisioning in `cpp-basic`, and use `cpp-light-sleep` when measuring idle power behavior.
 
-The repository-level `firmware/examples` directory also contains standalone ESP-IDF apps that validate the intended developer experience:
+The same `firmware/examples` directory also contains smaller standalone ESP-IDF apps that validate the intended developer experience:
 
 - `basic-telemetry`: minimal boot/status and telemetry upload usage.
 - `multitask-producers`: concurrent producer tasks calling the thread-safe enqueue API.

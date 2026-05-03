@@ -1,6 +1,6 @@
 # AETUS ESP32-C5 HIL Upload Firmware
 
-This ESP-IDF 6.0 firmware is for local HIL/lab validation. It consumes the portable stack in `../esp32-aetus` and keeps business logic separate from upload transport:
+This ESP-IDF 6.0 firmware is for local HIL/lab validation. It consumes the portable stack in `../../esp32-aetus` and keeps business logic separate from upload transport:
 
 - `main` creates sample telemetry messages and enqueues them.
 - `aetus` owns the FreeRTOS queue, upload timer, Wi-Fi connection, RTC sync, nanopb encoding, and HTTP POST to `/v1/ingest`.
@@ -13,7 +13,7 @@ Configuration is read from environment variables at CMake configure time. Keep s
 
 ```bash
 set -a
-source ../../.env.hil
+source ../../../.env.hil
 set +a
 source "$IDF_PATH/export.sh"
 idf.py set-target esp32c5

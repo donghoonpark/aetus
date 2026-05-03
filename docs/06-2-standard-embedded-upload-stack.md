@@ -9,7 +9,7 @@
 현재 구현 위치:
 
 - [[../firmware/esp32-aetus]]
-- [[../firmware/esp32c5-upload-smoke]]
+- [[../firmware/test-apps/esp32c5-upload-smoke]]
 - [[../firmware/examples]]
 
 ## 설계 방향
@@ -72,8 +72,13 @@ firmware/
     basic-telemetry/
     multitask-producers/
     metric-types/
-  esp32c5-upload-smoke/
-    main/
+    cpp-friendly-interface/
+    cpp-basic/
+    cpp-signal-frame/
+    cpp-light-sleep/
+  test-apps/
+    qemu-telemetry/
+    esp32c5-upload-smoke/
 ```
 
 역할:
@@ -81,7 +86,8 @@ firmware/
 - `esp32-aetus/components/aetus`: 공개 API, 업로드 task, protobuf encode, HTTP client
 - `esp32-aetus/components/nanopb`: 최소 nanopb runtime
 - `examples`: 표준 컴포넌트를 소비하는 이식 가능한 ESP-IDF 예제 app
-- `esp32c5-upload-smoke`: 실제 ESP32-C5 HIL 검증용 app
+- `test-apps/qemu-telemetry`: ESP-IDF QEMU 기반 SIL/E2E 검증용 app
+- `test-apps/esp32c5-upload-smoke`: 실제 ESP32-C5 HIL 검증용 app
 
 ## Flash/Partition 기준
 
@@ -357,11 +363,27 @@ flowchart TD
     FlashDB --> Upload
 ```
 
+## SIL/QEMU 검증 위치
+
+현재 QEMU 기반 검증 app:
+
+- [[../firmware/test-apps/qemu-telemetry]]
+
+검증 내용:
+
+- ESP-IDF firmware binary 빌드
+- QEMU에서 RISC-V ESP32 target 실행
+- firmware가 UART로 출력한 nanopb protobuf byte stream 수집
+- 수집한 byte stream을 ingest API로 전송
+- FastAPI, Kafka, Kafka Connect, PostgreSQL 적재 확인
+
+이 app은 표준 컴포넌트 패키지 소스가 아니라, firmware encode path가 host mock 없이도 동작하는지 확인하는 SIL/E2E fixture다.
+
 ## HIL 검증 위치
 
 현재 실기기 검증 app:
 
-- [[../firmware/esp32c5-upload-smoke]]
+- [[../firmware/test-apps/esp32c5-upload-smoke]]
 
 검증 내용:
 

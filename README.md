@@ -116,9 +116,10 @@ clients/
 docs/                       # Architecture, API, protobuf, storage, firmware notes
 firmware/
   esp32-aetus/              # Portable ESP-IDF upload component
-  esp32c5-upload-smoke/     # ESP32-C5 HIL firmware app
-  esp32-qemu-telemetry/     # QEMU-oriented firmware telemetry generator
   examples/                 # Standalone ESP-IDF example apps
+  test-apps/                # SIL/QEMU/HIL validation firmware apps
+    esp32c5-upload-smoke/   # ESP32-C5 HIL firmware app
+    qemu-telemetry/         # QEMU-oriented firmware telemetry generator
 frontend/
   ingest-control-panel/     # Portable Vue/Naive UI control panel
 services/
@@ -172,7 +173,8 @@ The control panel is a portable Vue component. It can point at an ingest API thr
 ```bash
 source /path/to/esp-idf/export.sh
 idf.py -C firmware/examples/basic-telemetry set-target esp32c5 build
-idf.py -C firmware/esp32-aetus/examples/cpp-basic set-target esp32c5 build
+idf.py -C firmware/examples/cpp-basic set-target esp32c5 build
+idf.py -C firmware/examples/cpp-signal-frame set-target esp32c5 build
 ```
 
 For local HIL credentials, keep secrets in an untracked `.env.hil` file. Do not commit Wi-Fi credentials or device tokens.

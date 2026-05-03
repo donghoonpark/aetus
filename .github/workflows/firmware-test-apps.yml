@@ -1,0 +1,64 @@
+name: Firmware Test Apps Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/firmware-test-apps.yml"
+      - "firmware/esp32-aetus/**"
+      - "firmware/test-apps/**"
+  pull_request:
+    paths:
+      - ".github/workflows/firmware-test-apps.yml"
+      - "firmware/esp32-aetus/**"
+      - "firmware/test-apps/**"
+  workflow_dispatch:
+
+concurrency:
+  group: firmware-test-apps-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.app.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - name: qemu-telemetry
+            path: firmware/test-apps/qemu-telemetry
+            target: esp32c3
+          - name: esp32c5-upload-smoke
+            path: firmware/test-apps/esp32c5-upload-smoke
+            target: esp32c5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Build ESP-IDF test app
+        env:
+          AETUS_WIFI_SSID: ci-ssid
+          AETUS_WIFI_PASSWORD: ci-password
+          AETUS_INGEST_URL: http://ingest.internal/v1/ingest
+          AETUS_DEVICE_ID: esp32c5-ci-test-app
+          AETUS_DEVICE_TOKEN: devtok_ci_test_app
+        run: |
+          docker run --rm \
+            -e AETUS_WIFI_SSID \
+            -e AETUS_WIFI_PASSWORD \
+            -e AETUS_INGEST_URL \
+            -e AETUS_DEVICE_ID \
+            -e AETUS_DEVICE_TOKEN \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -w /workspace \
+            espressif/idf:release-v6.0 \
+            bash -lc '. "$IDF_PATH/export.sh" && idf.py -C "${{ matrix.app.path }}" -B "${{ matrix.app.path }}/build-ci" set-target "${{ matrix.app.target }}" build'

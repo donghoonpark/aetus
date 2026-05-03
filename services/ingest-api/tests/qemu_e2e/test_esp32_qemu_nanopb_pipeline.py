@@ -18,7 +18,7 @@ pytestmark = pytest.mark.qemu_e2e
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
 COMPOSE_FILE = ROOT_DIR / "compose" / "e2e-compose.yml"
-FIRMWARE_DIR = ROOT_DIR / "firmware" / "esp32-qemu-telemetry"
+FIRMWARE_DIR = ROOT_DIR / "firmware" / "test-apps" / "qemu-telemetry"
 INGEST_API_URL = "http://127.0.0.1:18000"
 POSTGRES_DSN = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
 DEVICE_ID = "esp32c5-test-001"

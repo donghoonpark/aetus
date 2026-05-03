@@ -14,6 +14,9 @@ They are intended to validate the embedded developer experience:
 - `multitask-producers`: two producer tasks enqueue concurrently to validate the thread-safe API shape.
 - `metric-types`: telemetry using all supported protobuf `oneof` metric types.
 - `cpp-friendly-interface`: C++20 wrapper usage from a repository-level example app.
+- `cpp-basic`: C++20 wrapper, RTC sync, status event, telemetry metrics, BLE provisioning, and immediate flush.
+- `cpp-signal-frame`: C++20 dense signal frame upload example.
+- `cpp-light-sleep`: C++20 power-management example with tickless idle and automatic light sleep enabled.
 
 ## Flash And Partition Assumption
 
@@ -31,6 +34,19 @@ idf.py -C firmware/examples/basic-telemetry set-target esp32c5 build
 idf.py -C firmware/examples/multitask-producers set-target esp32c5 build
 idf.py -C firmware/examples/metric-types set-target esp32c5 build
 idf.py -C firmware/examples/cpp-friendly-interface set-target esp32c5 build
+idf.py -C firmware/examples/cpp-basic set-target esp32c5 build
+idf.py -C firmware/examples/cpp-signal-frame set-target esp32c5 build
+idf.py -C firmware/examples/cpp-light-sleep set-target esp32c5 build
 ```
 
-The examples use placeholder credentials. Replace the constants in `main/main.c` before flashing to real hardware.
+The basic C examples use placeholder credentials. Replace the constants in `main/main.c` before flashing to real hardware.
+
+The C++ HIL-oriented examples read Wi-Fi/API credentials from environment variables at CMake configure time:
+
+- `AETUS_WIFI_SSID`
+- `AETUS_WIFI_PASSWORD`
+- `AETUS_INGEST_URL`
+- `AETUS_DEVICE_ID`
+- `AETUS_DEVICE_TOKEN`
+
+For compile-only CI, these are supplied with dummy values.

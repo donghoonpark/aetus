@@ -40,8 +40,10 @@ flowchart LR
 | query-api unit/e2e | `services/query-api/tests` | yes | stream 조회, raw sample decode, downsampling, Redis cache, DB-backed query |
 | stream-viewer build/e2e | `frontend/stream-viewer` | yes | portable Vue component build, mocked query-api 기반 chart 렌더 |
 | ingest-control-panel build | `frontend/ingest-control-panel` | yes | control panel bundle build |
+| firmware examples build | `firmware/examples` | yes | ESP-IDF 6.0, ESP32-C5 target compile coverage for standalone examples |
+| firmware test-apps build | `firmware/test-apps` | yes | QEMU fixture와 HIL app의 compile coverage |
 | QEMU firmware e2e | `services/ingest-api/tests/qemu_e2e` | manual workflow | ESP-IDF firmware build, QEMU 실행, UART protobuf stream, DB 적재 |
-| HIL firmware | `firmware/esp32c5-upload-smoke`, `firmware/esp32-aetus/examples` | no | 실제 ESP32-C5 Wi-Fi/HMAC/provisioning/upload 검증 |
+| HIL firmware runtime | `firmware/test-apps/esp32c5-upload-smoke`, `firmware/examples/cpp-basic`, `firmware/examples/cpp-signal-frame` | no | 실제 ESP32-C5 Wi-Fi/HMAC/provisioning/upload 검증 |
 
 ## GitHub Actions 기준
 
@@ -54,6 +56,7 @@ flowchart LR
 - `python-ingest-client`: `uv run pytest -q`
 - `rust-ingest-client`: `cargo test -- --test-threads=1`
 - `e2e`: `uv run pytest tests/e2e -q` in `services/ingest-api`
+- `Firmware Examples Build`: `idf.py -C firmware/examples/<example> -B build-ci set-target esp32c5 build`
 
 `ESP32 QEMU E2E` workflow는 수동 실행이다.
 
@@ -167,7 +170,7 @@ flowchart LR
 ```
 
 HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같은 물리 조건을 보기 위한 영역이다.
-GitHub Actions 기본 CI에는 포함하지 않는다.
+`firmware/test-apps/esp32c5-upload-smoke`의 compile coverage는 GitHub Actions에 포함하지만, 실제 flash/monitor/runtime 검증은 로컬 HIL로만 수행한다.
 
 ## 현재 남은 테스트 구멍
 

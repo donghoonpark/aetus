@@ -1,0 +1,65 @@
+name: Firmware Examples Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/firmware-examples.yml"
+      - "firmware/esp32-aetus/**"
+      - "firmware/examples/**"
+  pull_request:
+    paths:
+      - ".github/workflows/firmware-examples.yml"
+      - "firmware/esp32-aetus/**"
+      - "firmware/examples/**"
+  workflow_dispatch:
+
+concurrency:
+  group: firmware-examples-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - basic-telemetry
+          - multitask-producers
+          - metric-types
+          - cpp-friendly-interface
+          - cpp-basic
+          - cpp-signal-frame
+          - cpp-light-sleep
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Build ESP-IDF example
+        env:
+          AETUS_WIFI_SSID: ci-ssid
+          AETUS_WIFI_PASSWORD: ci-password
+          AETUS_INGEST_URL: http://ingest.internal/v1/ingest
+          AETUS_DEVICE_ID: esp32c5-ci-example
+          AETUS_DEVICE_TOKEN: devtok_ci_example
+        run: |
+          docker run --rm \
+            -e AETUS_WIFI_SSID \
+            -e AETUS_WIFI_PASSWORD \
+            -e AETUS_INGEST_URL \
+            -e AETUS_DEVICE_ID \
+            -e AETUS_DEVICE_TOKEN \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -w /workspace \
+            espressif/idf:release-v6.0 \
+            bash -lc '. "$IDF_PATH/export.sh" && idf.py -C "firmware/examples/${{ matrix.example }}" -B "firmware/examples/${{ matrix.example }}/build-ci" set-target esp32c5 build'

@@ -43,11 +43,11 @@ services/
   - raw event, metric staging, normalized metric point 저장용 TimescaleDB/PostgreSQL schema
 - `services/mock-device-nanopb`
   - CMake + FetchContent + nanopb + pybind11 기반 mock device
-- `firmware/esp32-qemu-telemetry`
+- `firmware/test-apps/qemu-telemetry`
   - ESP-IDF 6.0 + nanopb 기반 QEMU E2E 전용 firmware stream generator
 - `firmware/esp32-aetus`
   - ESP-IDF portable upload stack component
-- `firmware/esp32c5-upload-smoke`
+- `firmware/test-apps/esp32c5-upload-smoke`
   - `firmware/esp32-aetus`를 소비하는 ESP32-C5 HIL app
 - `frontend/stream-viewer`
   - query-api용 portable Vue stream viewer component
@@ -485,7 +485,7 @@ npm run test:e2e
 
 구현 위치:
 
-- [[../firmware/esp32-qemu-telemetry]]
+- [[../firmware/test-apps/qemu-telemetry]]
 - [[../services/ingest-api/tests/qemu_e2e/test_esp32_qemu_nanopb_pipeline.py]]
 - [[../.github/workflows/qemu-e2e.yml]]
 
@@ -524,7 +524,8 @@ uv run pytest tests/qemu_e2e -q -s
 - [[../firmware/esp32-aetus]]
 - [[../firmware/esp32-aetus/components/aetus/include/aetus.h]]
 - [[../firmware/examples]]
-- [[../firmware/esp32c5-upload-smoke]]
+- [[../firmware/test-apps/qemu-telemetry]]
+- [[../firmware/test-apps/esp32c5-upload-smoke]]
 
 목적:
 
@@ -569,8 +570,9 @@ uv run pytest tests/qemu_e2e -q -s
 - `firmware/examples/multitask-producers`: 여러 FreeRTOS producer task에서 enqueue하는 예제
 - `firmware/examples/metric-types`: int64/double/bool/string/bytes metric type 예제
 - `firmware/examples/cpp-friendly-interface`: repository-level C++ wrapper 예제
-- `firmware/esp32-aetus/examples/cpp-basic`: portable package 내부 C++20 wrapper/HIL 예제
-- `firmware/esp32-aetus/examples/cpp-light-sleep`: tickless idle/light sleep 관찰용 예제
+- `firmware/examples/cpp-basic`: C++20 wrapper/HIL 예제
+- `firmware/examples/cpp-signal-frame`: dense `SignalFrame` 업로드 예제
+- `firmware/examples/cpp-light-sleep`: tickless idle/light sleep 관찰용 예제
 - 모든 예제는 ESP32-C5, ESP-IDF 6.0, 4MB flash, 3MB factory app partition 기준으로 빌드한다.
 
 현재 미구현:
@@ -702,7 +704,8 @@ uv run pytest -q
 
 ### hil firmware coverage
 
-현재 HIL firmware는 GitHub Actions 기본 테스트에 포함하지 않는다.
+현재 HIL firmware의 compile coverage는 GitHub Actions에 포함한다.
+실기기 flash/monitor/runtime 검증은 GitHub Actions 기본 테스트에 포함하지 않는다.
 
 로컬 실기기에서 확인한 범위:
 
@@ -801,10 +804,10 @@ uv run pytest -q
 - [[../services/ingest-api/tests/qemu_e2e/test_esp32_qemu_nanopb_pipeline.py]]
 - [[../services/ingest-api/tests/helpers/nanopb_mock_device.py]]
 - [[../services/mock-device-nanopb/src/mock_device_core.c]]
-- [[../firmware/esp32-qemu-telemetry/main/main.c]]
+- [[../firmware/test-apps/qemu-telemetry/main/main.c]]
 - [[../firmware/esp32-aetus/components/aetus/include/aetus.h]]
 - [[../firmware/esp32-aetus/components/aetus/aetus.c]]
-- [[../firmware/esp32c5-upload-smoke/main/main.c]]
+- [[../firmware/test-apps/esp32c5-upload-smoke/main/main.c]]
 - [[../frontend/ingest-control-panel/src/IngestControlPanel.vue]]
 - [[../frontend/stream-viewer/src/AetusStreamViewer.vue]]
 - [[../services/query-api/tools/seed_dense_query_data.py]]
