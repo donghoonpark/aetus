@@ -15,6 +15,7 @@
 ```mermaid
 flowchart LR
     FW["ESP32 firmware\nnanopb / aetus component"] --> HTTP["HTTP POST /v1/ingest\nprotobuf"]
+    Py["Python ingest client\nprotobuf SDK"] --> HTTP
     HTTP --> Ingest["ingest-api\nFastAPI auth + normalize"]
     Ingest --> KafkaRaw["Kafka topic\ndevice.raw.v1"]
     Ingest --> KafkaMetric["Kafka topic\ndevice.metric.v1"]
@@ -33,6 +34,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | ingest unit | `services/ingest-api/tests/unit` | yes | 인증, rate limit, protobuf normalize, publisher contract |
 | ingest compose e2e | `services/ingest-api/tests/e2e` | yes | provisioning, ingest, Kafka, Kafka Connect, PostgreSQL 적재 |
+| Python ingest client unit/e2e | `clients/python-ingest/tests` | yes | Python SDK event building, protobuf upload, PostgreSQL normalized 적재 |
 | query-api unit/e2e | `services/query-api/tests` | yes | stream 조회, raw sample decode, downsampling, Redis cache, DB-backed query |
 | stream-viewer build/e2e | `frontend/stream-viewer` | yes | portable Vue component build, mocked query-api 기반 chart 렌더 |
 | ingest-control-panel build | `frontend/ingest-control-panel` | yes | control panel bundle build |
@@ -47,6 +49,7 @@ flowchart LR
 - `stream-viewer`: `npm ci`, `npm run build`, `npm run test:e2e`
 - `ingest-unit`: `uv run pytest tests/unit -q`
 - `query-api`: `uv run pytest -q`
+- `python-ingest-client`: `uv run pytest -q`
 - `e2e`: `uv run pytest tests/e2e -q` in `services/ingest-api`
 
 `ESP32 QEMU E2E` workflow는 수동 실행이다.
@@ -78,6 +81,26 @@ flowchart LR
 - `device_metric_points`
 - `device_signal_frames`
 - Timescale hypertable/compression/retention policy 존재
+
+### 1-1. Python SDK to PostgreSQL
+
+```mermaid
+flowchart LR
+    SDK["clients/python-ingest\nAetusIngestClient"] --> Ingest["ingest-api"]
+    Ingest --> Kafka["Kafka"]
+    Kafka --> Connect["Kafka Connect"]
+    Connect --> PG["PostgreSQL / TimescaleDB"]
+```
+
+검증 내용:
+
+- provisioning으로 발급한 device token 사용
+- metric/status/signal frame protobuf 생성
+- HTTP header와 bearer auth contract
+- 성공 응답에서만 sequence 증가
+- `raw_device_events`
+- `device_metric_points`
+- `device_signal_frames`
 
 ### 2. PostgreSQL to Query API
 

@@ -13,6 +13,8 @@
   ·
   <a href="firmware/esp32-aetus/README.md">Firmware Stack</a>
   ·
+  <a href="clients/python-ingest">Python Client</a>
+  ·
   <a href="frontend/ingest-control-panel">Control Panel</a>
 </p>
 
@@ -99,12 +101,14 @@ flowchart LR
 - ESP32-C5 hardware-in-the-loop firmware used for real-device validation
 - RISC-V ESP32 QEMU firmware stream generator for heavier E2E validation
 - nanopb + pybind11 mock device used by Python tests
-- Python client SDK is planned but not implemented yet
+- Python ingest client SDK for gateways, simulators, and non-ESP producers
 
 ## Repository Layout
 
 ```text
 compose/                    # Docker Compose stack for E2E testing
+clients/
+  python-ingest/            # Python protobuf ingest client SDK
 docs/                       # Architecture, API, protobuf, storage, firmware notes
 firmware/
   esp32-aetus/              # Portable ESP-IDF upload component

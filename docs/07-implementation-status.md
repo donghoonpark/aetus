@@ -15,6 +15,8 @@
 
 ```text
 docs/
+clients/
+  python-ingest/
 compose/
 firmware/
 services/
@@ -48,10 +50,32 @@ services/
   - `firmware/esp32-aetus`를 소비하는 ESP32-C5 HIL app
 - `frontend/stream-viewer`
   - query-api용 portable Vue stream viewer component
+- `clients/python-ingest`
+  - Python producer SDK for protobuf ingest
 - `compose/e2e-compose.yml`
   - 전체 파이프라인 및 query-api E2E 실행용 compose
 
 ## 구현 완료 범위
+
+## 0. Producer Clients
+
+구현 위치:
+
+- [[../clients/python-ingest/src/aetus_ingest_client/client.py]]
+- [[../clients/python-ingest/tests/unit/test_client.py]]
+- [[../clients/python-ingest/tests/e2e/test_pipeline.py]]
+
+현재 Python ingest client는 다음을 지원한다.
+
+- bearer token 기반 `POST /v1/ingest`
+- metric set 생성 및 업로드
+- dense signal frame 생성 및 업로드
+- status / alert event 생성 및 업로드
+- row-major sample matrix에서 interleaved 또는 planar binary sample buffer packing
+- 이미 packed 된 `bytes` signal payload 업로드
+- 성공 응답에서만 local `sequence` 증가
+
+Python client E2E는 compose stack을 띄운 뒤 provisioning으로 token을 발급하고, metric/status/signal frame을 업로드한 뒤 `raw_device_events`, `device_metric_points`, `device_signal_frames` 적재를 확인한다.
 
 ## 1. Ingest API
 

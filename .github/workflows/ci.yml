@@ -133,6 +133,39 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: docker compose -f compose/e2e-compose.yml down -v --remove-orphans
 
+  python-ingest-client:
+    name: Python ingest client unit and e2e tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: clients/python-ingest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: python -m pip install uv==0.8.22
+
+      - name: Install Python dependencies
+        run: uv sync --locked --group dev
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Run Python ingest client tests
+        run: uv run pytest -q
+
+      - name: Tear down Python client e2e stack
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: docker compose -f compose/e2e-compose.yml down -v --remove-orphans
+
   e2e:
     name: Docker Compose e2e
     runs-on: ubuntu-latest
