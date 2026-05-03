@@ -4,7 +4,15 @@
 
 signal query / visualization 영역에서 아래 항목이 열려 있다.
 
-1. query-api 인증을 최종적으로 내부망 세션 중심으로 둘지, 별도 read-only token도 둘지
+1. query-api JWT 인증 구현 세부 선택
+
+방향은 `08-query-api-and-frontend`에서 정리한 대로 ingest 인증과 분리된 query JWT 방식으로 둔다.
+
+남은 선택:
+
+- 초기 구현 알고리즘을 `HS256` dev path부터 둘지, `RS256/JWKS`를 바로 기본으로 둘지
+- `site_code` / `group_key` device metadata를 어떤 테이블과 API에서 관리할지
+- stream-viewer token 만료 처리를 error event만 둘지, host callback까지 둘지
 
 HMAC-SHA256 ingest 인증 경로는 `dual mode`로 구현 완료했다. bearer token 경로는 유지하고, HMAC mode는 `POST /v1/ingest`에만 적용한다. `/v1/time`은 bearer token 인증을 유지한다.
 

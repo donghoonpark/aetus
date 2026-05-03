@@ -575,6 +575,8 @@ query frontend는 페이지가 아니라 재사용 가능한 컴포넌트로 둔
 | `queryServerUrl` | query-api base URL |
 | `deviceId` | 초기 장치 ID. 컴포넌트 안에서 수정 가능 |
 | `initialStreamKey` | 초기 stream key |
+| `initialRangePreset` | 초기 범위 preset. `10m`, `1h`, `6h`, `1d` |
+| `authToken` | query-api용 bearer JWT. 인증 구현 시 추가 |
 | `maxPointsPerRequest` | 기본 차트 해상도 상한. 기본값 `1500` |
 
 사용 예:
@@ -590,6 +592,8 @@ import "@aetus/stream-viewer/style.css";
     query-server-url="http://127.0.0.1:18001"
     device-id="dense-device-1"
     initial-stream-key="dense.vibration"
+    initial-range-preset="10m"
+    :max-points-per-request="10000"
   />
 </template>
 ```
@@ -617,19 +621,186 @@ import "@aetus/stream-viewer/style.css";
 
 ## 인증/인가 방향
 
-query-api는 ingest와 다른 인증 정책을 둘 수 있다.
-다만 현재 문서 범위에서는 세부 인증 정책을 우선순위에서 제외한다.
+query-api 인증은 ingest 인증과 분리한다.
+
+중요한 구분:
+
+- ingest 인증: 기기가 데이터를 업로드할 수 있는지 확인
+- query 인증: 운영자 또는 서비스가 저장된 데이터를 읽을 수 있는지 확인
+
+따라서 query-api는 device token, bootstrap token, HMAC upload secret을 직접 사용하지 않는다.
+
+```mermaid
+flowchart LR
+    Operator["Operator / dashboard shell"] --> Issuer["Auth issuer"]
+    Issuer --> JWT["Short-lived query JWT"]
+    JWT --> Viewer["AetusStreamViewer"]
+    Viewer --> Query["query-api"]
+    Query --> Verify["JWT verify"]
+    Verify --> Policy["scope / device / site check"]
+    Policy --> PG["PostgreSQL / TimescaleDB"]
+```
 
 권장 기본안:
 
-- 기기 token과 query token을 분리
-- operator UI는 별도 로그인 또는 내부망 SSO 세션 사용
-- query-api는 device token으로 직접 접근하지 않게 한다
+- query-api는 JWT 발급자가 아니라 JWT 검증자 역할만 맡는다
+- operator UI 또는 host shell은 별도 로그인/SSO/내부 admin service에서 JWT를 받아 stream-viewer에 전달한다
+- query JWT는 짧은 만료 시간을 갖는다
+- `/v1/healthz`, `/v1/readyz`는 인증 없이 허용한다
+- `/v1/query/*`는 `Authorization: Bearer <jwt>`를 요구한다
+- 인증 실패는 `401`, 인증은 되었지만 권한이 없으면 `403`으로 구분한다
 
 이유:
 
 - device credential이 UI에 노출되지 않는다
 - 권한 단위를 `읽기 전용`, `특정 device group`, `관리자` 등으로 나누기 쉽다
+- query-api를 공개망 또는 사내 SSO 뒤로 옮겨도 ingest plane과 충돌하지 않는다
+
+### JWT claim 모델
+
+초기 claim은 단순하게 유지하되, device/site 단위 제한을 걸 수 있는 구조는 열어둔다.
+
+권장 예:
+
+```json
+{
+  "iss": "aetus-auth",
+  "sub": "operator-123",
+  "aud": "aetus-query-api",
+  "iat": 1760000000,
+  "exp": 1760003600,
+  "scope": ["query:read"],
+  "sites": ["demo-lab"],
+  "groups": ["line-1"],
+  "devices": []
+}
+```
+
+claim 의미:
+
+| Claim | 설명 |
+| --- | --- |
+| `iss` | 발급자. query-api 설정과 일치해야 함 |
+| `aud` | 대상 audience. 기본값 예: `aetus-query-api` |
+| `sub` | 사용자 또는 service principal ID |
+| `scope` | 기능 권한. v1은 `query:read`만 필수 |
+| `sites` | site 단위 조회 권한 |
+| `groups` | device group 또는 production line 단위 조회 권한 |
+| `devices` | 개별 device allowlist |
+
+와일드카드 정책:
+
+- `sites=["*"]` 또는 `devices=["*"]`는 내부 admin 전용으로만 사용한다
+- 일반 operator token은 site/group 중심으로 제한한다
+- 개별 `devices` claim은 예외 공유나 디버깅용으로 둔다
+
+### device별 권한에 대한 판단
+
+device별 권한 자체는 구현 난도가 높지 않다.
+복잡해지는 부분은 권한을 관리하는 UI, ACL DB, 권한 변경의 즉시 반영, 사용자 그룹 정책이다.
+
+따라서 v1은 다음 절충안을 따른다.
+
+- query-api는 JWT claim 기반 read-time check만 수행한다
+- 기본 운영 단위는 `site` 또는 `group`
+- `devices` claim은 optional allowlist로 지원한다
+- 별도 사용자/역할 관리 UI는 만들지 않는다
+- stream-level ACL은 v1 범위에서 제외한다
+
+권한 판정 순서:
+
+```mermaid
+flowchart TD
+    Req["GET /v1/query/devices/{device_id}/..."] --> Auth{"Valid JWT?"}
+    Auth -- "no" --> R401["401 Unauthorized"]
+    Auth -- "yes" --> Scope{"scope includes query:read?"}
+    Scope -- "no" --> R403["403 Forbidden"]
+    Scope -- "yes" --> All{"devices or sites includes *?"}
+    All -- "yes" --> Allow["allow"]
+    All -- "no" --> Meta["load device metadata"]
+    Meta --> Device{"device_id in devices?"}
+    Device -- "yes" --> Allow
+    Device -- "no" --> Site{"device site/group in claims?"}
+    Site -- "yes" --> Allow
+    Site -- "no" --> R403
+```
+
+### 알고리즘과 key 관리
+
+권장 우선순위:
+
+1. 운영/공개망: `RS256` 또는 `ES256` + JWKS
+2. 내부망/개발 초기: `HS256` shared secret
+
+초기 구현은 두 경로를 모두 열 수 있다.
+
+- local/dev: `HS256`
+- production-ready: `JWKS_URL` 기반 `RS256`
+
+환경변수 예:
+
+```bash
+AETUS_QUERY_AUTH_ENABLED=true
+AETUS_QUERY_JWT_ALGORITHM=HS256
+AETUS_QUERY_JWT_SECRET=dev-query-secret
+AETUS_QUERY_JWT_ISSUER=aetus-auth
+AETUS_QUERY_JWT_AUDIENCE=aetus-query-api
+```
+
+JWKS 운영 예:
+
+```bash
+AETUS_QUERY_AUTH_ENABLED=true
+AETUS_QUERY_JWT_ALGORITHM=RS256
+AETUS_QUERY_JWKS_URL=https://auth.internal/.well-known/jwks.json
+AETUS_QUERY_JWT_ISSUER=aetus-auth
+AETUS_QUERY_JWT_AUDIENCE=aetus-query-api
+```
+
+### query-api endpoint별 인증 정책
+
+| Endpoint | 인증 | 비고 |
+| --- | --- | --- |
+| `GET /v1/healthz` | no | k8s liveness |
+| `GET /v1/readyz` | no | k8s readiness |
+| `GET /v1/query/devices/{device_id}/streams` | yes | device/site/group 권한 확인 |
+| `GET /v1/query/devices/{device_id}/streams/{key}/series` | yes | device/site/group 권한 확인 |
+| `GET /v1/query/devices/{device_id}/streams/{key}/summary` | yes | device/site/group 권한 확인 |
+| `GET /v1/query/devices/{device_id}/streams/{key}/frames` | yes | device/site/group 권한 확인, raw drilldown window 제한 유지 |
+
+### frontend 연동
+
+`AetusStreamViewer`는 JWT를 직접 발급하거나 갱신하지 않는다.
+
+권장 역할:
+
+- host application: 로그인, refresh, token 보관, 만료 처리
+- stream-viewer: `authToken` prop을 받아 `Authorization` header 추가
+
+예:
+
+```vue
+<AetusStreamViewer
+  query-server-url="https://query.internal"
+  :auth-token="queryJwt"
+  device-id="esp32c5-test-001"
+/>
+```
+
+주의:
+
+- device token은 브라우저에 넘기지 않는다
+- query JWT는 read-only scope로 제한한다
+- token 만료 시 component는 `401`을 host application이 처리할 수 있게 error event를 내보내는 방향이 좋다
+
+### v1 비범위
+
+- query-api 내부 로그인 화면
+- refresh token 발급
+- 사용자/역할 관리 UI
+- stream key 단위 ACL
+- 권한 변경 즉시 revoke
+- device token을 query token으로 교환하는 API
 
 ## 캐시 전략
 
@@ -688,11 +859,12 @@ flowchart TB
 
 남은 작업:
 
-1. 고정 `x4` tier rollup 생성 job 구현
-2. overview, zoom, drill-down UX 연결
-3. feature-based search/filter 추가
-4. query-api 인증/인가 구현
-5. `br` 압축 또는 reverse proxy 압축 정책 확정
+1. query-api JWT 인증/인가 구현
+2. stream-viewer `authToken` prop과 401/403 error event 추가
+3. 고정 `x4` tier rollup 생성 job 구현
+4. overview, zoom, drill-down UX 연결
+5. feature-based search/filter 추가
+6. `br` 압축 또는 reverse proxy 압축 정책 확정
 
 ## 고밀도 테스트 데이터 생성
 
@@ -733,10 +905,13 @@ uv run python tools/seed_dense_query_data.py \
 - 표준 프론트엔드는 `Vue 3 + Naive UI + ECharts`
 - heavy series endpoint는 `JSON + gzip/br` 압축을 기본으로 사용
 - query frontend는 재사용 가능한 컴포넌트/package 형태로 구성
+- query-api 인증은 ingest 인증과 분리된 JWT 기반 read-only authorization으로 구성
+- v1 권한 모델은 `scope + site/group + optional device allowlist` claim 기반으로 구성
 
 ## 추가 합의가 필요한 항목
 
 아래는 구현 전에 한 번 더 합의하면 좋다.
 
-1. query-api 인증을 최종적으로 내부망 세션으로 둘지, 별도 read-only token도 둘지
-2. rollup 생성 job을 Timescale background job으로 둘지, 별도 worker로 둘지
+1. JWT 운영 알고리즘을 초기부터 `RS256/JWKS`로 갈지, `HS256` dev path부터 구현할지
+2. device metadata에 `site_code` / `group_key`를 query-api 권한 확인용으로 언제 연결할지
+3. rollup 생성 job을 Timescale background job으로 둘지, 별도 worker로 둘지
