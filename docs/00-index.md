@@ -12,7 +12,8 @@
 8. [[06-2-standard-embedded-upload-stack]]
 9. [[07-implementation-status]]
 10. [[08-query-api-and-frontend]]
-11. [[open-decisions]]
+11. [[09-testing-and-e2e-coverage]]
+12. [[open-decisions]]
 
 ## 문서 맵
 
@@ -26,6 +27,7 @@
 - [[06-2-standard-embedded-upload-stack]]: `firmware/esp32-aetus` 표준 업로드 컴포넌트, 공개 API, thread safety, 예제 app, HIL 소비 구조
 - [[07-implementation-status]]: 현재 코드 구현 범위, 테스트 커버리지, 운영 제약, 다음 작업 포인트
 - [[08-query-api-and-frontend]]: signal query API, downsampling, 표준 프론트엔드 컴포넌트, 시각화 서비스 분리 방안
+- [[09-testing-and-e2e-coverage]]: 펌웨어, ingest, Kafka, DB, query-api, frontend까지의 검증 루프와 남은 테스트 구멍
 - [[open-decisions]]: 아직 합의가 필요한 기술 결정사항
 
 ## 빠른 요약

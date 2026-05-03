@@ -17,8 +17,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  frontend:
-    name: Frontend build
+  ingest-control-panel:
+    name: Ingest control panel build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -39,6 +39,32 @@ jobs:
 
       - name: Build control panel
         run: npm run build
+
+  stream-viewer:
+    name: Stream viewer build and e2e
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/stream-viewer
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/stream-viewer/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build stream viewer
+        run: npm run build
+
+      - name: Run stream viewer e2e
+        run: npm run test:e2e
 
   ingest-unit:
     name: Ingest API unit tests
@@ -70,6 +96,39 @@ jobs:
 
       - name: Run unit tests
         run: uv run pytest tests/unit -q
+
+  query-api:
+    name: Query API unit and e2e tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services/query-api
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: python -m pip install uv==0.8.22
+
+      - name: Install Python dependencies
+        run: uv sync --locked --group dev
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Run query API tests
+        run: uv run pytest -q
+
+      - name: Tear down query stack
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: docker compose -f compose/e2e-compose.yml down -v --remove-orphans
 
   e2e:
     name: Docker Compose e2e

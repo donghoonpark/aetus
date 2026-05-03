@@ -552,7 +552,7 @@ uv run pytest -q
 
 - ingest unit: `34 passed`
 - ingest PostgreSQL/Kafka e2e: `22 passed`
-- query-api unit/e2e: `15 passed`
+- query-api unit/e2e: `17 passed`
 - stream-viewer frontend e2e: `2 passed`
 - QEMU e2e: 기본 실행에서는 skip, `AETUS_RUN_QEMU_E2E=1`일 때 별도 실행
 
@@ -633,7 +633,7 @@ uv run pytest -q
 
 1. mocked query-api URL을 `queryServerUrl` prop으로 전달
 2. stream metadata 조회
-3. sampled stream의 channel min/max envelope chart 렌더링
+3. sampled stream의 raw sample value chart 렌더링
 4. scalar stream으로 전환
 5. scalar stream chart 렌더링
 
@@ -681,6 +681,7 @@ uv run pytest -q
 - `48e89c6` `Use TimescaleDB for metric storage`
 - `4d1f437` `Split PostgreSQL base schema and Timescale layer`
 - `c0e3d80` `Add ESP32-C5 random telemetry stream mode`
+- `ec4bee8` `Downsample sampled streams by raw samples`
 
 ## 알려진 제약 / 주의사항
 
