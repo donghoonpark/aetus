@@ -35,7 +35,7 @@
 ## 상위 아키텍처
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Devices["Field Devices"]
         D1["ESP32-C5 Device"]
         D2["ESP32-C5 Device"]
@@ -91,7 +91,7 @@ flowchart LR
 - read path: 저장된 metric/signal을 query-api가 logical stream으로 변환하고 frontend가 시각화
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Write["Write path"]
         Device["Firmware / client"] --> Ingest["ingest-api"]
         Ingest --> Kafka["Kafka topics"]

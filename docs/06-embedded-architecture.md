@@ -43,7 +43,7 @@
 ## 권장 구조
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph App["Application Layer"]
         BIZ["Business Logic Task"]
         BLE["BLE / NimBLE Task"]

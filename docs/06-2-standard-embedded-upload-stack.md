@@ -15,7 +15,7 @@
 ## 설계 방향
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph UserApp["User Firmware"]
         Sensor["Sensor / Business Logic Task"]
         Control["Control State Machine"]

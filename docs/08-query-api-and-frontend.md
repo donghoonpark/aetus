@@ -31,7 +31,7 @@ ingest API와 stream query는 부하 특성이 다르다.
 ## 상위 구조
 
 ```mermaid
-flowchart LR
+flowchart TB
     Device["Embedded devices"] --> Ingest["ingest-api"]
     Ingest --> Kafka["Kafka"]
     Kafka --> Connect["Kafka Connect"]
@@ -69,7 +69,7 @@ query-api는 내부 저장 구조인 `metric point`와 `signal frame`를 사용�
 즉, query-api는 “저장 포맷”이 아니라 “조회 가능한 시계열”을 중심으로 계약을 잡는다.
 
 ```mermaid
-flowchart LR
+flowchart TB
     MetricStore["device_metric_points"] --> StreamModel["logical stream model"]
     SignalStore["device_signal_frames"] --> StreamModel
     StreamModel --> Query["query-api"]
@@ -221,7 +221,7 @@ flowchart TD
 - 하지만 query contract는 공통 tier ladder를 사용해도 된다
 
 ```mermaid
-flowchart LR
+flowchart TB
     T0["62.5ms"] --> T1["250ms"]
     T1 --> T2["1s"]
     T2 --> T3["4s"]
@@ -491,7 +491,7 @@ rollup 생성은 `DB 내부 job`을 기본안으로 둔다.
 - 즉, `rollup aggregation은 DB 내부`, `원시 binary 해석은 별도 단계`로 분리하는 쪽이 안전하다
 
 ```mermaid
-flowchart LR
+flowchart TB
     Raw["device_signal_frames"] --> Rollup62["62.5ms / 250ms / 1s"]
     Rollup62 --> Rollup4["4s / 16s / 64s"]
     Rollup4 --> Rollup256["256s / 1024s"]
@@ -631,7 +631,7 @@ query-api 인증은 ingest 인증과 분리한다.
 따라서 query-api는 device token, bootstrap token, HMAC upload secret을 직접 사용하지 않는다.
 
 ```mermaid
-flowchart LR
+flowchart TB
     Operator["Operator / dashboard shell"] --> Issuer["Auth issuer"]
     Issuer --> JWT["Short-lived query JWT"]
     JWT --> Viewer["AetusStreamViewer"]

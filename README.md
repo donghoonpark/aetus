@@ -180,7 +180,7 @@ For local HIL credentials, keep secrets in an untracked `.env.hil` file. Do not 
 The firmware stack is designed so product code does not need to know about HTTP or protobuf details.
 
 ```mermaid
-flowchart LR
+flowchart TB
     Sensor["Sensor / business task"] --> API["aetus_enqueue_*"]
     API --> Queue["FreeRTOS queue"]
     Queue --> Uploader["AETUS uploader task"]

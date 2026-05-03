@@ -221,7 +221,7 @@ SELECT add_retention_policy('device_signal_frames', INTERVAL '1 year', if_not_ex
 `metric_ingest_staging`과 `signal_frame_ingest_staging`에는 PostgreSQL trigger가 걸려 있다. Kafka Connect가 staging row를 upsert하면 trigger가 dimension table과 장기 hypertable 적재를 DB 내부에서 수행한다.
 
 ```mermaid
-flowchart LR
+flowchart TB
     API["FastAPI"] -->|"raw envelope"| RawTopic["device.raw.v1"]
     API -->|"metric envelope"| MetricTopic["device.metric.v1"]
     API -->|"signal frame envelope"| SignalTopic["device.signal_frame.v1"]
@@ -368,7 +368,7 @@ signal frame 적재 테이블:
 ## 보안
 
 ```mermaid
-flowchart LR
+flowchart TB
     Device["ESP32-C5"] -->|"HTTP(or HTTPS without cert verify) + Auth"| API["FastAPI"]
     API -->|"SASL/TLS"| Kafka["Kafka"]
     Connect["Kafka Connect"] -->|"TLS"| Kafka

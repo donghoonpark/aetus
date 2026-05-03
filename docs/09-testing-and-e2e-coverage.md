@@ -13,7 +13,7 @@
 ## 전체 데이터 루프
 
 ```mermaid
-flowchart LR
+flowchart TB
     FW["ESP32 firmware\nnanopb / aetus component"] --> HTTP["HTTP POST /v1/ingest\nprotobuf"]
     Py["Python ingest client\nprotobuf SDK"] --> HTTP
     Rust["Rust ingest client\nprotobuf SDK"] --> HTTP
@@ -68,7 +68,7 @@ flowchart LR
 ### 1. Host nanopb mock to PostgreSQL
 
 ```mermaid
-flowchart LR
+flowchart TB
     Mock["mock-device-nanopb\npybind11"] --> Ingest["ingest-api"]
     Ingest --> Kafka["Kafka"]
     Kafka --> Connect["Kafka Connect"]
@@ -91,7 +91,7 @@ flowchart LR
 ### 1-1. Client SDKs to PostgreSQL
 
 ```mermaid
-flowchart LR
+flowchart TB
     PySDK["clients/python-ingest\nAetusIngestClient"] --> Ingest["ingest-api"]
     RustSDK["clients/rust-ingest\nAetusIngestClient"] --> Ingest
     Ingest --> Kafka["Kafka"]
@@ -149,7 +149,7 @@ flowchart LR
 ### QEMU firmware e2e
 
 ```mermaid
-flowchart LR
+flowchart TB
     IDF["ESP-IDF firmware build"] --> QEMU["QEMU RISC-V"]
     QEMU --> UART["UART hex protobuf"]
     UART --> Ingest["POST /v1/ingest"]
@@ -161,7 +161,7 @@ flowchart LR
 ### HIL firmware
 
 ```mermaid
-flowchart LR
+flowchart TB
     C5["ESP32-C5 physical board"] --> WiFi["Wi-Fi"]
     WiFi --> Ingest["ingest-api"]
     Ingest --> PG["PostgreSQL"]
