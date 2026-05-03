@@ -11,7 +11,8 @@
 7. [[06-1-event-driven-low-power-system-implementation-plan]]
 8. [[06-2-standard-embedded-upload-stack]]
 9. [[07-implementation-status]]
-10. [[open-decisions]]
+10. [[08-query-api-and-frontend]]
+11. [[open-decisions]]
 
 ## 문서 맵
 
@@ -24,6 +25,7 @@
 - [[06-1-event-driven-low-power-system-implementation-plan]]: OPT3001 기반 이벤트 구동 저전력 전략, 전력 예산, 배터리 수명 계산
 - [[06-2-standard-embedded-upload-stack]]: `firmware/esp32-aetus` 표준 업로드 컴포넌트, 공개 API, thread safety, 예제 app, HIL 소비 구조
 - [[07-implementation-status]]: 현재 코드 구현 범위, 테스트 커버리지, 운영 제약, 다음 작업 포인트
+- [[08-query-api-and-frontend]]: signal query API, downsampling, 표준 프론트엔드 컴포넌트, 시각화 서비스 분리 방안
 - [[open-decisions]]: 아직 합의가 필요한 기술 결정사항
 
 ## 빠른 요약
@@ -41,6 +43,7 @@
 - 임베디드 표준 스택은 `ESP-IDF + FreeRTOS + NimBLE + FlashDB + nanopb`
 - 표준 업로드 컴포넌트는 `firmware/esp32-aetus`에 위치하며 유저 task는 thread-safe enqueue API만 호출한다
 - `firmware/examples`는 표준 컴포넌트를 실제 ESP-IDF app으로 소비하는 빌드 가능한 예제를 제공한다
+- signal visualization은 ingest API와 분리된 `query-api`에서 고정 `x4` rollup tier, `Redis` cache, `JSON + gzip/br` 압축 응답을 사용하는 방향을 기본안으로 둔다
 - bootstrap token은 단일 공용 token이며 유출/공유를 전제로 매우 가혹한 제한만 둔다
 - provisioning allowlist는 `source IP + hardware_id` 기준으로 FastAPI에서 관리한다
 - HMAC-SHA256 ingest 인증은 bearer token과 병행하는 선택 경로로 구현되어 있다

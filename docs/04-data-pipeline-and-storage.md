@@ -72,6 +72,8 @@
 - `signal_frame_ingest_staging`: Kafka Connect가 쓰는 signal frame 중간 테이블, raw와 같은 짧은 보관 주기
 - `device_metric_points`: 장기 시계열 분석용 TimescaleDB hypertable, 기본 보관 목표 `1년`
 - `device_signal_frames`: dense sampled signal block 저장용 TimescaleDB hypertable, 기본 보관 목표 `1년`
+- `signal_frame_features`: query 시점에 필요 범위만 생성하는 frame-level 통계용 materialized cache table
+- `signal_rollup_points`: 고정 `x4` rollup tier 기반 시각화용 query-serving 테이블
 - `devices`, `device_boot_sessions`, `metric_definitions`, `signal_stream_definitions`: 문자열 dimension을 정수 surrogate key로 매핑
 
 관계 개요:
@@ -159,6 +161,9 @@ erDiagram
 - `7일`이 지난 metric chunk는 TimescaleDB compression policy로 압축
 - `7일`이 지난 signal frame chunk도 TimescaleDB compression policy로 압축
 - `1년`이 지난 metric point와 signal frame은 TimescaleDB retention policy로 자동 삭제
+- signal query는 raw frame을 직접 차트 기본 소스로 사용하지 않고, 시각화는 `signal_rollup_points`, summary/search는 필요 시 `signal_frame_features`를 우선 조회한다
+- rollup 해상도는 `62.5ms -> 250ms -> 1s -> 4s -> 16s -> 64s ...` 고정 `x4` tier ladder를 기본안으로 둔다
+- `signal_frame_features`는 eager 적재하지 않고 query-triggered materialization으로 생성하며, 자체 retention 이후 자동 삭제한다
 
 TimescaleDB 설정:
 
