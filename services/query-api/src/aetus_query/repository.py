@@ -394,7 +394,8 @@ def _limit_points(rows: list[dict[str, Any]], max_points: int) -> list[dict[str,
 
 
 def _raw_frames_to_series(device_id: str, key: str, frames: list[dict[str, Any]], max_points: int) -> dict[str, Any]:
-    channel_points: dict[str, dict[str, Any]] = {}
+    channel_samples: dict[str, dict[str, Any]] = {}
+    timestamps: list[datetime] = []
     for frame in frames:
         channels = _channels_from_json(frame["channels_json"])
         values_by_channel = decode_samples(
@@ -404,27 +405,88 @@ def _raw_frames_to_series(device_id: str, key: str, frames: list[dict[str, Any]]
             channels=channels,
             sample_count=frame["sample_count"],
         )
-        for stats in compute_channel_stats(values_by_channel, channels):
-            channel_points.setdefault(stats.key, {"name": stats.key, "unit": stats.unit, "points": []})
-            channel_points[stats.key]["points"].append(
-                {
-                    "ts": to_iso8601(frame["event_time"]),
-                    "min": stats.minimum,
-                    "max": stats.maximum,
-                    "avg": stats.average,
-                }
-            )
+        frame_timestamps = _sample_timestamps(
+            frame["event_time"],
+            frame["sample_interval_ns"],
+            frame["sample_count"],
+        )
+        timestamps.extend(frame_timestamps)
+        for channel in channels:
+            channel_samples.setdefault(channel.key, {"name": channel.key, "unit": channel.unit, "values": []})
+            channel_samples[channel.key]["values"].extend(values_by_channel[channel.key])
 
-    for channel in channel_points.values():
-        channel["points"] = _limit_points(channel["points"], max_points)
+    if not channel_samples:
+        channels = []
+        mode = "samples"
+    elif len(timestamps) <= max_points:
+        channels = _sample_series_channels(channel_samples, timestamps)
+        mode = "samples"
+    else:
+        channels = _bucketed_envelope_channels(channel_samples, timestamps, max_points)
+        mode = "envelope"
+
     return {
         "device_id": device_id,
         "key": key,
         "kind": "sampled",
-        "resolution": "raw-frame",
-        "mode": "envelope",
-        "channels": list(channel_points.values()),
+        "resolution": "raw-sample" if mode == "samples" else "raw-sample-bucket",
+        "mode": mode,
+        "source_sample_count": len(timestamps),
+        "channels": channels,
     }
+
+
+def _sample_timestamps(event_time: datetime, sample_interval_ns: int, sample_count: int) -> list[datetime]:
+    return [
+        event_time + timedelta(microseconds=(sample_index * sample_interval_ns) / 1000)
+        for sample_index in range(sample_count)
+    ]
+
+
+def _sample_series_channels(
+    channel_samples: dict[str, dict[str, Any]],
+    timestamps: list[datetime],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": channel["name"],
+            "unit": channel["unit"],
+            "points": [
+                {"ts": to_iso8601(timestamp), "value": value}
+                for timestamp, value in zip(timestamps, channel["values"], strict=False)
+            ],
+        }
+        for channel in channel_samples.values()
+    ]
+
+
+def _bucketed_envelope_channels(
+    channel_samples: dict[str, dict[str, Any]],
+    timestamps: list[datetime],
+    max_points: int,
+) -> list[dict[str, Any]]:
+    total = len(timestamps)
+    bucket_count = min(total, max_points)
+    channels = []
+    for channel in channel_samples.values():
+        points = []
+        values = channel["values"]
+        for bucket_index in range(bucket_count):
+            start_index = bucket_index * total // bucket_count
+            end_index = (bucket_index + 1) * total // bucket_count
+            bucket_values = values[start_index:end_index]
+            if not bucket_values:
+                continue
+            points.append(
+                {
+                    "ts": to_iso8601(timestamps[start_index]),
+                    "min": min(bucket_values),
+                    "max": max(bucket_values),
+                    "avg": sum(bucket_values) / len(bucket_values),
+                }
+            )
+        channels.append({"name": channel["name"], "unit": channel["unit"], "points": points})
+    return channels
 
 
 def _rollup_series_response(device_id: str, key: str, rows: list[dict[str, Any]], max_points: int) -> dict[str, Any]:

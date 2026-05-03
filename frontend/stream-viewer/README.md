@@ -17,6 +17,8 @@ import "@aetus/stream-viewer/style.css";
     query-server-url="http://127.0.0.1:18001"
     device-id="dense-device-1"
     initial-stream-key="dense.vibration"
+    initial-range-preset="10m"
+    :max-points-per-request="10000"
   />
 </template>
 ```
@@ -28,6 +30,7 @@ import "@aetus/stream-viewer/style.css";
 | `queryServerUrl` | yes | Base URL for `services/query-api`. |
 | `deviceId` | no | Initial device ID. Operators can edit it in the component. |
 | `initialStreamKey` | no | Initial stream key to select after stream metadata loads. |
+| `initialRangePreset` | no | Initial range preset: `10m`, `1h`, `6h`, or `1d`; defaults to `1h`. |
 | `maxPointsPerRequest` | no | Chart point budget sent as `max_points`; defaults to `1500`. |
 
 ## Development

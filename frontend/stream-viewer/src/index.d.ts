@@ -4,6 +4,7 @@ export interface AetusStreamViewerProps {
   queryServerUrl: string;
   deviceId?: string;
   initialStreamKey?: string;
+  initialRangePreset?: string;
   maxPointsPerRequest?: number;
 }
 

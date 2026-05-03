@@ -160,11 +160,13 @@ const props = withDefaults(
     queryServerUrl: string;
     deviceId?: string;
     initialStreamKey?: string;
+    initialRangePreset?: string;
     maxPointsPerRequest?: number;
   }>(),
   {
     deviceId: "",
     initialStreamKey: "",
+    initialRangePreset: "1h",
     maxPointsPerRequest: 1500,
   },
 );
@@ -179,7 +181,7 @@ const streams = ref<StreamInfo[]>([]);
 const selectedKey = ref(props.initialStreamKey);
 const series = ref<SeriesResponse | null>(null);
 const maxPoints = ref(props.maxPointsPerRequest);
-const rangePreset = ref("1h");
+const rangePreset = ref(props.initialRangePreset);
 const loadingStreams = ref(false);
 const loadingSeries = ref(false);
 const loading = computed(() => loadingStreams.value || loadingSeries.value);
@@ -296,20 +298,33 @@ function renderChart() {
             data: (series.value.points ?? []).map((point) => [point.ts, point.value]),
           },
         ]
-      : (series.value.channels ?? []).flatMap((channel) => [
-          {
-            name: `${channel.name} min`,
-            type: "line",
-            showSymbol: false,
-            data: channel.points.map((point) => [point.ts, point.min]),
-          },
-          {
-            name: `${channel.name} max`,
-            type: "line",
-            showSymbol: false,
-            data: channel.points.map((point) => [point.ts, point.max]),
-          },
-        ]);
+      : (series.value.channels ?? []).flatMap((channel) => {
+          const hasEnvelope = channel.points.some((point) => point.min !== undefined || point.max !== undefined);
+          if (!hasEnvelope) {
+            return [
+              {
+                name: channel.name,
+                type: "line",
+                showSymbol: false,
+                data: channel.points.map((point) => [point.ts, point.value]),
+              },
+            ];
+          }
+          return [
+            {
+              name: `${channel.name} min`,
+              type: "line",
+              showSymbol: false,
+              data: channel.points.map((point) => [point.ts, point.min]),
+            },
+            {
+              name: `${channel.name} max`,
+              type: "line",
+              showSymbol: false,
+              data: channel.points.map((point) => [point.ts, point.max]),
+            },
+          ];
+        });
 
   chart.setOption({
     animation: false,

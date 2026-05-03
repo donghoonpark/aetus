@@ -57,22 +57,22 @@ test.beforeEach(async ({ page }) => {
         key: "dense.vibration",
         kind: "sampled",
         resolution: "4s",
-        mode: "envelope",
+        mode: "samples",
         channels: [
           {
             name: "accel_x",
             unit: "g",
             points: [
-              { ts: "2026-05-03T00:00:00Z", min: -0.2, max: 0.3, avg: 0.01 },
-              { ts: "2026-05-03T00:00:04Z", min: -0.4, max: 0.5, avg: 0.02 },
+              { ts: "2026-05-03T00:00:00Z", value: 0.1 },
+              { ts: "2026-05-03T00:00:04Z", value: 0.2 },
             ],
           },
           {
             name: "accel_y",
             unit: "g",
             points: [
-              { ts: "2026-05-03T00:00:00Z", min: -0.1, max: 0.2, avg: 0.01 },
-              { ts: "2026-05-03T00:00:04Z", min: -0.3, max: 0.4, avg: 0.02 },
+              { ts: "2026-05-03T00:00:00Z", value: 0.3 },
+              { ts: "2026-05-03T00:00:04Z", value: 0.4 },
             ],
           },
         ],

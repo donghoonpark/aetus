@@ -394,10 +394,10 @@ flowchart TD
     Req["series request"] --> Kind{"stream kind?"}
     Kind -- "scalar" --> Scalar["read metric series"]
     Kind -- "sampled" --> Width{"expected points > max_points?"}
-    Width -- "no" --> Raw["read raw frames and downsample in memory"]
+    Width -- "no" --> Raw["read raw frames and return decoded samples"]
     Width -- "yes" --> Range{"matching rollup exists?"}
     Range -- "yes" --> Rollup["read rollup table"]
-    Range -- "no" --> Batch["read raw frames in chunks and build temporary envelope"]
+    Range -- "no" --> Batch["read raw frames and build sample-bucket envelope"]
     Scalar --> Resp["return chart dataset"]
     Raw --> Resp
     Rollup --> Resp
@@ -409,7 +409,8 @@ flowchart TD
 - 요청 해상도는 `requested_span / max_points`로 계산
 - 계산된 해상도보다 작지 않은 가장 가까운 `x4` tier를 선택
 - `from/to`는 선택된 tier 경계에 맞춰 정렬
-- 아주 짧은 구간은 raw frame 기반 in-memory envelope를 허용
+- 아주 짧은 구간은 raw frame을 decode해 sample point를 직접 반환할 수 있다
+- rollup이 없는 구간은 frame 단위가 아니라 raw sample timeline을 기준으로 `max_points`개 bucket envelope를 만든다
 
 예시:
 
@@ -417,6 +418,12 @@ flowchart TD
 - `15m / 1200pt` 요청은 `1s` 또는 `4s` tier 후보
 - `6h / 1500pt` 요청은 `16s` tier 후보
 - `3d / 1200pt` 요청은 `256s` tier 후보
+
+현재 구현된 raw fallback:
+
+- `source_sample_count <= max_points`이면 `mode=samples`, `resolution=raw-sample`로 channel별 `value` point를 반환한다
+- `source_sample_count > max_points`이면 `mode=envelope`, `resolution=raw-sample-bucket`으로 정확히 `max_points`개 이하의 min/max/avg bucket을 반환한다
+- 예: 270Hz급 signal의 최근 10분 요청에서 `max_points=10000`이면 약 16만 원본 sample을 읽고 10,000개 bucket point로 응답한다
 
 ### feature query 경로
 

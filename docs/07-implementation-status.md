@@ -354,7 +354,7 @@ TimescaleDB 설정:
 - 공개 조회 모델은 `metric`과 `signal frame`를 숨기고 `stream`으로 통합 노출
 - `kind=scalar` stream은 `device_metric_points`에서 series 조회
 - `kind=sampled` stream은 `device_signal_frames` 또는 `signal_rollup_points`에서 series 조회
-- rollup row가 없으면 raw frame을 query-api에서 decode해 frame-level envelope 반환
+- rollup row가 없으면 raw frame을 query-api에서 decode해 sample-level series 또는 sample-bucket envelope 반환
 - `summary` 요청은 query-api 런타임에서 raw `BYTEA samples`를 decode해 `signal_frame_features`를 on-demand upsert
 - 만료된 `signal_frame_features`는 query-api가 materialization 시 삭제
 - `frames`는 좁은 구간의 sampled stream에 대해서만 raw decoded sample JSON 반환
@@ -397,6 +397,7 @@ TimescaleDB 설정:
 - `GET /series` 기반 chart 렌더링
 - scalar stream line chart
 - sampled stream channel별 min/max envelope chart
+- sampled stream raw sample value chart
 - `10m`, `1h`, `6h`, `1d` 범위 preset
 - `max_points` 제어
 
@@ -624,6 +625,7 @@ uv run pytest -q
 13. compose 기반 PostgreSQL/Redis/query-api 기동
 14. 실제 `signal_frame_features` row 생성 확인
 15. 실제 `BYTEA samples` decode 후 raw frame JSON 반환 확인
+16. raw frame fallback이 sample point와 sample-bucket envelope를 반환하는지 확인
 
 ### stream-viewer frontend coverage
 

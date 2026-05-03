@@ -184,10 +184,9 @@ def test_query_api_returns_sampled_series_from_raw_frame(query_stack: None) -> N
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["kind"] == "sampled"
-    assert body["mode"] == "envelope"
+    assert body["mode"] == "samples"
     channels = {channel["name"]: channel for channel in body["channels"]}
-    assert channels["accel_x"]["points"][0]["min"] == pytest.approx(0.10)
-    assert channels["accel_x"]["points"][0]["max"] == pytest.approx(0.13)
+    assert [point["value"] for point in channels["accel_x"]["points"]] == pytest.approx([0.10, 0.11, 0.12, 0.13])
 
 
 def test_query_api_materializes_summary_features(query_stack: None) -> None:
