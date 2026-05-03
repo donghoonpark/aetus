@@ -57,21 +57,17 @@ AETUS tries to keep those seams clean:
 
 ```mermaid
 flowchart LR
-    Client["Device or software client<br/>protobuf payload"] -->|"HTTP protobuf"| API["FastAPI ingest"]
-    API -->|"raw event JSON"| RawTopic["Kafka topic<br/>device.raw.v1"]
-    API -->|"1 metric = 1 record"| MetricTopic["Kafka topic<br/>device.metric.v1"]
-    API -->|"1 frame = 1 record"| SignalTopic["Kafka topic<br/>device.signal_frame.v1"]
-    RawTopic --> RawSink["Kafka Connect<br/>raw sink"]
-    MetricTopic --> MetricSink["Kafka Connect<br/>metric staging sink"]
-    SignalTopic --> SignalSink["Kafka Connect<br/>signal frame staging sink"]
-    RawSink --> RawTable["raw_device_events"]
-    MetricSink --> Staging["metric_ingest_staging"]
-    SignalSink --> SignalStaging["signal_frame_ingest_staging"]
-    Staging -->|"PostgreSQL trigger"| Dims["devices / boot sessions / metric definitions"]
-    Staging -->|"upsert"| Points["device_metric_points"]
-    SignalStaging -->|"PostgreSQL trigger"| SignalDims["devices / boot sessions / signal stream definitions"]
-    SignalStaging -->|"upsert"| Frames["device_signal_frames"]
+    Device["Devices & SDK clients<br/>ESP-IDF / Python / Rust"] -->|"HTTP + protobuf"| Ingest["FastAPI ingest<br/>auth, parse, normalize"]
+    Ingest -->|"raw, metric, signal events"| Kafka["Kafka topics"]
+    Kafka -->|"JDBC Sink"| Storage["PostgreSQL / TimescaleDB<br/>raw short-retention + normalized time-series"]
+    Storage --> Query["Query API<br/>downsample, cache, drill-down"]
+    Query --> UI["Vue dashboards<br/>control panel / stream viewer"]
+
+    Admin["Admin / provisioning"] --> Ingest
+    Storage --> Admin
 ```
+
+Detailed Kafka topic, staging table, trigger, and retention design lives in `docs/04-data-pipeline-and-storage.md`.
 
 ## Current Features
 
