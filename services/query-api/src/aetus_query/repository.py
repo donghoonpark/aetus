@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -11,6 +13,8 @@ from psycopg_pool import ConnectionPool
 
 from aetus_query.signal_decode import Channel, compute_channel_stats, decode_samples
 from aetus_query.time_utils import to_iso8601
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +57,7 @@ class PostgresQueryRepository(QueryRepository):
             self._pool = ConnectionPool(dsn, min_size=2, max_size=10, open=True, kwargs={"row_factory": dict_row})
 
     def list_streams(self, device_id: str) -> list[StreamRef]:
+        t0 = time.monotonic()
         with self._connect() as conn:
             scalar_rows = conn.execute(
                 """
@@ -111,9 +116,14 @@ class PostgresQueryRepository(QueryRepository):
             )
             for row in sampled_rows
         )
+        logger.debug(
+            "list_streams device=%s scalar=%d sampled=%d elapsed=%.3fms",
+            device_id, len(scalar_rows), len(sampled_rows), (time.monotonic() - t0) * 1000,
+        )
         return streams
 
     def scalar_series(self, device_id: str, key: str, start: datetime, end: datetime, max_points: int) -> dict[str, Any]:
+        t0 = time.monotonic()
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -137,7 +147,13 @@ class PostgresQueryRepository(QueryRepository):
                 """,
                 (device_id, key, start, end),
             ).fetchall()
+        raw_count = len(rows)
         rows = _limit_points(rows, max_points)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.debug(
+            "scalar_series device=%s key=%s raw=%d out=%d elapsed=%.3fms",
+            device_id, key, raw_count, len(rows), elapsed_ms,
+        )
         return {
             "device_id": device_id,
             "key": key,
@@ -147,6 +163,7 @@ class PostgresQueryRepository(QueryRepository):
         }
 
     def sampled_series(self, device_id: str, key: str, start: datetime, end: datetime, max_points: int) -> dict[str, Any]:
+        t0 = time.monotonic()
         with self._connect() as conn:
             rollups = conn.execute(
                 """
@@ -163,8 +180,19 @@ class PostgresQueryRepository(QueryRepository):
                 (device_id, key, start, end),
             ).fetchall()
             if rollups:
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                logger.debug(
+                    "sampled_series device=%s key=%s source=rollup buckets=%d elapsed=%.3fms",
+                    device_id, key, len(rollups), elapsed_ms,
+                )
                 return _rollup_series_response(device_id, key, rollups, max_points)
             frames = self._read_signal_frames(conn, device_id, key, start, end)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        total_samples = sum(frame["sample_count"] for frame in frames)
+        logger.debug(
+            "sampled_series device=%s key=%s source=raw frames=%d samples=%d elapsed=%.3fms",
+            device_id, key, len(frames), total_samples, elapsed_ms,
+        )
         return _raw_frames_to_series(device_id, key, frames, max_points)
 
     def summary(
@@ -176,6 +204,7 @@ class PostgresQueryRepository(QueryRepository):
         *,
         feature_ttl_seconds: int,
     ) -> dict[str, Any]:
+        t0 = time.monotonic()
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=feature_ttl_seconds)
         with self._connect() as conn:
@@ -186,9 +215,15 @@ class PostgresQueryRepository(QueryRepository):
                 self._materialize_feature_rows(conn, device_id, key, start, end, frames, expires_at)
                 existing = self._read_feature_rows(conn, device_id, key, start, end)
                 conn.commit()
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.debug(
+            "summary device=%s key=%s channels=%d elapsed=%.3fms",
+            device_id, key, len(existing), elapsed_ms,
+        )
         return _feature_summary_response(device_id, key, start, end, existing)
 
     def frames(self, device_id: str, key: str, start: datetime, end: datetime) -> dict[str, Any]:
+        t0 = time.monotonic()
         with self._connect() as conn:
             frames = self._read_signal_frames(conn, device_id, key, start, end)
         response_frames = []
@@ -212,6 +247,11 @@ class PostgresQueryRepository(QueryRepository):
                     ],
                 }
             )
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.debug(
+            "frames device=%s key=%s frames=%d elapsed=%.3fms",
+            device_id, key, len(response_frames), elapsed_ms,
+        )
         return {"device_id": device_id, "key": key, "kind": "sampled", "frames": response_frames}
 
     def _connect(self) -> psycopg.Connection:
