@@ -20,6 +20,8 @@ firmware/esp32-aetus/
 
 ## Add To An ESP-IDF App
 
+### Local Checkout
+
 ```cmake
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/../esp32-aetus/components/aetus"
@@ -28,6 +30,45 @@ set(EXTRA_COMPONENT_DIRS
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(my_aetus_device)
+```
+
+### FetchContent
+
+External ESP-IDF apps can import AETUS before calling ESP-IDF `project.cmake`.
+The repository root and `firmware/esp32-aetus` both expose the same helper
+functions, so either a whole-repo checkout or a source-subdir import can work.
+
+Whole repository import:
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+
+include(FetchContent)
+FetchContent_Declare(
+    aetus
+    GIT_REPOSITORY https://github.com/donghoonpark/aetus.git
+    GIT_TAG main
+)
+FetchContent_MakeAvailable(aetus)
+
+aetus_append_component_dirs()
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(my_aetus_device)
+```
+
+If the app already manages `EXTRA_COMPONENT_DIRS` in a custom variable, pass
+that variable name explicitly:
+
+```cmake
+aetus_append_component_dirs(TARGET_VARIABLE EXTRA_COMPONENT_DIRS)
+```
+
+For advanced layouts, retrieve the directories without mutating parent scope:
+
+```cmake
+aetus_get_component_dirs(AETUS_COMPONENT_DIRS)
+list(APPEND EXTRA_COMPONENT_DIRS ${AETUS_COMPONENT_DIRS})
 ```
 
 Then depend on the component from your app component:
