@@ -3,9 +3,9 @@ services:
     build:
       context: ../services/postgres
     environment:
-      POSTGRES_DB: aetus
-      POSTGRES_USER: aetus
-      POSTGRES_PASSWORD: aetus
+      POSTGRES_DB: ${POSTGRES_DB:-aetus}
+      POSTGRES_USER: ${POSTGRES_USER:-aetus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aetus}
     ports:
       - "15432:5432"
     healthcheck:
@@ -84,6 +84,10 @@ services:
     depends_on:
       kafka-connect:
         condition: service_healthy
+    environment:
+      PG_CONNECTION_URL: ${PG_CONNECTION_URL:-jdbc:postgresql://postgres:5432/aetus}
+      PG_CONNECTION_USER: ${PG_CONNECTION_USER:-aetus}
+      PG_CONNECTION_PASSWORD: ${PG_CONNECTION_PASSWORD:-aetus}
     volumes:
       - ../services/kafka-connect/connectors:/config/connectors:ro
     entrypoint:
@@ -92,9 +96,16 @@ services:
       - |
         until curl -fsS http://kafka-connect:8083/; do sleep 2; done
         for config in /config/connectors/*.json; do
+          tmp=$$(mktemp)
+          sed \
+            -e "s|\$${PG_CONNECTION_URL}|$${PG_CONNECTION_URL}|g" \
+            -e "s|\$${PG_CONNECTION_USER}|$${PG_CONNECTION_USER}|g" \
+            -e "s|\$${PG_CONNECTION_PASSWORD}|$${PG_CONNECTION_PASSWORD}|g" \
+            "$$config" > "$$tmp"
           curl -fsS -X POST http://kafka-connect:8083/connectors \
             -H 'Content-Type: application/json' \
-            --data @"$$config"
+            --data @"$$tmp"
+          rm -f "$$tmp"
         done
 
   ingest-api:
@@ -105,13 +116,14 @@ services:
         condition: service_healthy
     environment:
       AETUS_PUBLISHER_BACKEND: kafka
-      AETUS_BOOTSTRAP_TOKEN: bootstrap_shared_token
+      AETUS_BOOTSTRAP_TOKEN: ${AETUS_BOOTSTRAP_TOKEN:-bootstrap_shared_token}
       AETUS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       AETUS_KAFKA_TOPIC: device.raw.v1
       AETUS_KAFKA_METRIC_TOPIC: device.metric.v1
       AETUS_KAFKA_SIGNAL_FRAME_TOPIC: device.signal_frame.v1
       AETUS_KAFKA_CONNECT_URL: http://kafka-connect:8083
-      AETUS_POSTGRES_DSN: postgresql://aetus:aetus@postgres:5432/aetus
+      AETUS_POSTGRES_DSN: ${AETUS_POSTGRES_DSN:-postgresql://aetus:aetus@postgres:5432/aetus}
+      AETUS_ADMIN_PASSWORD: ${AETUS_ADMIN_PASSWORD:-}
       AETUS_ALLOWED_SOURCE_CIDRS: 0.0.0.0/0
       AETUS_DEVICE_TOKENS: esp32c5-test-001=devtok_test_001
       AETUS_ALLOWLIST_DEVICE_IDS: ""
@@ -137,8 +149,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      AETUS_POSTGRES_DSN: postgresql://aetus:aetus@postgres:5432/aetus
-      AETUS_QUERY_REDIS_URL: redis://redis:6379/0
+      AETUS_POSTGRES_DSN: ${AETUS_POSTGRES_DSN:-postgresql://aetus:aetus@postgres:5432/aetus}
+      AETUS_QUERY_REDIS_URL: ${AETUS_QUERY_REDIS_URL:-redis://redis:6379/0}
       AETUS_HOST: 0.0.0.0
       AETUS_PORT: 8000
     ports:
