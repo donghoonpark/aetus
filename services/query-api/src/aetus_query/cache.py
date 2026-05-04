@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Protocol
 
 from redis import Redis
 from redis.exceptions import RedisError
+
+logger = logging.getLogger(__name__)
 
 
 class Cache(Protocol):
@@ -28,7 +31,8 @@ class RedisJsonCache:
     def get_json(self, key: str) -> dict[str, Any] | None:
         try:
             raw = self._client.get(key)
-        except RedisError:
+        except RedisError as exc:
+            logger.warning("redis get failed for key %s: %s", key, exc)
             return None
         if raw is None:
             return None
@@ -37,5 +41,5 @@ class RedisJsonCache:
     def set_json(self, key: str, value: dict[str, Any], ttl_seconds: int) -> None:
         try:
             self._client.setex(key, ttl_seconds, json.dumps(value, separators=(",", ":"), ensure_ascii=True))
-        except RedisError:
-            return
+        except RedisError as exc:
+            logger.warning("redis set failed for key %s: %s", key, exc)

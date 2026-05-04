@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from math import ceil
@@ -9,7 +10,7 @@ import time
 
 from fastapi import FastAPI, Form, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from aetus_ingest.auth import (
@@ -38,6 +39,36 @@ from aetus_ingest.schemas import (
 
 ADMIN_PAGE_SIZE = 10
 RTC_VALID_AFTER_UNIX_S = 1_577_836_800
+ADMIN_SESSION_COOKIE = "aetus_admin_session"
+
+
+class _AdminSessionStore:
+    def __init__(self, ttl_seconds: int) -> None:
+        self._sessions: dict[str, float] = {}
+        self._ttl = ttl_seconds
+
+    def create(self) -> str:
+        token = secrets.token_urlsafe(32)
+        self._sessions[token] = time.monotonic() + self._ttl
+        return token
+
+    def validate(self, token: str) -> bool:
+        deadline = self._sessions.pop(token, 0)
+        if deadline and deadline > time.monotonic():
+            self._sessions[token] = deadline
+            return True
+        return False
+
+    def revoke(self, token: str) -> None:
+        self._sessions.pop(token, None)
+
+
+def _is_admin_auth_enabled(settings: Settings) -> bool:
+    return bool(settings.admin_password and settings.admin_password.strip())
+
+
+def _parse_admin_session(request: Request) -> str | None:
+    return request.cookies.get(ADMIN_SESSION_COOKIE)
 
 
 def _to_device_summary(record: DeviceRecord) -> DeviceSummary:
@@ -110,6 +141,7 @@ def create_app(
     else:
         app.state.publisher = InMemoryEventPublisher()
     app.state.rate_limiter = rate_limiter or InMemoryRateLimiter()
+    app.state.admin_sessions = _AdminSessionStore(resolved_settings.admin_session_ttl_seconds)
 
     def raise_rate_limited(decision: RateLimitDecision, detail: str) -> None:
         retry_after = max(1, ceil(decision.retry_after_seconds))
@@ -118,6 +150,14 @@ def create_app(
             detail=detail,
             headers={"Retry-After": str(retry_after)},
         )
+
+    def _require_admin_session(request: Request) -> None:
+        settings: Settings = app.state.settings
+        if not _is_admin_auth_enabled(settings):
+            return
+        token = _parse_admin_session(request)
+        if not token or not app.state.admin_sessions.validate(token):
+            raise HTTPException(status_code=401, detail="authentication required")
 
     def ingest_rate_plan(device_id: str) -> RateLimitPlan:
         is_allowlisted = device_id in app.state.settings.allowlist_device_ids
@@ -232,11 +272,6 @@ def create_app(
     async def readyz() -> dict[str, str]:
         return {"status": "ready"}
 
-    @app.get("/v1/control/status", response_model=ControlStatusResponse)
-    async def control_status() -> ControlStatusResponse:
-        settings: Settings = app.state.settings
-        return await build_control_status(settings)
-
     @app.get("/v1/time", response_model=TimeSyncResponse)
     async def time_sync(
         request: Request,
@@ -263,12 +298,47 @@ def create_app(
             valid_after_unix_s=RTC_VALID_AFTER_UNIX_S,
         )
 
+    @app.post("/v1/control/login")
+    async def control_login(request: Request, response: Response) -> JSONResponse:
+        settings: Settings = app.state.settings
+        if not _is_admin_auth_enabled(settings):
+            return JSONResponse({"message": "admin auth not configured"})
+        body = await request.json()
+        password = body.get("password", "")
+        if password != settings.admin_password:
+            raise HTTPException(status_code=401, detail="invalid password")
+        token = app.state.admin_sessions.create()
+        response.set_cookie(
+            ADMIN_SESSION_COOKIE,
+            token,
+            httponly=True,
+            samesite="strict",
+            max_age=settings.admin_session_ttl_seconds,
+        )
+        return JSONResponse({"message": "authenticated"})
+
+    @app.post("/v1/control/logout")
+    async def control_logout(request: Request, response: Response) -> JSONResponse:
+        token = _parse_admin_session(request)
+        if token:
+            app.state.admin_sessions.revoke(token)
+        response.delete_cookie(ADMIN_SESSION_COOKIE)
+        return JSONResponse({"message": "logged out"})
+
+    @app.get("/v1/control/status", response_model=ControlStatusResponse)
+    async def control_status(request: Request) -> ControlStatusResponse:
+        _require_admin_session(request)
+        settings: Settings = app.state.settings
+        return await build_control_status(settings)
+
     @app.get("/v1/control/devices", response_model=DeviceListResponse)
     async def control_devices(
+        request: Request,
         page: int = Query(1, ge=1),
         page_size: int = Query(10, ge=1, le=50),
         q: str = Query("", max_length=100),
     ) -> DeviceListResponse:
+        _require_admin_session(request)
         control_db: ControlStore = app.state.control_db
         current_page = max(page, 1)
         total_items = await control_db.count_devices_readonly(query=q)
@@ -287,7 +357,8 @@ def create_app(
         )
 
     @app.post("/v1/control/devices/issue", response_model=DeviceSummary, status_code=status.HTTP_201_CREATED)
-    async def control_issue_device(payload: DeviceIssueRequest) -> DeviceSummary:
+    async def control_issue_device(request: Request, payload: DeviceIssueRequest) -> DeviceSummary:
+        _require_admin_session(request)
         control_db: ControlStore = app.state.control_db
         issued = await control_db.issue_device_token(
             hardware_id=payload.hardware_id,
@@ -406,10 +477,45 @@ def create_app(
     @app.get("/admin/devices", response_class=HTMLResponse)
     async def admin_devices(
         request: Request,
+        response: Response,
         page: int = Query(1, ge=1),
         q: str = Query("", max_length=100),
     ) -> HTMLResponse:
+        settings: Settings = app.state.settings
+        if _is_admin_auth_enabled(settings):
+            token = _parse_admin_session(request)
+            if not token or not app.state.admin_sessions.validate(token):
+                return _render_login_page(request, error=None)
         return await render_admin_devices_page(request, flash_message=None, issued_device=None, page=page, query=q)
+
+    @app.post("/admin/login", response_class=HTMLResponse)
+    async def admin_login(
+        request: Request,
+        response: Response,
+        password: str = Form(""),
+        redirect: str = Form("/admin/devices"),
+    ) -> HTMLResponse:
+        settings: Settings = app.state.settings
+        if not _is_admin_auth_enabled(settings):
+            response.headers["Location"] = redirect
+            response.status_code = status.HTTP_302_FOUND
+            return HTMLResponse("")
+        if password != settings.admin_password:
+            return _render_login_page(request, error="Invalid password")
+        token = app.state.admin_sessions.create()
+        response = _login_redirect(redirect, token, settings.admin_session_ttl_seconds)
+        return response
+
+    @app.post("/admin/logout", response_class=HTMLResponse)
+    async def admin_logout(request: Request) -> HTMLResponse:
+        token = _parse_admin_session(request)
+        if token:
+            app.state.admin_sessions.revoke(token)
+        response = HTMLResponse(
+            '<html><body><script>document.cookie="aetus_admin_session=;path=/;max-age=0";location.href="/admin/devices";</script></body></html>'
+        )
+        response.delete_cookie(ADMIN_SESSION_COOKIE)
+        return response
 
     @app.post("/admin/devices/issue", response_class=HTMLResponse)
     async def admin_issue_device(
@@ -421,6 +527,11 @@ def create_app(
         page: int = Form(1),
         search_query: str = Form(""),
     ) -> HTMLResponse:
+        settings: Settings = app.state.settings
+        if _is_admin_auth_enabled(settings):
+            token = _parse_admin_session(request)
+            if not token or not app.state.admin_sessions.validate(token):
+                return _render_login_page(request, error="Session expired. Please log in again.")
         control_db: ControlStore = app.state.control_db
         issued = await control_db.issue_device_token(
             hardware_id=hardware_id,
@@ -437,6 +548,50 @@ def create_app(
         )
 
     return app
+
+
+def _render_login_page(request: Request, *, error: str | None = None) -> HTMLResponse:
+    error_html = f'<div class="alert alert-danger">{error}</div>' if error else ""
+    return HTMLResponse(
+        f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AETUS Admin Login</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+<div class="container" style="max-width:400px;margin-top:80px">
+<div class="card shadow">
+<div class="card-body text-center">
+<h5 class="card-title mb-3">AETUS Admin</h5>
+{error_html}
+<form method="post" action="/admin/login">
+<input type="hidden" name="redirect" value="/admin/devices">
+<div class="mb-3">
+<label for="password" class="form-label">Password</label>
+<input type="password" class="form-control" id="password" name="password" autofocus>
+</div>
+<button type="submit" class="btn btn-primary w-100">Sign In</button>
+</form>
+</div></div></div>
+</body></html>"""
+    )
+
+
+def _login_redirect(redirect: str, token: str, max_age: int) -> HTMLResponse:
+    response = HTMLResponse(
+        f'<html><body>Redirecting...<script>location.href="{redirect}";</script></body></html>'
+    )
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="strict",
+        max_age=max_age,
+    )
+    return response
 
 
 def _control_db_detail(settings: Settings) -> str:

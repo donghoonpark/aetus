@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 import httpx
@@ -9,6 +10,8 @@ from kafka import KafkaAdminClient
 
 from aetus_ingest.config import Settings
 from aetus_ingest.schemas import ComponentStatus, ControlStatusResponse
+
+logger = logging.getLogger(__name__)
 
 
 async def build_control_status(settings: Settings) -> ControlStatusResponse:
@@ -40,7 +43,8 @@ async def _check_control_db(settings: Settings) -> ComponentStatus:
             return ComponentStatus(name="control_db", state="healthy", detail=detail)
         raise ValueError(f"unsupported control DB backend: {settings.control_db_backend}")
     except Exception as exc:
-        return ComponentStatus(name="control_db", state="down", detail=str(exc))
+        logger.warning("control_db health check failed: %s", exc)
+        return ComponentStatus(name="control_db", state="down", detail="control database check failed")
 
 
 def _check_sqlite_file(path: str) -> None:
@@ -77,7 +81,8 @@ async def _check_kafka(settings: Settings) -> ComponentStatus:
         detail = await asyncio.to_thread(_kafka_topics_detail, settings)
         return ComponentStatus(name="kafka", state="healthy", detail=detail)
     except Exception as exc:
-        return ComponentStatus(name="kafka", state="down", detail=str(exc))
+        logger.warning("kafka health check failed: %s", exc)
+        return ComponentStatus(name="kafka", state="down", detail="kafka check failed")
 
 
 def _kafka_topics_detail(settings: Settings) -> str:
@@ -104,7 +109,8 @@ async def _check_kafka_connect(settings: Settings) -> ComponentStatus:
             detail=f"{settings.kafka_connect_url} ({len(connectors)} connectors)",
         )
     except Exception as exc:
-        return ComponentStatus(name="kafka_connect", state="down", detail=str(exc))
+        logger.warning("kafka_connect health check failed: %s", exc)
+        return ComponentStatus(name="kafka_connect", state="down", detail="kafka connect check failed")
 
 
 async def _check_postgres(settings: Settings) -> ComponentStatus:
@@ -112,7 +118,8 @@ async def _check_postgres(settings: Settings) -> ComponentStatus:
         detail = await asyncio.to_thread(_postgres_detail, settings)
         return ComponentStatus(name="postgres", state="healthy", detail=detail)
     except Exception as exc:
-        return ComponentStatus(name="postgres", state="down", detail=str(exc))
+        logger.warning("postgres health check failed: %s", exc)
+        return ComponentStatus(name="postgres", state="down", detail="postgres check failed")
 
 
 def _postgres_detail(settings: Settings) -> str:

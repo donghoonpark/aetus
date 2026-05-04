@@ -72,6 +72,8 @@ class Settings:
     control_db_backup_interval_seconds: float = 3600.0
     control_db_backup_retention_count: int = 48
     control_db_backup_on_startup: bool = True
+    admin_password: str = ""
+    admin_session_ttl_seconds: int = 8 * 3600
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -118,6 +120,8 @@ class Settings:
             control_db_backup_interval_seconds=float(os.getenv("AETUS_CONTROL_DB_BACKUP_INTERVAL_SECONDS", "3600")),
             control_db_backup_retention_count=int(os.getenv("AETUS_CONTROL_DB_BACKUP_RETENTION_COUNT", "48")),
             control_db_backup_on_startup=_parse_bool(os.getenv("AETUS_CONTROL_DB_BACKUP_ON_STARTUP", "true")),
+            admin_password=os.getenv("AETUS_ADMIN_PASSWORD", ""),
+            admin_session_ttl_seconds=int(os.getenv("AETUS_ADMIN_SESSION_TTL_SECONDS", str(8 * 3600))),
             host=os.getenv("AETUS_HOST", "0.0.0.0"),
             port=int(os.getenv("AETUS_PORT", "8000")),
         )
