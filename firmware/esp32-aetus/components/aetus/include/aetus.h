@@ -4,6 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(__has_include)
+#if __has_include("sdkconfig.h")
+#include "sdkconfig.h"
+#endif
+#endif
+
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 
@@ -18,7 +24,19 @@ extern "C" {
 #define AETUS_METRIC_BYTES_MAX 64
 #define AETUS_SIGNAL_STREAM_KEY_MAX 32
 #define AETUS_SIGNAL_CHANNELS_MAX 4
+#ifndef AETUS_SIGNAL_SAMPLES_MAX
+#ifdef CONFIG_AETUS_SIGNAL_SAMPLES_MAX
+#define AETUS_SIGNAL_SAMPLES_MAX CONFIG_AETUS_SIGNAL_SAMPLES_MAX
+#else
 #define AETUS_SIGNAL_SAMPLES_MAX 2048
+#endif
+#endif
+#ifndef AETUS_SIGNAL_SAMPLES_ABSOLUTE_MAX
+#define AETUS_SIGNAL_SAMPLES_ABSOLUTE_MAX 3072
+#endif
+#ifndef AETUS_SIGNAL_FRAME_STRUCT_MAX_BYTES
+#define AETUS_SIGNAL_FRAME_STRUCT_MAX_BYTES 4096
+#endif
 #define AETUS_WIFI_SSID_MAX 32
 #define AETUS_WIFI_PASSWORD_MAX 64
 #define AETUS_WIFI_IDENTITY_MAX 127
@@ -27,6 +45,18 @@ extern "C" {
 #define AETUS_DEVICE_TOKEN_MAX 127
 #define AETUS_UPLOAD_DEFAULT_INTERVAL_MS (10U * 60U * 1000U)
 #define AETUS_RTC_VALID_AFTER_UNIX_S 1577836800ULL
+
+#ifdef __cplusplus
+#define AETUS_STATIC_ASSERT(condition, message) static_assert((condition), message)
+#else
+#define AETUS_STATIC_ASSERT(condition, message) _Static_assert((condition), message)
+#endif
+
+AETUS_STATIC_ASSERT(AETUS_SIGNAL_SAMPLES_MAX > 0, "AETUS_SIGNAL_SAMPLES_MAX must be greater than zero");
+AETUS_STATIC_ASSERT(
+    AETUS_SIGNAL_SAMPLES_MAX <= AETUS_SIGNAL_SAMPLES_ABSOLUTE_MAX,
+    "AETUS_SIGNAL_SAMPLES_MAX exceeds the supported static frame limit"
+);
 
 typedef enum {
     AETUS_METRIC_VALUE_INT64 = 0,
@@ -93,6 +123,11 @@ typedef struct {
     uint8_t samples[AETUS_SIGNAL_SAMPLES_MAX];
     size_t samples_size;
 } aetus_signal_frame_t;
+
+AETUS_STATIC_ASSERT(
+    sizeof(aetus_signal_frame_t) <= AETUS_SIGNAL_FRAME_STRUCT_MAX_BYTES,
+    "aetus_signal_frame_t is too large for the configured static memory budget"
+);
 
 typedef enum {
     AETUS_DEVICE_STATUS_ONLINE = 0,

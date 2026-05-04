@@ -1,0 +1,40 @@
+menu "AETUS upload stack"
+
+config AETUS_SIGNAL_SAMPLES_MAX
+    int "Maximum signal frame sample bytes"
+    default 2048
+    range 1 3072
+    help
+        Maximum raw sample bytes stored in one aetus_signal_frame_t.
+        This is a compile-time memory budget because frames are copied into
+        the FreeRTOS queue. Use lower values for deep queues or constrained
+        heap configurations. 2400 byte sample payloads require this to be at
+        least 2400.
+
+config AETUS_ENCODE_BUFFER_BYTES
+    int "AETUS protobuf encode buffer bytes"
+    default 4096
+    range 1024 8192
+    help
+        Stack buffer used by the uploader task to hold one encoded protobuf
+        request body. It must be larger than AETUS_SIGNAL_SAMPLES_MAX plus
+        protobuf envelope and channel metadata overhead.
+
+config AETUS_TASK_STACK_BYTES
+    int "AETUS uploader task stack bytes"
+    default 12288
+    range 8192 24576
+    help
+        Stack size for the uploader task. The task owns the encode buffer and
+        one queue item while posting to HTTP.
+
+config AETUS_QUEUE_ITEM_MAX_BYTES
+    int "Maximum AETUS queue item bytes"
+    default 4096
+    range 1024 8192
+    help
+        Compile-time guard for the size of one FreeRTOS queue item. Increasing
+        AETUS_SIGNAL_SAMPLES_MAX increases every queue slot by roughly the
+        same amount.
+
+endmenu

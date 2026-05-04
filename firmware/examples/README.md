@@ -50,3 +50,13 @@ The C++ HIL-oriented examples read Wi-Fi/API credentials from environment variab
 - `AETUS_DEVICE_TOKEN`
 
 For compile-only CI, these are supplied with dummy values.
+
+## Signal Frame Size
+
+`cpp-signal-frame` uses the AETUS component's static signal frame budget. The default maximum raw sample payload is 2048 bytes. To validate larger frames, such as a 2400 byte dense sample block, add this to the example's `sdkconfig.defaults` or set it through `idf.py menuconfig`:
+
+```ini
+CONFIG_AETUS_SIGNAL_SAMPLES_MAX=2400
+```
+
+If this value becomes inconsistent with the protobuf encode buffer or queue slot memory budget, the component fails at compile time instead of producing a firmware image with surprising RAM usage.

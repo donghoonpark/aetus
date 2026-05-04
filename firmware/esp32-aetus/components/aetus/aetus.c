@@ -32,15 +32,42 @@
 #define AETUS_UPLOAD_FLUSH_BIT BIT2
 #define AETUS_UPLOAD_DONE_BIT BIT3
 #define AETUS_HTTP_TIMEOUT_MS 10000
+#ifndef AETUS_TASK_STACK_BYTES
+#ifdef CONFIG_AETUS_TASK_STACK_BYTES
+#define AETUS_TASK_STACK_BYTES CONFIG_AETUS_TASK_STACK_BYTES
+#else
 #define AETUS_TASK_STACK_BYTES 12288
+#endif
+#endif
 #define AETUS_TASK_PRIORITY 5
 #define AETUS_WIFI_CONNECT_TIMEOUT_MS 15000
+#ifndef AETUS_ENCODE_BUFFER_BYTES
+#ifdef CONFIG_AETUS_ENCODE_BUFFER_BYTES
+#define AETUS_ENCODE_BUFFER_BYTES CONFIG_AETUS_ENCODE_BUFFER_BYTES
+#else
 #define AETUS_ENCODE_BUFFER_BYTES 4096
+#endif
+#endif
+#ifndef AETUS_SIGNAL_FRAME_ENCODE_OVERHEAD_BYTES
+#define AETUS_SIGNAL_FRAME_ENCODE_OVERHEAD_BYTES 512
+#endif
+#ifndef AETUS_QUEUE_ITEM_MAX_BYTES
+#ifdef CONFIG_AETUS_QUEUE_ITEM_MAX_BYTES
+#define AETUS_QUEUE_ITEM_MAX_BYTES CONFIG_AETUS_QUEUE_ITEM_MAX_BYTES
+#else
+#define AETUS_QUEUE_ITEM_MAX_BYTES 4096
+#endif
+#endif
 #define AETUS_TIME_RESPONSE_BUFFER_BYTES 512
 #define AETUS_INGEST_PATH "/v1/ingest"
 #define AETUS_TIME_PATH "/v1/time"
 #define AETUS_HMAC_SCHEME "hmac-sha256-v1"
 #define AETUS_HMAC_PREFIX "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n"
+
+AETUS_STATIC_ASSERT(
+    AETUS_ENCODE_BUFFER_BYTES >= (AETUS_SIGNAL_SAMPLES_MAX + AETUS_SIGNAL_FRAME_ENCODE_OVERHEAD_BYTES),
+    "AETUS_ENCODE_BUFFER_BYTES must cover max signal samples plus protobuf envelope overhead"
+);
 
 static const char *TAG = "aetus";
 
@@ -58,6 +85,11 @@ typedef struct {
         aetus_signal_frame_t signal_frame;
     } body;
 } aetus_queue_item_t;
+
+AETUS_STATIC_ASSERT(
+    sizeof(aetus_queue_item_t) <= AETUS_QUEUE_ITEM_MAX_BYTES,
+    "aetus_queue_item_t exceeds the configured FreeRTOS queue slot budget"
+);
 
 typedef struct {
     const uint8_t *data;

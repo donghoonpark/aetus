@@ -87,6 +87,25 @@ void app_main(void)
 }
 ```
 
+## Static Signal Frame Budget
+
+Signal frame sample storage is intentionally a compile-time budget. `aetus_signal_frame_t` owns its sample buffer, and each queued frame is copied into a FreeRTOS queue slot so producer tasks can return immediately without lifetime hazards.
+
+Default limits:
+
+- `CONFIG_AETUS_SIGNAL_SAMPLES_MAX=2048`: maximum raw sample bytes in one signal frame.
+- `CONFIG_AETUS_ENCODE_BUFFER_BYTES=4096`: uploader task stack buffer for one encoded protobuf request.
+- `CONFIG_AETUS_TASK_STACK_BYTES=12288`: uploader task stack.
+- `CONFIG_AETUS_QUEUE_ITEM_MAX_BYTES=4096`: compile-time queue slot size guard.
+
+For 2400 byte sample payloads, set `CONFIG_AETUS_SIGNAL_SAMPLES_MAX` to at least `2400` in `sdkconfig.defaults` or `menuconfig`. The component also has compile-time guards that fail the build if:
+
+- `CONFIG_AETUS_SIGNAL_SAMPLES_MAX` exceeds the supported static frame limit.
+- `CONFIG_AETUS_ENCODE_BUFFER_BYTES` is too small for max samples plus protobuf envelope overhead.
+- one `aetus_queue_item_t` exceeds `CONFIG_AETUS_QUEUE_ITEM_MAX_BYTES`.
+
+Dense signal producers should keep `queue_depth` conservative, for example `4` to `8`, because each queued signal frame reserves roughly one frame worth of RAM.
+
 ## NimBLE Provisioning
 
 `aetus_start_provisioning()` starts a NimBLE GATT server that can receive Wi-Fi and upload configuration at runtime. The provisioning service keeps a pending config buffer; writes update the pending values, and writing any value to the `apply` characteristic calls `aetus_update_config()`.
