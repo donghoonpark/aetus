@@ -5,7 +5,7 @@ import hmac
 import ipaddress
 import re
 
-from aetus_ingest.control_db import ControlDB
+from aetus_ingest.control_db import ControlStore
 from aetus_ingest.config import Settings
 
 HMAC_SIGNATURE_SCHEME = "hmac-sha256-v1"
@@ -31,7 +31,7 @@ def is_source_ip_allowed(source_ip: str, settings: Settings) -> bool:
     return any(ip in network for network in settings.allowed_source_cidrs)
 
 
-async def verify_device_token(device_id: str, token: str, control_db: ControlDB) -> bool:
+async def verify_device_token(device_id: str, token: str, control_db: ControlStore) -> bool:
     expected = await control_db.get_device_token_readonly(device_id)
     return expected is not None and expected == token
 
@@ -59,7 +59,7 @@ async def verify_hmac_signature(
     path: str,
     body: bytes,
     signature_header: str | None,
-    control_db: ControlDB,
+    control_db: ControlStore,
 ) -> bool:
     try:
         signature_hex = parse_hmac_signature(signature_header)

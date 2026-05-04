@@ -289,8 +289,8 @@ ingest API와 프로비저닝 API는 역할을 분리하는 것이 좋다.
 - 장치 분실, 유출 의심, 현장 교체 시에만 재발급
 - 토큰 원문은 장치와 서버 레지스트리 외 구간에 최소 노출
 - allowlist와 token 메타데이터는 FastAPI 내부 관리 DB에 저장
-- 내부 관리 DB는 `SQLite`로 시작 가능
-- 초당 호출량이 `1k req/s` 근방으로 올라가면 내부 관리 DB를 `MySQL`로 전환하고 FastAPI pod를 증설
+- 내부 관리 DB는 `SQLite`로 시작 가능하며 주기 백업을 수행
+- 다중 pod 또는 호출량 증가 시 내부 관리 DB를 `PostgreSQL` control schema로 전환하고 FastAPI pod를 증설
 
 ### hardware_id 규칙
 

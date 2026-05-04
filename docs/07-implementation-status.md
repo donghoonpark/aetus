@@ -139,7 +139,7 @@ Rust client E2E도 compose stack을 통해 provisioning, ingest, Kafka/Kafka Con
 10. 내부 event object로 normalize
 11. memory publisher 또는 Kafka publisher로 publish
 
-HMAC-SHA256 선택 인증 경로는 구현되어 있으며 `X-Aetus-Signature: hmac-sha256-v1=<hex>`가 있으면 HMAC mode로 처리한다. HMAC mode에서도 control DB 조회는 read-only로 수행하고, ingest 경로는 SQLite write를 하지 않는다.
+HMAC-SHA256 선택 인증 경로는 구현되어 있으며 `X-Aetus-Signature: hmac-sha256-v1=<hex>`가 있으면 HMAC mode로 처리한다. HMAC mode에서도 control DB 조회는 read-only로 수행하고, ingest 경로는 control DB write를 하지 않는다.
 
 ### RTC time sync 동작
 
@@ -152,8 +152,9 @@ HMAC-SHA256 선택 인증 경로는 구현되어 있으며 `X-Aetus-Signature: h
 
 ### 중요한 구현 결정
 
-- ingest 경로는 `SQLite`에 write 하지 않는다.
-- ingest 인증 조회는 `aiosqlite` 기반 read-only connection으로 수행한다.
+- ingest 경로는 control DB에 write 하지 않는다.
+- SQLite backend의 ingest 인증 조회는 `aiosqlite` 기반 read-only connection으로 수행한다.
+- PostgreSQL backend도 같은 `ControlStore` 인터페이스를 사용하며, control schema의 token/allowlist만 조회한다.
 - `timestamp_ns`는 장치 시각으로 별도 보존하고, `received_at`은 서버 수신 시각으로 별도 기록한다.
 - `sequence` 순서가 꼬여 들어와도 ingest 레벨에서는 막지 않는다.
 - HMAC 인증에서도 ingest 경로 DB write 원칙을 유지하고, replay guard는 별도 확장으로 둔다.
@@ -163,9 +164,10 @@ HMAC-SHA256 선택 인증 경로는 구현되어 있으며 `X-Aetus-Signature: h
 구현 파일:
 
 - [[../services/ingest-api/src/aetus_ingest/control_db.py]]
+- [[../services/ingest-api/src/aetus_ingest/control_backup.py]]
 - [[../services/ingest-api/src/aetus_ingest/schemas.py]]
 
-현재 control DB는 `SQLite`를 사용한다.
+현재 control DB는 `SQLite`와 `PostgreSQL` backend를 선택할 수 있다.
 
 역할:
 
@@ -175,24 +177,53 @@ HMAC-SHA256 선택 인증 경로는 구현되어 있으며 `X-Aetus-Signature: h
 - admin page용 device list 조회
 - control panel용 JSON API 제공
 
+### backend 선택
+
+설정:
+
+- `AETUS_CONTROL_DB_BACKEND=sqlite|postgres`
+- `AETUS_CONTROL_DB_PATH=data/control.db`
+- `AETUS_CONTROL_DATABASE_URL=postgresql://...`
+- `AETUS_CONTROL_DB_SCHEMA=control`
+
+`AETUS_CONTROL_DATABASE_URL`이 없으면 `AETUS_POSTGRES_DSN`을 control DB 연결에도 사용한다. 단, telemetry table과 control table은 같은 database 안에서도 schema를 분리한다.
+
 ### SQLite 사용 방식
 
+- 단일 Pod, 초기 PoC, 랩 환경의 기본 backend다.
 - read path: `aiosqlite`
 - write path: provisioning / admin issue only
 - 설정:
   - `journal_mode=WAL`
   - `synchronous=NORMAL`
   - `busy_timeout=3000`
+- FastAPI lifespan task가 SQLite online backup API로 주기 백업을 만든다.
+- 기본 백업 설정:
+  - `AETUS_CONTROL_DB_BACKUP_ENABLED=true`
+  - `AETUS_CONTROL_DB_BACKUP_DIR=data/control-backups`
+  - `AETUS_CONTROL_DB_BACKUP_INTERVAL_SECONDS=3600`
+  - `AETUS_CONTROL_DB_BACKUP_RETENTION_COUNT=48`
+  - `AETUS_CONTROL_DB_BACKUP_ON_STARTUP=true`
+
+compose 환경에서는 `/data/control-backups`가 volume에 남는다.
+
+### PostgreSQL 사용 방식
+
+- multi-pod 또는 운영 환경의 권장 backend다.
+- 기본 schema는 `control`이다.
+- 생성 table:
+  - `control.devices`
+  - `control.hardware_allowlist`
+- ingest upload 경로는 PostgreSQL backend를 써도 token/allowlist read만 수행한다.
+- provisioning과 admin issue API만 control DB write를 수행한다.
 
 ### 현재 전환 기준
 
-문서상 운영 가정은 다음과 같다.
+운영 가정은 다음과 같다.
 
-- 초기 운용: `SQLite`
-- `~1k req/s` 근방: `MySQL + multi-pod` 전환 검토
-
-코드에는 아직 MySQL abstraction은 없다.
-현재는 `ControlDB`가 SQLite에 직접 묶여 있다.
+- 초기 운용: `SQLite + 주기 백업`
+- 다중 Pod 또는 호출량 증가: `PostgreSQL control backend`
+- telemetry 저장소는 기존 PostgreSQL/TimescaleDB와 유지하되, control plane schema는 분리한다.
 
 ## 3. Admin Console
 
@@ -753,15 +784,20 @@ uv run pytest -q
 
 즉 테스트는 특정 literal IP가 아니라 “유효한 IP 문자열인지”를 본다.
 
-## 3. SQLite는 아직 단일 control plane 전제
+## 3. SQLite는 단일 control plane 전제
 
-현재는 replica 분산이나 shared DB abstraction이 없다.
+SQLite backend는 단일 Pod 또는 read-only seed 운영에 맞춘다.
 
-다음 단계에서 고려할 수 있는 것:
+현재 구현된 전환 경로:
 
-- `ControlDB` interface 분리
-- `SQLite` / `MySQL` backend 분기
-- control plane write API 별도 분리
+- `ControlStore` interface
+- `SQLite` / `PostgreSQL` backend 분기
+- SQLite 주기 백업
+
+남은 운영 보강:
+
+- SQLite에서 PostgreSQL로 export/import하는 migration command
+- control plane admin 인증
 
 ## 4. sequence 검증은 아직 하지 않음
 

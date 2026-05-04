@@ -145,6 +145,8 @@ The compose stack seeds a development device:
 - Device ID: `esp32c5-test-001`
 - Token: `devtok_test_001`
 
+By default the ingest control plane uses SQLite at `/data/control.db` and writes hourly online backups to `/data/control-backups` in the same compose volume. For multi-pod operation, set `AETUS_CONTROL_DB_BACKEND=postgres` and keep control tables in a separate PostgreSQL schema such as `control`.
+
 ### 2. Run backend tests
 
 ```bash
@@ -231,6 +233,8 @@ Metric points and signal frames use integer surrogate keys for repeated strings 
 - `device_signal_frames`
 
 The base schema in `services/postgres/initdb/00-base.sql` runs on plain PostgreSQL. The optional TimescaleDB layer in `services/postgres/initdb/10-timescale.sql` adds hypertable, compression, and retention policies.
+
+Provisioning/control metadata is deliberately separate from telemetry storage. Small deployments can use SQLite with periodic backups; larger deployments can switch the same FastAPI API surface to PostgreSQL by setting `AETUS_CONTROL_DB_BACKEND=postgres`, `AETUS_CONTROL_DATABASE_URL`, and `AETUS_CONTROL_DB_SCHEMA`.
 
 ## Security Posture
 

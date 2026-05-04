@@ -6,8 +6,11 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Mapping, Protocol
 
 import aiosqlite
+import psycopg
+from psycopg.rows import dict_row
 
 
 def utc_now_iso() -> str:
@@ -26,7 +29,37 @@ class DeviceRecord:
     updated_at: str
 
 
-class ControlDB:
+class ControlStore(Protocol):
+    def initialize(self) -> None: ...
+
+    def seed_hardware_allowlist(self, hardware_ids: set[str]) -> None: ...
+
+    def seed_devices(self, device_tokens: dict[str, str]) -> None: ...
+
+    async def get_device_token_readonly(self, device_id: str) -> str | None: ...
+
+    async def is_hardware_allowed_readonly(self, hardware_id: str) -> bool: ...
+
+    async def count_devices_readonly(self, *, query: str | None = None) -> int: ...
+
+    async def list_devices_readonly(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        query: str | None = None,
+    ) -> list[DeviceRecord]: ...
+
+    async def issue_device_token(
+        self,
+        hardware_id: str,
+        model: str | None,
+        firmware_version: int | None,
+        site_code: str | None,
+    ) -> DeviceRecord: ...
+
+
+class SqliteControlStore:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
 
@@ -280,13 +313,290 @@ class ControlDB:
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> DeviceRecord:
-        return DeviceRecord(
-            device_id=str(row["device_id"]),
-            hardware_id=str(row["hardware_id"]),
-            token=str(row["token"]),
-            model=None if row["model"] is None else str(row["model"]),
-            firmware_version=None if row["firmware_version"] is None else int(row["firmware_version"]),
-            site_code=None if row["site_code"] is None else str(row["site_code"]),
-            created_at=str(row["created_at"]),
-            updated_at=str(row["updated_at"]),
+        return _row_to_record(row)
+
+
+class PostgresControlStore:
+    def __init__(self, dsn: str, *, schema: str = "control", connect_timeout_seconds: float = 5.0) -> None:
+        self.dsn = dsn
+        self.schema = _validate_identifier(schema)
+        self.connect_timeout_seconds = max(int(connect_timeout_seconds), 1)
+        self._schema_sql = _quote_identifier(self.schema)
+        self._devices_table = f"{self._schema_sql}.devices"
+        self._hardware_allowlist_table = f"{self._schema_sql}.hardware_allowlist"
+
+    def initialize(self) -> None:
+        with self._connect_sync() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self._schema_sql}")
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._devices_table} (
+                        device_id TEXT PRIMARY KEY,
+                        hardware_id TEXT NOT NULL UNIQUE,
+                        token TEXT NOT NULL,
+                        model TEXT,
+                        firmware_version INTEGER,
+                        site_code TEXT,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._hardware_allowlist_table} (
+                        hardware_id TEXT PRIMARY KEY,
+                        description TEXT,
+                        created_at TIMESTAMPTZ NOT NULL
+                    )
+                    """
+                )
+
+    def seed_hardware_allowlist(self, hardware_ids: set[str]) -> None:
+        if not hardware_ids:
+            return
+        now = utc_now_iso()
+        rows = [(hardware_id, "seeded-from-env", now) for hardware_id in sorted(hardware_ids)]
+        with self._connect_sync() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    f"""
+                    INSERT INTO {self._hardware_allowlist_table} (hardware_id, description, created_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT(hardware_id) DO NOTHING
+                    """,
+                    rows,
+                )
+
+    def seed_devices(self, device_tokens: dict[str, str]) -> None:
+        if not device_tokens:
+            return
+        now = utc_now_iso()
+        rows = [
+            (device_id, f"seed-{device_id}", token, "seeded", None, None, now, now)
+            for device_id, token in device_tokens.items()
+        ]
+        with self._connect_sync() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    f"""
+                    INSERT INTO {self._devices_table} (
+                        device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(device_id) DO UPDATE SET
+                        token = excluded.token,
+                        updated_at = excluded.updated_at
+                    """,
+                    rows,
+                )
+
+    async def get_device_token_readonly(self, device_id: str) -> str | None:
+        async with await self._connect_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT token FROM {self._devices_table} WHERE device_id = %s",
+                    (device_id,),
+                )
+                row = await cur.fetchone()
+        return None if row is None else str(row["token"])
+
+    async def is_hardware_allowed_readonly(self, hardware_id: str) -> bool:
+        async with await self._connect_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT 1 FROM {self._hardware_allowlist_table} WHERE hardware_id = %s",
+                    (hardware_id,),
+                )
+                row = await cur.fetchone()
+        return row is not None
+
+    async def count_devices_readonly(self, *, query: str | None = None) -> int:
+        where_clause, params = _search_clause(query, placeholder="%s")
+        async with await self._connect_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT COUNT(*) AS count FROM {self._devices_table}{where_clause}",
+                    params,
+                )
+                row = await cur.fetchone()
+        return 0 if row is None else int(row["count"])
+
+    async def list_devices_readonly(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        query: str | None = None,
+    ) -> list[DeviceRecord]:
+        where_clause, params = _search_clause(query, placeholder="%s")
+        async with await self._connect_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                    FROM {self._devices_table}
+                    {where_clause}
+                    ORDER BY created_at DESC, device_id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (*params, limit, offset),
+                )
+                rows = await cur.fetchall()
+        return [_row_to_record(row) for row in rows]
+
+    async def issue_device_token(
+        self,
+        hardware_id: str,
+        model: str | None,
+        firmware_version: int | None,
+        site_code: str | None,
+    ) -> DeviceRecord:
+        now = utc_now_iso()
+        token = f"devtok_{secrets.token_urlsafe(24)}"
+        async with await self._connect_async() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    SELECT device_id FROM {self._devices_table}
+                    WHERE hardware_id = %s
+                    """,
+                    (hardware_id,),
+                )
+                row = await cur.fetchone()
+
+                if row is None:
+                    device_id = await self._next_device_id(cur, hardware_id)
+                    await cur.execute(
+                        f"""
+                        INSERT INTO {self._devices_table} (
+                            device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (device_id, hardware_id, token, model, firmware_version, site_code, now, now),
+                    )
+                else:
+                    device_id = str(row["device_id"])
+                    await cur.execute(
+                        f"""
+                        UPDATE {self._devices_table}
+                        SET token = %s, model = %s, firmware_version = %s, site_code = %s, updated_at = %s
+                        WHERE hardware_id = %s
+                        """,
+                        (token, model, firmware_version, site_code, now, hardware_id),
+                    )
+
+                await cur.execute(
+                    f"""
+                    INSERT INTO {self._hardware_allowlist_table} (hardware_id, description, created_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT(hardware_id) DO NOTHING
+                    """,
+                    (hardware_id, "issued-via-admin-or-provision", now),
+                )
+                await cur.execute(
+                    f"""
+                    SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                    FROM {self._devices_table}
+                    WHERE hardware_id = %s
+                    """,
+                    (hardware_id,),
+                )
+                saved = await cur.fetchone()
+                assert saved is not None
+                return _row_to_record(saved)
+
+    async def _next_device_id(self, cur: psycopg.AsyncCursor[Mapping[str, Any]], hardware_id: str) -> str:
+        prefix = hardware_id.split("-", 1)[0]
+        normalized_prefix = re.sub(r"[^a-z0-9]+", "", prefix.lower()) or "device"
+        await cur.execute(
+            f"SELECT device_id FROM {self._devices_table} WHERE device_id LIKE %s",
+            (f"{normalized_prefix}-%",),
         )
+        rows = await cur.fetchall()
+        max_suffix = 0
+        for row in rows:
+            candidate = str(row["device_id"])
+            try:
+                suffix = int(candidate.rsplit("-", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            max_suffix = max(max_suffix, suffix)
+        return f"{normalized_prefix}-{max_suffix + 1:03d}"
+
+    def _connect_sync(self) -> psycopg.Connection[Mapping[str, Any]]:
+        return psycopg.connect(
+            self.dsn,
+            connect_timeout=self.connect_timeout_seconds,
+            row_factory=dict_row,
+        )
+
+    async def _connect_async(self) -> psycopg.AsyncConnection[Mapping[str, Any]]:
+        return await psycopg.AsyncConnection.connect(
+            self.dsn,
+            connect_timeout=self.connect_timeout_seconds,
+            row_factory=dict_row,
+        )
+
+
+ControlDB = SqliteControlStore
+
+
+def create_control_store(settings: Any) -> ControlStore:
+    backend = str(settings.control_db_backend).strip().lower()
+    if backend == "sqlite":
+        return SqliteControlStore(settings.control_db_path)
+    if backend in {"postgres", "postgresql"}:
+        return PostgresControlStore(
+            settings.resolved_control_database_url,
+            schema=settings.control_db_schema,
+            connect_timeout_seconds=settings.status_timeout_seconds,
+        )
+    raise ValueError(f"unsupported control DB backend: {settings.control_db_backend}")
+
+
+def _search_clause(query: str | None, *, placeholder: str) -> tuple[str, tuple[str, ...]]:
+    if not query:
+        return "", ()
+    needle = f"%{query.strip().lower()}%"
+    return (
+        f"""
+        WHERE
+            lower(device_id) LIKE {placeholder}
+            OR lower(hardware_id) LIKE {placeholder}
+            OR lower(COALESCE(model, '')) LIKE {placeholder}
+            OR lower(COALESCE(site_code, '')) LIKE {placeholder}
+        """,
+        (needle, needle, needle, needle),
+    )
+
+
+def _row_to_record(row: Mapping[str, Any]) -> DeviceRecord:
+    return DeviceRecord(
+        device_id=str(row["device_id"]),
+        hardware_id=str(row["hardware_id"]),
+        token=str(row["token"]),
+        model=None if row["model"] is None else str(row["model"]),
+        firmware_version=None if row["firmware_version"] is None else int(row["firmware_version"]),
+        site_code=None if row["site_code"] is None else str(row["site_code"]),
+        created_at=_timestamp_to_string(row["created_at"]),
+        updated_at=_timestamp_to_string(row["updated_at"]),
+    )
+
+
+def _timestamp_to_string(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _validate_identifier(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError(f"invalid SQL identifier: {value}")
+    return value
+
+
+def _quote_identifier(value: str) -> str:
+    return f'"{value}"'

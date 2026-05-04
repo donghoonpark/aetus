@@ -303,7 +303,7 @@ signal frame 적재 테이블:
 - `HPA`
 - readiness/liveness probe
 - 초기에는 단일 pod + `SQLite` 제어 DB로 시작 가능
-- 호출량이 초당 `1k` 근방으로 올라가면 제어 DB를 `MySQL`로 전환하고 pod를 추가 할당
+- 다중 pod 또는 호출량 증가 시 제어 DB를 `PostgreSQL` control schema로 전환하고 pod를 추가 할당
 
 ### Kafka Connect
 
@@ -396,8 +396,8 @@ flowchart TB
 - bootstrap token은 provisioning에만 사용
 - hardware allowlist를 함께 적용
 - allowlist 및 token 메타데이터는 FastAPI 내부 관리 DB에서 관리
-- 내부 관리 DB는 `SQLite`로 시작 가능
-- 제어 DB는 초기에는 `SQLite`, 고부하 시 `MySQL`로 전환
+- 내부 관리 DB는 `SQLite`로 시작 가능하며 주기 백업을 수행
+- 제어 DB는 초기에는 `SQLite`, 다중 pod 또는 고부하 시 `PostgreSQL` control schema로 전환
 - 토큰 원문은 최소 노출 원칙 적용
 - token rotate API는 초기 범위에서 제외
 - token 교체는 재프로비저닝 또는 운영자 수동 재발급으로 처리
@@ -439,13 +439,14 @@ HMAC만으로 해결하지 않는 것:
 현재 권장안:
 
 - `SQLite`
-- 약 `1k req/s` 근방부터는 `MySQL` 전환을 준비
+- 다중 pod 또는 호출량 증가 시 `PostgreSQL` control schema 전환을 준비
 
 이 선택이 적절한 이유:
 
 - 운영 데이터 양이 작음
 - 분리망 환경에서 의존성을 줄일 수 있음
 - FastAPI와 함께 단순하게 배포 가능
+- SQLite backend는 online backup API로 주기 백업 가능
 
 권장 저장 대상:
 
@@ -458,7 +459,7 @@ HMAC만으로 해결하지 않는 것:
 
 - 이벤트 본문 적재용 DB로는 사용하지 않음
 - `SQLite`는 운영 정책/메타데이터 저장 용도로 한정
-- 다중 pod 운영 전환 시에는 공유 상태를 위해 `MySQL` 같은 서버형 DB가 더 적절
+- 다중 pod 운영 전환 시에는 공유 상태를 위해 `PostgreSQL` 같은 서버형 DB가 더 적절
 
 ## rate limit
 
@@ -542,5 +543,5 @@ flowchart TD
 4. 실패 메시지는 `device.dlq.v1`로 이동
 5. `device_id + boot_id + sequence`로 중복 전송을 구분
 6. raw는 짧게 보관하고, metric/signal frame은 각각 `device_metric_points`, `device_signal_frames` hypertable에 장기 보관
-7. FastAPI control DB는 초기 `SQLite`, 고부하 시 `MySQL`로 전환
+7. FastAPI control DB는 초기 `SQLite + 주기 백업`, 다중 pod 또는 고부하 시 `PostgreSQL` control schema로 전환
 8. `k8s`에는 API와 Kafka Connect를 올리고, Kafka와 PostgreSQL은 분리망 내 self-managed로 운영

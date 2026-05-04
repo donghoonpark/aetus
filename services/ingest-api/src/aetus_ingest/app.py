@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from math import ceil
 from pathlib import Path
@@ -17,7 +19,8 @@ from aetus_ingest.auth import (
     verify_hmac_signature,
 )
 from aetus_ingest.config import Settings
-from aetus_ingest.control_db import ControlDB, DeviceRecord
+from aetus_ingest.control_backup import run_sqlite_backup_loop
+from aetus_ingest.control_db import ControlStore, DeviceRecord, SqliteControlStore, create_control_store
 from aetus_ingest.control_status import build_control_status
 from aetus_ingest.generated import ingest_pb2
 from aetus_ingest.normalize import normalize_event
@@ -55,8 +58,39 @@ def create_app(
     publisher: InMemoryEventPublisher | None = None,
     rate_limiter: InMemoryRateLimiter | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="AETUS Ingest Server", version="0.1.0")
-    app.state.settings = settings or Settings.from_env()
+    resolved_settings = settings or Settings.from_env()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        backup_task: asyncio.Task[None] | None = None
+        control_db = app.state.control_db
+        app.state.control_db_backup_task = None
+        if (
+            isinstance(control_db, SqliteControlStore)
+            and app.state.settings.control_db_backup_enabled
+            and app.state.settings.control_db_backup_interval_seconds > 0
+        ):
+            backup_task = asyncio.create_task(
+                run_sqlite_backup_loop(
+                    control_db.path,
+                    app.state.settings.control_db_backup_dir,
+                    interval_seconds=app.state.settings.control_db_backup_interval_seconds,
+                    retention_count=app.state.settings.control_db_backup_retention_count,
+                    backup_on_startup=app.state.settings.control_db_backup_on_startup,
+                ),
+                name="aetus-sqlite-control-backup",
+            )
+            app.state.control_db_backup_task = backup_task
+        try:
+            yield
+        finally:
+            if backup_task is not None:
+                backup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await backup_task
+
+    app = FastAPI(title="AETUS Ingest Server", version="0.1.0", lifespan=lifespan)
+    app.state.settings = resolved_settings
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(app.state.settings.cors_origins),
@@ -64,7 +98,7 @@ def create_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Device-Id", "X-Aetus-Signature"],
     )
-    app.state.control_db = ControlDB(app.state.settings.control_db_path)
+    app.state.control_db = create_control_store(app.state.settings)
     app.state.control_db.initialize()
     app.state.control_db.seed_hardware_allowlist(app.state.settings.allowed_hardware_ids)
     app.state.control_db.seed_devices(app.state.settings.device_tokens)
@@ -120,7 +154,7 @@ def create_app(
         x_device_id: str,
         authorization: str | None,
     ) -> None:
-        control_db: ControlDB = app.state.control_db
+        control_db: ControlStore = app.state.control_db
         try:
             token = extract_bearer_token(authorization)
         except ValueError as exc:
@@ -161,7 +195,7 @@ def create_app(
         query: str = "",
     ) -> HTMLResponse:
         settings: Settings = app.state.settings
-        control_db: ControlDB = app.state.control_db
+        control_db: ControlStore = app.state.control_db
         current_page = max(page, 1)
         total_devices = await control_db.count_devices_readonly(query=query)
         total_pages = max(ceil(total_devices / ADMIN_PAGE_SIZE), 1)
@@ -176,7 +210,7 @@ def create_app(
                 "devices": devices,
                 "flash_message": flash_message,
                 "issued_device": issued_device,
-                "control_db_path": settings.control_db_path,
+                "control_db_detail": _control_db_detail(settings),
                 "allowed_source_cidrs": ", ".join(str(network) for network in settings.allowed_source_cidrs),
                 "current_page": current_page,
                 "page_size": ADMIN_PAGE_SIZE,
@@ -235,7 +269,7 @@ def create_app(
         page_size: int = Query(10, ge=1, le=50),
         q: str = Query("", max_length=100),
     ) -> DeviceListResponse:
-        control_db: ControlDB = app.state.control_db
+        control_db: ControlStore = app.state.control_db
         current_page = max(page, 1)
         total_items = await control_db.count_devices_readonly(query=q)
         total_pages = max(ceil(total_items / page_size), 1)
@@ -254,7 +288,7 @@ def create_app(
 
     @app.post("/v1/control/devices/issue", response_model=DeviceSummary, status_code=status.HTTP_201_CREATED)
     async def control_issue_device(payload: DeviceIssueRequest) -> DeviceSummary:
-        control_db: ControlDB = app.state.control_db
+        control_db: ControlStore = app.state.control_db
         issued = await control_db.issue_device_token(
             hardware_id=payload.hardware_id,
             model=payload.model,
@@ -327,7 +361,7 @@ def create_app(
         authorization: str | None = Header(None, alias="Authorization"),
     ) -> ProvisionResponse:
         settings: Settings = app.state.settings
-        control_db: ControlDB = app.state.control_db
+        control_db: ControlStore = app.state.control_db
         source_ip = request.client.host if request.client else "0.0.0.0"
 
         if not is_source_ip_allowed(source_ip, settings):
@@ -387,7 +421,7 @@ def create_app(
         page: int = Form(1),
         search_query: str = Form(""),
     ) -> HTMLResponse:
-        control_db: ControlDB = app.state.control_db
+        control_db: ControlStore = app.state.control_db
         issued = await control_db.issue_device_token(
             hardware_id=hardware_id,
             model=model,
@@ -403,3 +437,11 @@ def create_app(
         )
 
     return app
+
+
+def _control_db_detail(settings: Settings) -> str:
+    backend = settings.control_db_backend.strip().lower()
+    if backend == "sqlite":
+        return f"sqlite:{settings.control_db_path}"
+    dsn_tail = settings.resolved_control_database_url.rsplit("@", 1)[-1]
+    return f"postgres:{settings.control_db_schema}@{dsn_tail}"

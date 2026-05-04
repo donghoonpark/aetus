@@ -30,9 +30,15 @@ async def _check_api() -> ComponentStatus:
 
 
 async def _check_control_db(settings: Settings) -> ComponentStatus:
+    backend = settings.control_db_backend.strip().lower()
     try:
-        await asyncio.to_thread(_check_sqlite_file, settings.control_db_path)
-        return ComponentStatus(name="control_db", state="healthy", detail=settings.control_db_path)
+        if backend == "sqlite":
+            await asyncio.to_thread(_check_sqlite_file, settings.control_db_path)
+            return ComponentStatus(name="control_db", state="healthy", detail=f"sqlite:{settings.control_db_path}")
+        if backend in {"postgres", "postgresql"}:
+            detail = await asyncio.to_thread(_control_postgres_detail, settings)
+            return ComponentStatus(name="control_db", state="healthy", detail=detail)
+        raise ValueError(f"unsupported control DB backend: {settings.control_db_backend}")
     except Exception as exc:
         return ComponentStatus(name="control_db", state="down", detail=str(exc))
 
@@ -42,6 +48,28 @@ def _check_sqlite_file(path: str) -> None:
 
     with sqlite3.connect(path) as conn:
         conn.execute("SELECT 1")
+
+
+def _control_postgres_detail(settings: Settings) -> str:
+    schema = settings.control_db_schema
+    with psycopg.connect(
+        settings.resolved_control_database_url,
+        connect_timeout=max(int(settings.status_timeout_seconds), 1),
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_schema = %s
+                    AND table_name IN ('devices', 'hardware_allowlist')
+                """,
+                (schema,),
+            )
+            table_count = cur.fetchone()[0]
+    if table_count != 2:
+        raise RuntimeError(f"postgres:{schema} missing control tables ({table_count}/2)")
+    return f"postgres:{schema} ({table_count}/2 control tables) via {_dsn_tail(settings.resolved_control_database_url)}"
 
 
 async def _check_kafka(settings: Settings) -> ComponentStatus:
@@ -92,4 +120,8 @@ def _postgres_detail(settings: Settings) -> str:
         with conn.cursor() as cur:
             cur.execute("SELECT current_database()")
             db_name = cur.fetchone()[0]
-    return f"{db_name} via {settings.postgres_dsn.rsplit('@', 1)[-1]}"
+    return f"{db_name} via {_dsn_tail(settings.postgres_dsn)}"
+
+
+def _dsn_tail(dsn: str) -> str:
+    return dsn.rsplit("@", 1)[-1]

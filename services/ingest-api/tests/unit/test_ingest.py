@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+from datetime import datetime, timezone
 import json
 import ipaddress
 from pathlib import Path
+import sqlite3
 import tempfile
 
 from fastapi.testclient import TestClient
 
 from aetus_ingest.app import create_app
 from aetus_ingest.config import Settings
+from aetus_ingest.control_backup import backup_sqlite_database
+from aetus_ingest.control_db import PostgresControlStore, SqliteControlStore, create_control_store
 from aetus_ingest.generated import ingest_pb2
 from aetus_ingest.publisher import InMemoryEventPublisher
 from aetus_ingest.rate_limit import InMemoryRateLimiter
@@ -45,7 +50,9 @@ def make_client(
         "kafka_connect_url": "http://127.0.0.1:65531",
         "postgres_dsn": "postgresql://aetus:aetus@127.0.0.1:65532/aetus",
         "status_timeout_seconds": 0.2,
+        "control_db_backend": "sqlite",
         "control_db_path": control_db_path,
+        "control_db_backup_enabled": False,
     }
     defaults.update(settings_overrides)
     settings = Settings(**defaults)
@@ -305,6 +312,95 @@ def test_provisioning_issues_token_and_ingest_reads_from_sqlite() -> None:
 
     assert upload_response.status_code == 202
     assert publisher.events[-1]["device_id"] == device_id
+
+
+def test_control_store_factory_uses_sqlite_backend() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = Settings(control_db_backend="sqlite", control_db_path=str(Path(tmpdir) / "control.db"))
+
+        store = create_control_store(settings)
+
+        assert isinstance(store, SqliteControlStore)
+
+
+def test_control_store_factory_uses_postgres_backend_without_connecting() -> None:
+    settings = Settings(
+        control_db_backend="postgres",
+        control_database_url="postgresql://control:secret@db.internal:5432/aetus",
+        control_db_schema="control_plane",
+    )
+
+    store = create_control_store(settings)
+
+    assert isinstance(store, PostgresControlStore)
+    assert store.schema == "control_plane"
+    assert store.dsn == "postgresql://control:secret@db.internal:5432/aetus"
+
+
+def test_control_store_factory_rejects_invalid_postgres_schema() -> None:
+    settings = Settings(
+        control_db_backend="postgres",
+        control_database_url="postgresql://control:secret@db.internal:5432/aetus",
+        control_db_schema="control-plane",
+    )
+
+    try:
+        create_control_store(settings)
+    except ValueError as exc:
+        assert "invalid SQL identifier" in str(exc)
+    else:
+        raise AssertionError("expected invalid control DB schema to fail")
+
+
+def test_sqlite_control_db_backup_creates_consistent_dump() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "control.db"
+        backup_dir = Path(tmpdir) / "backups"
+        store = SqliteControlStore(str(db_path))
+        store.initialize()
+        store.seed_hardware_allowlist({"esp32c5-a1b2c3d4e5f6"})
+        issued = asyncio.run(
+            store.issue_device_token(
+                "esp32c5-a1b2c3d4e5f6",
+                model="esp32-c5",
+                firmware_version=1002003,
+                site_code="factory-a",
+            )
+        )
+
+        backup_path = backup_sqlite_database(
+            db_path,
+            backup_dir,
+            retention_count=2,
+            timestamp=datetime(2026, 5, 5, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert backup_path.exists()
+        with sqlite3.connect(backup_path) as conn:
+            row = conn.execute(
+                "SELECT device_id, token FROM devices WHERE hardware_id = ?",
+                ("esp32c5-a1b2c3d4e5f6",),
+            ).fetchone()
+        assert row == (issued.device_id, issued.token)
+
+
+def test_sqlite_control_db_backup_prunes_old_files() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "control.db"
+        backup_dir = Path(tmpdir) / "backups"
+        store = SqliteControlStore(str(db_path))
+        store.initialize()
+
+        for minute in range(3):
+            backup_sqlite_database(
+                db_path,
+                backup_dir,
+                retention_count=2,
+                timestamp=datetime(2026, 5, 5, 0, minute, tzinfo=timezone.utc),
+            )
+
+        backups = sorted(path.name for path in backup_dir.glob("control-*.db"))
+        assert backups == ["control-20260505T000100Z.db", "control-20260505T000200Z.db"]
 
 
 def test_provisioning_rate_limit_blocks_hardware_id_rotation() -> None:

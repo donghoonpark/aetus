@@ -109,7 +109,7 @@
                 <span>AETUS Flight Control</span>
               </div>
               <h1 class="display-6 fw-semibold mb-2">Device Token Issuer</h1>
-              <p class="text-secondary mb-0">Generate or reissue device tokens into SQLite control DB for ESP32-C5 devices.</p>
+              <p class="text-secondary mb-0">Generate or reissue device tokens into the configured control DB.</p>
               <div class="d-flex flex-wrap gap-2 mt-3">
                 <div class="stat-chip px-3 py-2 small">
                   <i class="fa-solid fa-microchip me-2 text-primary"></i>{{ total_devices }} total devices
@@ -121,7 +121,7 @@
             </div>
           </div>
           <div class="text-secondary small">
-            <div><i class="fa-solid fa-database me-2"></i>{{ control_db_path }}</div>
+            <div><i class="fa-solid fa-database me-2"></i>{{ control_db_detail }}</div>
             <div><i class="fa-solid fa-network-wired me-2"></i>{{ allowed_source_cidrs }}</div>
             <div><i class="fa-solid fa-layer-group me-2"></i>Page {{ current_page }} / {{ total_pages }}</div>
           </div>

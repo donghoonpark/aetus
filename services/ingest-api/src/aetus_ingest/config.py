@@ -26,6 +26,10 @@ def _parse_origin_list(raw: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
+def _parse_bool(raw: str) -> bool:
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _parse_cidrs(raw: str) -> tuple[ipaddress._BaseNetwork, ...]:
     networks = []
     for item in raw.split(","):
@@ -59,9 +63,21 @@ class Settings:
     postgres_dsn: str = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
     status_timeout_seconds: float = 2.0
     cors_origins: tuple[str, ...] = ("http://127.0.0.1:4173", "http://localhost:4173")
+    control_db_backend: str = "sqlite"
     control_db_path: str = "data/control.db"
+    control_database_url: str | None = None
+    control_db_schema: str = "control"
+    control_db_backup_enabled: bool = True
+    control_db_backup_dir: str = "data/control-backups"
+    control_db_backup_interval_seconds: float = 3600.0
+    control_db_backup_retention_count: int = 48
+    control_db_backup_on_startup: bool = True
     host: str = "0.0.0.0"
     port: int = 8000
+
+    @property
+    def resolved_control_database_url(self) -> str:
+        return self.control_database_url or self.postgres_dsn
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -93,7 +109,15 @@ class Settings:
             cors_origins=_parse_origin_list(
                 os.getenv("AETUS_CORS_ORIGINS", "http://127.0.0.1:4173,http://localhost:4173")
             ),
+            control_db_backend=os.getenv("AETUS_CONTROL_DB_BACKEND", "sqlite"),
             control_db_path=os.getenv("AETUS_CONTROL_DB_PATH", "data/control.db"),
+            control_database_url=os.getenv("AETUS_CONTROL_DATABASE_URL"),
+            control_db_schema=os.getenv("AETUS_CONTROL_DB_SCHEMA", "control"),
+            control_db_backup_enabled=_parse_bool(os.getenv("AETUS_CONTROL_DB_BACKUP_ENABLED", "true")),
+            control_db_backup_dir=os.getenv("AETUS_CONTROL_DB_BACKUP_DIR", "data/control-backups"),
+            control_db_backup_interval_seconds=float(os.getenv("AETUS_CONTROL_DB_BACKUP_INTERVAL_SECONDS", "3600")),
+            control_db_backup_retention_count=int(os.getenv("AETUS_CONTROL_DB_BACKUP_RETENTION_COUNT", "48")),
+            control_db_backup_on_startup=_parse_bool(os.getenv("AETUS_CONTROL_DB_BACKUP_ON_STARTUP", "true")),
             host=os.getenv("AETUS_HOST", "0.0.0.0"),
             port=int(os.getenv("AETUS_PORT", "8000")),
         )

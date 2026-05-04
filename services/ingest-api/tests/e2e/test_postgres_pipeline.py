@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
@@ -14,6 +15,7 @@ import httpx
 import psycopg
 import pytest
 
+from aetus_ingest.control_db import PostgresControlStore
 from ..helpers.nanopb_mock_device import NanopbMockDevice
 
 
@@ -348,6 +350,32 @@ def test_control_status_reports_all_dependencies_healthy(e2e_stack: None) -> Non
     assert control_status["kafka"]["state"] == "healthy"
     assert control_status["kafka_connect"]["state"] == "healthy"
     assert control_status["postgres"]["state"] == "healthy"
+
+
+def test_postgres_control_store_supports_device_provisioning(e2e_stack: None) -> None:
+    del e2e_stack
+    store = PostgresControlStore(POSTGRES_DSN, schema="control_e2e", connect_timeout_seconds=2.0)
+    store.initialize()
+    store.seed_hardware_allowlist({"esp32c5-control-e2e"})
+    store.seed_devices({"seeded-control-device": "devtok_seeded_control"})
+
+    seeded_token = asyncio.run(store.get_device_token_readonly("seeded-control-device"))
+    is_allowed = asyncio.run(store.is_hardware_allowed_readonly("esp32c5-control-e2e"))
+    issued = asyncio.run(
+        store.issue_device_token(
+            "esp32c5-control-e2e",
+            model="esp32-c5",
+            firmware_version=1002003,
+            site_code="control-e2e",
+        )
+    )
+    listed = asyncio.run(store.list_devices_readonly(query="control-e2e"))
+
+    assert seeded_token == "devtok_seeded_control"
+    assert is_allowed is True
+    assert issued.device_id == "esp32c5-001"
+    assert issued.token.startswith("devtok_")
+    assert any(record.hardware_id == "esp32c5-control-e2e" for record in listed)
 
 
 def test_nanopb_ingest_accepts_provisioned_device_token(ingest_result: IngestResult) -> None:
