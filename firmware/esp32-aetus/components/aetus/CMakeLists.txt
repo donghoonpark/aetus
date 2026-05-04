@@ -1,5 +1,6 @@
 set(AETUS_SRCS
     "aetus.c"
+    "aetus_signal_sample_pool.c"
     "ingest.pb.c"
 )
 

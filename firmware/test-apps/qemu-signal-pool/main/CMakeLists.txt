@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "../../../esp32-aetus/components/aetus/aetus_signal_sample_pool.c"
+    INCLUDE_DIRS
+        "."
+        "../../../esp32-aetus/components/aetus"
+        "../../../esp32-aetus/components/aetus/include"
+    REQUIRES
+        freertos
+)
