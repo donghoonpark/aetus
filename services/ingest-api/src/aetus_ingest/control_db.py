@@ -194,61 +194,67 @@ class SqliteControlStore:
     ) -> DeviceRecord:
         now = utc_now_iso()
         token = f"devtok_{secrets.token_urlsafe(24)}"
-        async with aiosqlite.connect(self.path) as conn:
-            conn.row_factory = sqlite3.Row
-            await self._configure_connection_async(conn)
-            cursor = await conn.execute(
-                """
-                SELECT device_id FROM devices
-                WHERE hardware_id = ?
-                """,
-                (hardware_id,),
-            )
-            row = await cursor.fetchone()
-
-            if row is None:
-                device_id = await self._next_device_id(conn, hardware_id)
-                await conn.execute(
-                    """
-                    INSERT INTO devices (
-                        device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+        for attempt in range(3):
+            try:
+                async with aiosqlite.connect(self.path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    await self._configure_connection_async(conn)
+                    await conn.execute("BEGIN IMMEDIATE")
+                    cursor = await conn.execute(
+                        """
+                        SELECT device_id FROM devices
+                        WHERE hardware_id = ?
+                        """,
+                        (hardware_id,),
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (device_id, hardware_id, token, model, firmware_version, site_code, now, now),
-                )
-            else:
-                device_id = str(row["device_id"])
-                await conn.execute(
-                    """
-                    UPDATE devices
-                    SET token = ?, model = ?, firmware_version = ?, site_code = ?, updated_at = ?
-                    WHERE hardware_id = ?
-                    """,
-                    (token, model, firmware_version, site_code, now, hardware_id),
-                )
+                    row = await cursor.fetchone()
 
-            await conn.execute(
-                """
-                INSERT INTO hardware_allowlist (hardware_id, description, created_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(hardware_id) DO NOTHING
-                """,
-                (hardware_id, "issued-via-admin-or-provision", now),
-            )
-            await conn.commit()
+                    if row is None:
+                        device_id = await self._next_device_id(conn, hardware_id)
+                        await conn.execute(
+                            """
+                            INSERT INTO devices (
+                                device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (device_id, hardware_id, token, model, firmware_version, site_code, now, now),
+                        )
+                    else:
+                        device_id = str(row["device_id"])
+                        await conn.execute(
+                            """
+                            UPDATE devices
+                            SET token = ?, model = ?, firmware_version = ?, site_code = ?, updated_at = ?
+                            WHERE hardware_id = ?
+                            """,
+                            (token, model, firmware_version, site_code, now, hardware_id),
+                        )
 
-            saved_cursor = await conn.execute(
-                """
-                SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
-                FROM devices
-                WHERE hardware_id = ?
-                """,
-                (hardware_id,),
-            )
-            saved = await saved_cursor.fetchone()
-            assert saved is not None
-            return self._row_to_record(saved)
+                    await conn.execute(
+                        """
+                        INSERT INTO hardware_allowlist (hardware_id, description, created_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(hardware_id) DO NOTHING
+                        """,
+                        (hardware_id, "issued-via-admin-or-provision", now),
+                    )
+                    await conn.commit()
+
+                    saved_cursor = await conn.execute(
+                        """
+                        SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                        FROM devices
+                        WHERE hardware_id = ?
+                        """,
+                        (hardware_id,),
+                    )
+                    saved = await saved_cursor.fetchone()
+                    assert saved is not None
+                    return self._row_to_record(saved)
+            except sqlite3.IntegrityError:
+                if attempt == 2:
+                    raise
 
     async def _next_device_id(self, conn: aiosqlite.Connection, hardware_id: str) -> str:
         prefix = hardware_id.split("-", 1)[0]
@@ -455,58 +461,64 @@ class PostgresControlStore:
     ) -> DeviceRecord:
         now = utc_now_iso()
         token = f"devtok_{secrets.token_urlsafe(24)}"
-        async with await self._connect_async() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    f"""
-                    SELECT device_id FROM {self._devices_table}
-                    WHERE hardware_id = %s
-                    """,
-                    (hardware_id,),
-                )
-                row = await cur.fetchone()
-
-                if row is None:
-                    device_id = await self._next_device_id(cur, hardware_id)
-                    await cur.execute(
-                        f"""
-                        INSERT INTO {self._devices_table} (
-                            device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+        for attempt in range(3):
+            try:
+                async with await self._connect_async() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute(
+                            f"""
+                            SELECT device_id FROM {self._devices_table}
+                            WHERE hardware_id = %s
+                            FOR UPDATE
+                            """,
+                            (hardware_id,),
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (device_id, hardware_id, token, model, firmware_version, site_code, now, now),
-                    )
-                else:
-                    device_id = str(row["device_id"])
-                    await cur.execute(
-                        f"""
-                        UPDATE {self._devices_table}
-                        SET token = %s, model = %s, firmware_version = %s, site_code = %s, updated_at = %s
-                        WHERE hardware_id = %s
-                        """,
-                        (token, model, firmware_version, site_code, now, hardware_id),
-                    )
+                        row = await cur.fetchone()
 
-                await cur.execute(
-                    f"""
-                    INSERT INTO {self._hardware_allowlist_table} (hardware_id, description, created_at)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT(hardware_id) DO NOTHING
-                    """,
-                    (hardware_id, "issued-via-admin-or-provision", now),
-                )
-                await cur.execute(
-                    f"""
-                    SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
-                    FROM {self._devices_table}
-                    WHERE hardware_id = %s
-                    """,
-                    (hardware_id,),
-                )
-                saved = await cur.fetchone()
-                assert saved is not None
-                return _row_to_record(saved)
+                        if row is None:
+                            device_id = await self._next_device_id(cur, hardware_id)
+                            await cur.execute(
+                                f"""
+                                INSERT INTO {self._devices_table} (
+                                    device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (device_id, hardware_id, token, model, firmware_version, site_code, now, now),
+                            )
+                        else:
+                            device_id = str(row["device_id"])
+                            await cur.execute(
+                                f"""
+                                UPDATE {self._devices_table}
+                                SET token = %s, model = %s, firmware_version = %s, site_code = %s, updated_at = %s
+                                WHERE hardware_id = %s
+                                """,
+                                (token, model, firmware_version, site_code, now, hardware_id),
+                            )
+
+                        await cur.execute(
+                            f"""
+                            INSERT INTO {self._hardware_allowlist_table} (hardware_id, description, created_at)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT(hardware_id) DO NOTHING
+                            """,
+                            (hardware_id, "issued-via-admin-or-provision", now),
+                        )
+                        await cur.execute(
+                            f"""
+                            SELECT device_id, hardware_id, token, model, firmware_version, site_code, created_at, updated_at
+                            FROM {self._devices_table}
+                            WHERE hardware_id = %s
+                            """,
+                            (hardware_id,),
+                        )
+                        saved = await cur.fetchone()
+                        assert saved is not None
+                        return _row_to_record(saved)
+            except psycopg.errors.UniqueViolation:
+                if attempt == 2:
+                    raise
 
     async def _next_device_id(self, cur: psycopg.AsyncCursor[Mapping[str, Any]], hardware_id: str) -> str:
         prefix = hardware_id.split("-", 1)[0]

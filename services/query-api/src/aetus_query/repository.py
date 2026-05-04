@@ -7,6 +7,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 from aetus_query.signal_decode import Channel, compute_channel_stats, decode_samples
 from aetus_query.time_utils import to_iso8601
@@ -45,8 +46,11 @@ class QueryRepository:
 
 
 class PostgresQueryRepository(QueryRepository):
-    def __init__(self, dsn: str) -> None:
-        self._dsn = dsn
+    def __init__(self, dsn: str | ConnectionPool = "") -> None:
+        if isinstance(dsn, ConnectionPool):
+            self._pool = dsn
+        else:
+            self._pool = ConnectionPool(dsn, min_size=2, max_size=10, open=True, kwargs={"row_factory": dict_row})
 
     def list_streams(self, device_id: str) -> list[StreamRef]:
         with self._connect() as conn:
@@ -211,7 +215,7 @@ class PostgresQueryRepository(QueryRepository):
         return {"device_id": device_id, "key": key, "kind": "sampled", "frames": response_frames}
 
     def _connect(self) -> psycopg.Connection:
-        return psycopg.connect(self._dsn, row_factory=dict_row)
+        return self._pool.connection()
 
     def _read_signal_frames(
         self,

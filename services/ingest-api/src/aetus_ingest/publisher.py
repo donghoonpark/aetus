@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -197,6 +198,9 @@ class KafkaEventPublisher:
         )
 
     async def publish(self, event: dict[str, Any]) -> None:
+        await asyncio.to_thread(self._publish_sync, event)
+
+    def _publish_sync(self, event: dict[str, Any]) -> None:
         sink_record = build_sink_record(event)
         future = self.producer.send(self.topic, key=event["device_id"], value=sink_record)
         future.get(timeout=10)

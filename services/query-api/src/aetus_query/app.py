@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from datetime import datetime
 from urllib.parse import quote
 
@@ -19,7 +21,15 @@ def create_app(
     cache: Cache | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
-    app = FastAPI(title="AETUS Query API", version="0.1.0")
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+        repo = _app.state.repository
+        if isinstance(repo, PostgresQueryRepository):
+            repo._pool.close()
+
+    app = FastAPI(title="AETUS Query API", version="0.1.0", lifespan=_lifespan)
     app.state.settings = resolved_settings
     app.state.repository = repository or PostgresQueryRepository(resolved_settings.postgres_dsn)
     app.state.cache = cache or (RedisJsonCache(resolved_settings.redis_url) if resolved_settings.redis_url else NullCache())
