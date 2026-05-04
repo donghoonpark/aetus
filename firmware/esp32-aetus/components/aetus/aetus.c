@@ -1643,6 +1643,44 @@ esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout)
     return ESP_OK;
 }
 
+esp_err_t aetus_enqueue_telemetry_from_isr(
+    const aetus_telemetry_t *telemetry,
+    BaseType_t *pxHigherPriorityTaskWoken
+)
+{
+    if (telemetry == NULL || s_ctx.queue == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    aetus_queue_item_t item = {
+        .kind = AETUS_QUEUE_ITEM_TELEMETRY,
+        .body.telemetry = *telemetry,
+    };
+    if (xQueueSendFromISR(s_ctx.queue, &item, pxHigherPriorityTaskWoken) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+esp_err_t aetus_enqueue_status_from_isr(
+    const aetus_status_t *status,
+    BaseType_t *pxHigherPriorityTaskWoken
+)
+{
+    if (status == NULL || s_ctx.queue == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    aetus_queue_item_t item = {
+        .kind = AETUS_QUEUE_ITEM_STATUS,
+        .body.status = *status,
+    };
+    if (xQueueSendFromISR(s_ctx.queue, &item, pxHigherPriorityTaskWoken) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
 esp_err_t aetus_flush(TickType_t timeout)
 {
     ESP_RETURN_ON_FALSE(s_ctx.events != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
