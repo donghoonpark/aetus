@@ -284,13 +284,26 @@ static void sensor_task(void *arg)
 아직 구현하지 않음:
 
 - FlashDB durable backlog
+- PSRAM/backlog 대응 signal sample memory pool
 - 대형 payload용 pointer/blob queue API
 - ISR-safe enqueue API
 - Wi-Fi ownership 분리
 - HTTPS client/certificate policy
 - server-side provisioning API client
 
-대형 payload용 pointer/blob queue API는 1200B급 이상 센서 샘플처럼 고정 배열 복사가 부담스러운 데이터를 위한 향후 기능이다. `SignalFrame`은 이 요구의 서버/스키마 쪽 기반이며, 펌웨어 편의 API에서는 `aetus_enqueue_payload_copy()`와 `aetus_enqueue_payload_owned()` 같은 소유권 기반 enqueue를 검토한다. 성공적으로 enqueue된 owned payload는 AETUS uploader task가 소유권을 가져가 업로드 성공 또는 최종 drop 시 release callback으로 해제한다. 이 기능을 구현할 때는 queue item에는 포인터와 크기만 저장하고, protobuf 인코딩은 가능하면 nanopb callback 또는 HTTP streaming 방식으로 처리해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
+대형 payload용 signal sample memory pool은 1200B급 이상 센서 샘플처럼 고정 배열 복사가 부담스러운 데이터를 위한 향후 기능이다. 현재 구현은 `aetus_signal_frame_t` 내부에 sample byte 배열을 직접 갖고, FreeRTOS queue slot에도 frame을 복사한다. 이 구조는 단순하고 안전하지만, PSRAM 8MB 같은 환경에서 queue depth를 크게 가져가는 데 한계가 있다.
+
+메모리풀 기반 후속 구현 TODO:
+
+- `aetus_signal_frame_t`의 sample storage를 고정 배열에서 `pointer + size + ownership` descriptor로 전환한다.
+- 기본 API는 user buffer lifetime을 요구하지 않도록 pool에 copy한 뒤 queue item으로 ownership을 넘긴다.
+- zero-copy/borrowed buffer API는 별도 고급 API로만 제공하고 lifetime 책임을 명확히 문서화한다.
+- queue item에는 sample bytes를 직접 복사하지 않고 pool block descriptor만 저장한다.
+- upload success, validation failure, queue send failure, final drop에서는 반드시 pool block을 반환한다.
+- upload failure 후 `xQueueSendToFront()`로 재시도하는 경우에는 ownership을 유지한다.
+- PSRAM 사용 시 sample pool은 `MALLOC_CAP_SPIRAM`, queue descriptor와 작은 control block은 내부 RAM에 두는 구성을 우선 검토한다.
+- protobuf 인코딩은 nanopb callback을 유지하고, 가능하면 HTTP streaming까지 확장해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
+- `firmware/test-apps/signal-frame-contract`는 이 전환 전후로 유지해야 하는 2400B dense frame 계약을 고정한다.
 
 ## HMAC 인증 옵션
 

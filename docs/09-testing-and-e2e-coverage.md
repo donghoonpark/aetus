@@ -41,7 +41,7 @@ flowchart TB
 | stream-viewer build/e2e | `frontend/stream-viewer` | yes | portable Vue component build, mocked query-api 기반 chart 렌더 |
 | ingest-control-panel build | `frontend/ingest-control-panel` | yes | control panel bundle build |
 | firmware examples build | `firmware/examples` | yes | ESP-IDF 6.0, ESP32-C5 target compile coverage for standalone examples |
-| firmware test-apps build | `firmware/test-apps` | yes | QEMU fixture와 HIL app의 compile coverage |
+| firmware test-apps build | `firmware/test-apps` | yes | QEMU fixture, HIL app, signal frame memory contract app의 compile coverage |
 | QEMU firmware e2e | `services/ingest-api/tests/qemu_e2e` | manual workflow | ESP-IDF firmware build, QEMU 실행, UART protobuf stream, DB 적재 |
 | HIL firmware runtime | `firmware/test-apps/esp32c5-upload-smoke`, `firmware/examples/cpp-basic`, `firmware/examples/cpp-signal-frame` | no | 실제 ESP32-C5 Wi-Fi/HMAC/provisioning/upload 검증 |
 
@@ -57,6 +57,7 @@ flowchart TB
 - `rust-ingest-client`: `cargo test -- --test-threads=1`
 - `e2e`: `uv run pytest tests/e2e -q` in `services/ingest-api`
 - `Firmware Examples Build`: `idf.py -C firmware/examples/<example> -B build-ci set-target esp32c5 build`
+- `Firmware Test Apps Build`: `idf.py -C firmware/test-apps/<app> -B build-ci set-target <target> build`
 
 `ESP32 QEMU E2E` workflow는 수동 실행이다.
 
@@ -194,6 +195,7 @@ HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같
 - `seed_dense_query_data.py`는 CLI help와 수동 실행 위주다. 작은 규모의 deterministic seed unit 또는 integration test가 있으면 좋다.
 - `ingest-control-panel`은 build만 있고 브라우저 e2e가 없다.
 - firmware portable component는 host-side C/C++ unit test가 거의 없다. ESP-IDF 없이 검증 가능한 string copy, queue policy, HMAC signing input construction 같은 순수 로직은 분리하면 테스트 가능하다.
+- signal frame sample memory pool은 아직 TODO다. 구현 전후로 `signal-frame-contract` compile test를 유지하고, 이후에는 pool exhaustion, queue send failure, upload success release, retry ownership 유지, final drop release를 ESP-IDF Unity 또는 host-testable module로 보강해야 한다.
 - HIL 결과를 사람이 읽는 로그에 의존한다. 장기적으로는 HIL pytest marker와 장치 포트/env 기반 수동 test runner가 있으면 좋다.
 
 ## 권장 다음 작업

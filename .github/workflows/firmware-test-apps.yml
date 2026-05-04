@@ -40,6 +40,9 @@ jobs:
           - name: esp32c5-upload-smoke
             path: firmware/test-apps/esp32c5-upload-smoke
             target: esp32c5
+          - name: signal-frame-contract
+            path: firmware/test-apps/signal-frame-contract
+            target: esp32c5
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
