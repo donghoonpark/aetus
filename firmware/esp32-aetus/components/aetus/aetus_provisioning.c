@@ -194,6 +194,7 @@ static void sync_pending_from_runtime(void)
     s_prov.config.firmware_version = current.firmware_version;
     s_prov.config.upload_interval_ms = current.upload_interval_ms;
     s_prov.config.queue_depth = current.queue_depth;
+    s_prov.config.signal_sample_pool_backend = current.signal_sample_pool_backend;
     s_prov.config.connected_led_enabled = current.connected_led_enabled;
     s_prov.config.connected_led_gpio = current.connected_led_gpio;
 }

@@ -28,14 +28,14 @@ extern "C" {
 #ifdef CONFIG_AETUS_SIGNAL_SAMPLES_MAX
 #define AETUS_SIGNAL_SAMPLES_MAX CONFIG_AETUS_SIGNAL_SAMPLES_MAX
 #else
-#define AETUS_SIGNAL_SAMPLES_MAX 2048
+#define AETUS_SIGNAL_SAMPLES_MAX 2400
 #endif
 #endif
 #ifndef AETUS_SIGNAL_SAMPLES_ABSOLUTE_MAX
-#define AETUS_SIGNAL_SAMPLES_ABSOLUTE_MAX 3072
+#define AETUS_SIGNAL_SAMPLES_ABSOLUTE_MAX 8192
 #endif
 #ifndef AETUS_SIGNAL_FRAME_STRUCT_MAX_BYTES
-#define AETUS_SIGNAL_FRAME_STRUCT_MAX_BYTES 4096
+#define AETUS_SIGNAL_FRAME_STRUCT_MAX_BYTES 512
 #endif
 #define AETUS_WIFI_SSID_MAX 32
 #define AETUS_WIFI_PASSWORD_MAX 64
@@ -102,6 +102,11 @@ typedef enum {
     AETUS_SIGNAL_LAYOUT_PLANAR = 1,
 } aetus_signal_layout_t;
 
+typedef enum {
+    AETUS_SIGNAL_SAMPLE_POOL_STATIC = 0,
+    AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP = 1,
+} aetus_signal_sample_pool_backend_t;
+
 typedef struct {
     char key[AETUS_METRIC_KEY_MAX];
     char unit[AETUS_METRIC_UNIT_MAX];
@@ -120,7 +125,7 @@ typedef struct {
     aetus_signal_layout_t layout;
     uint32_t channel_count;
     aetus_signal_channel_t channels[AETUS_SIGNAL_CHANNELS_MAX];
-    uint8_t samples[AETUS_SIGNAL_SAMPLES_MAX];
+    const uint8_t *samples;
     size_t samples_size;
 } aetus_signal_frame_t;
 
@@ -154,6 +159,20 @@ typedef struct {
 } aetus_status_t;
 
 typedef struct {
+    uint32_t allocated_blocks;
+    uint32_t peak_allocated_blocks;
+    uint32_t allocation_count;
+    uint32_t release_count;
+    uint32_t allocation_failure_count;
+    uint32_t queue_send_failure_release_count;
+    uint32_t validation_failure_release_count;
+    uint32_t upload_success_release_count;
+    uint32_t final_drop_release_count;
+    size_t allocated_bytes;
+    size_t peak_allocated_bytes;
+} aetus_signal_sample_pool_stats_t;
+
+typedef struct {
     const char *wifi_ssid;
     const char *wifi_password;
     aetus_wifi_auth_t wifi_auth;
@@ -166,6 +185,7 @@ typedef struct {
     uint32_t firmware_version;
     uint32_t upload_interval_ms;
     uint32_t queue_depth;
+    aetus_signal_sample_pool_backend_t signal_sample_pool_backend;
     bool connected_led_enabled;
     int connected_led_gpio;
 } aetus_config_t;
@@ -238,6 +258,7 @@ esp_err_t aetus_signal_frame_set_samples(aetus_signal_frame_t *frame, const void
 esp_err_t aetus_start(const aetus_config_t *config);
 esp_err_t aetus_update_config(const aetus_config_t *config);
 esp_err_t aetus_get_config(aetus_config_t *config);
+esp_err_t aetus_get_signal_sample_pool_stats(aetus_signal_sample_pool_stats_t *stats);
 esp_err_t aetus_start_provisioning(const aetus_provisioning_config_t *config);
 esp_err_t aetus_sync_rtc(TickType_t timeout);
 esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t timeout);

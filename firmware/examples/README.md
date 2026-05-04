@@ -53,10 +53,11 @@ For compile-only CI, these are supplied with dummy values.
 
 ## Signal Frame Size
 
-`cpp-signal-frame` uses the AETUS component's static signal frame budget. The default maximum raw sample payload is 2048 bytes. To validate larger frames, such as a 2400 byte dense sample block, add this to the example's `sdkconfig.defaults` or set it through `idf.py menuconfig`:
+`cpp-signal-frame` uses the AETUS component's signal sample pool. The default maximum raw sample payload is 2400 bytes. To validate larger frames, increase the maximum in the example's `sdkconfig.defaults` or set it through `idf.py menuconfig`:
 
 ```ini
-CONFIG_AETUS_SIGNAL_SAMPLES_MAX=2400
+CONFIG_AETUS_SIGNAL_SAMPLES_MAX=4096
+CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS=4
 ```
 
-If this value becomes inconsistent with the protobuf encode buffer or queue slot memory budget, the component fails at compile time instead of producing a firmware image with surprising RAM usage.
+If this value becomes inconsistent with the protobuf encode buffer or static pool block budget, the component fails at compile time instead of producing a firmware image with surprising RAM usage. For variable-size runtime allocation, configure `.freertos_heap_signal_sample_pool()` in the C++ config wrapper or set `signal_sample_pool_backend = AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP` in C.

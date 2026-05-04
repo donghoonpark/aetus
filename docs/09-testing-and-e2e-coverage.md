@@ -195,7 +195,7 @@ HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같
 - `seed_dense_query_data.py`는 CLI help와 수동 실행 위주다. 작은 규모의 deterministic seed unit 또는 integration test가 있으면 좋다.
 - `ingest-control-panel`은 build만 있고 브라우저 e2e가 없다.
 - firmware portable component는 host-side C/C++ unit test가 거의 없다. ESP-IDF 없이 검증 가능한 string copy, queue policy, HMAC signing input construction 같은 순수 로직은 분리하면 테스트 가능하다.
-- signal frame sample memory pool은 아직 TODO다. 구현 전후로 `signal-frame-contract` compile test를 유지하고, 이후에는 pool exhaustion, queue send failure, upload success release, retry ownership 유지, final drop release를 ESP-IDF Unity 또는 host-testable module로 보강해야 한다.
+- signal frame sample memory pool은 static/FreeRTOS heap backend와 기본 release stats를 갖췄다. `signal-frame-contract` compile test는 유지하고, 이후에는 pool exhaustion, queue send failure, upload success release, retry ownership 유지, final drop release를 ESP-IDF Unity 또는 host-testable module로 더 촘촘히 보강해야 한다.
 - HIL 결과를 사람이 읽는 로그에 의존한다. 장기적으로는 HIL pytest marker와 장치 포트/env 기반 수동 test runner가 있으면 좋다.
 
 ## 권장 다음 작업

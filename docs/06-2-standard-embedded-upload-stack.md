@@ -275,6 +275,7 @@ static void sensor_task(void *arg)
 - WPA2-Enterprise PEAP Wi-Fi path
 - optional Wi-Fi connected LED
 - C++20 wrapper API
+- static 또는 FreeRTOS heap 기반 signal sample memory pool
 - telemetry event
 - status event
 - double, int64, bool, string, bytes metric value
@@ -284,26 +285,31 @@ static void sensor_task(void *arg)
 아직 구현하지 않음:
 
 - FlashDB durable backlog
-- PSRAM/backlog 대응 signal sample memory pool
-- 대형 payload용 pointer/blob queue API
+- PSRAM capability 지정 signal sample pool
+- zero-copy/borrowed 대형 payload queue API
 - ISR-safe enqueue API
 - Wi-Fi ownership 분리
 - HTTPS client/certificate policy
 - server-side provisioning API client
 
-대형 payload용 signal sample memory pool은 1200B급 이상 센서 샘플처럼 고정 배열 복사가 부담스러운 데이터를 위한 향후 기능이다. 현재 구현은 `aetus_signal_frame_t` 내부에 sample byte 배열을 직접 갖고, FreeRTOS queue slot에도 frame을 복사한다. 이 구조는 단순하고 안전하지만, PSRAM 8MB 같은 환경에서 queue depth를 크게 가져가는 데 한계가 있다.
+대형 payload용 signal sample memory pool은 1200B급 이상 센서 샘플처럼 고정 배열 복사가 부담스러운 데이터를 위한 기능이다. 현재 구현은 `aetus_signal_frame_t`가 sample byte를 직접 소유하지 않고 `const uint8_t *samples + size`만 잡는다. 사용자는 `aetus_signal_frame_set_samples()` 호출 후 enqueue가 끝날 때까지만 원본 버퍼를 유지하면 된다. enqueue 이후에는 AETUS가 정적 풀 또는 FreeRTOS heap에 sample bytes를 복사하고 queue item이 해당 pool block의 소유권을 가진다.
 
-메모리풀 기반 후속 구현 TODO:
+현재 메모리풀 정책:
 
-- `aetus_signal_frame_t`의 sample storage를 고정 배열에서 `pointer + size + ownership` descriptor로 전환한다.
-- 기본 API는 user buffer lifetime을 요구하지 않도록 pool에 copy한 뒤 queue item으로 ownership을 넘긴다.
-- zero-copy/borrowed buffer API는 별도 고급 API로만 제공하고 lifetime 책임을 명확히 문서화한다.
+- `AETUS_SIGNAL_SAMPLE_POOL_STATIC`: 고정 크기 static block pool. block 개수는 `CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS`, block 크기는 `CONFIG_AETUS_SIGNAL_SAMPLES_MAX`다.
+- `AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP`: enqueue 시 필요한 sample 크기만큼 `pvPortMalloc()`으로 할당하고 release 시 `vPortFree()`한다.
+- pool block 획득/반납과 stats 갱신은 짧은 critical section으로 보호해 multi-producer enqueue에서 pool 상태가 꼬이지 않게 한다.
 - queue item에는 sample bytes를 직접 복사하지 않고 pool block descriptor만 저장한다.
 - upload success, validation failure, queue send failure, final drop에서는 반드시 pool block을 반환한다.
 - upload failure 후 `xQueueSendToFront()`로 재시도하는 경우에는 ownership을 유지한다.
-- PSRAM 사용 시 sample pool은 `MALLOC_CAP_SPIRAM`, queue descriptor와 작은 control block은 내부 RAM에 두는 구성을 우선 검토한다.
-- protobuf 인코딩은 nanopb callback을 유지하고, 가능하면 HTTP streaming까지 확장해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
-- `firmware/test-apps/signal-frame-contract`는 이 전환 전후로 유지해야 하는 2400B dense frame 계약을 고정한다.
+- `aetus_get_signal_sample_pool_stats()`로 allocated/released/peak/failure/drop 경로 카운터를 확인할 수 있다.
+- `firmware/test-apps/signal-frame-contract`는 2400B dense frame 계약과 frame 구조체 크기 계약을 고정한다.
+
+후속 TODO:
+
+- PSRAM 사용 시 sample pool은 `MALLOC_CAP_SPIRAM`, queue descriptor와 작은 control block은 내부 RAM에 두는 capability-aware backend를 추가한다.
+- zero-copy/borrowed buffer API는 별도 고급 API로만 제공하고 lifetime 책임을 명확히 문서화한다.
+- 가능하면 HTTP streaming까지 확장해 순간 RAM 사용량이 원본 payload의 2배 이상으로 튀지 않게 한다.
 
 ## HMAC 인증 옵션
 

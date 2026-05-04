@@ -18,6 +18,7 @@
 #include "esp_eap_client.h"
 #include "driver/gpio.h"
 #include "freertos/event_groups.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
@@ -58,6 +59,13 @@
 #define AETUS_QUEUE_ITEM_MAX_BYTES 4096
 #endif
 #endif
+#ifndef AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS
+#ifdef CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS
+#define AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS
+#else
+#define AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS 4
+#endif
+#endif
 #define AETUS_TIME_RESPONSE_BUFFER_BYTES 512
 #define AETUS_INGEST_PATH "/v1/ingest"
 #define AETUS_TIME_PATH "/v1/time"
@@ -79,6 +87,7 @@ typedef enum {
 
 typedef struct {
     aetus_queue_item_kind_t kind;
+    void *signal_sample_owner;
     union {
         aetus_telemetry_t telemetry;
         aetus_status_t status;
@@ -101,6 +110,17 @@ typedef struct {
 } aetus_signal_frame_arg_t;
 
 typedef struct {
+    uint8_t data[AETUS_SIGNAL_SAMPLES_MAX];
+    size_t size;
+    bool in_use;
+} aetus_static_signal_sample_block_t;
+
+typedef struct {
+    size_t size;
+    uint8_t data[];
+} aetus_heap_signal_sample_block_t;
+
+typedef struct {
     char *data;
     size_t capacity;
     size_t length;
@@ -116,9 +136,12 @@ typedef struct {
     char boot_id[32];
     bool wifi_started;
     bool wifi_reconfiguring;
+    aetus_signal_sample_pool_stats_t signal_pool_stats;
 } aetus_ctx_t;
 
 static aetus_ctx_t s_ctx;
+static aetus_static_signal_sample_block_t s_static_signal_pool[AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS];
+static portMUX_TYPE s_signal_pool_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void copy_string(char *target, size_t target_size, const char *source)
 {
@@ -159,6 +182,124 @@ static bool ends_with(const char *value, const char *suffix)
     size_t value_len = strlen(value);
     size_t suffix_len = strlen(suffix);
     return value_len >= suffix_len && memcmp(value + value_len - suffix_len, suffix, suffix_len) == 0;
+}
+
+static void signal_sample_pool_reset(aetus_ctx_t *ctx)
+{
+    portENTER_CRITICAL(&s_signal_pool_lock);
+    memset(s_static_signal_pool, 0, sizeof(s_static_signal_pool));
+    memset(&ctx->signal_pool_stats, 0, sizeof(ctx->signal_pool_stats));
+    portEXIT_CRITICAL(&s_signal_pool_lock);
+}
+
+static void signal_sample_pool_note_alloc(aetus_ctx_t *ctx, size_t size)
+{
+    ctx->signal_pool_stats.allocated_blocks++;
+    ctx->signal_pool_stats.allocation_count++;
+    ctx->signal_pool_stats.allocated_bytes += size;
+    if (ctx->signal_pool_stats.allocated_blocks > ctx->signal_pool_stats.peak_allocated_blocks) {
+        ctx->signal_pool_stats.peak_allocated_blocks = ctx->signal_pool_stats.allocated_blocks;
+    }
+    if (ctx->signal_pool_stats.allocated_bytes > ctx->signal_pool_stats.peak_allocated_bytes) {
+        ctx->signal_pool_stats.peak_allocated_bytes = ctx->signal_pool_stats.allocated_bytes;
+    }
+}
+
+static void signal_sample_pool_note_release(aetus_ctx_t *ctx, size_t size)
+{
+    if (ctx->signal_pool_stats.allocated_blocks > 0U) {
+        ctx->signal_pool_stats.allocated_blocks--;
+    }
+    if (ctx->signal_pool_stats.allocated_bytes >= size) {
+        ctx->signal_pool_stats.allocated_bytes -= size;
+    } else {
+        ctx->signal_pool_stats.allocated_bytes = 0U;
+    }
+    ctx->signal_pool_stats.release_count++;
+}
+
+static uint8_t *signal_sample_pool_alloc(aetus_ctx_t *ctx, size_t size, void **owner)
+{
+    if (owner == NULL) {
+        return NULL;
+    }
+    *owner = NULL;
+    if (size == 0U || size > AETUS_SIGNAL_SAMPLES_MAX) {
+        portENTER_CRITICAL(&s_signal_pool_lock);
+        ctx->signal_pool_stats.allocation_failure_count++;
+        portEXIT_CRITICAL(&s_signal_pool_lock);
+        return NULL;
+    }
+
+    if (ctx->config.signal_sample_pool_backend == AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP) {
+        aetus_heap_signal_sample_block_t *block = (aetus_heap_signal_sample_block_t *)pvPortMalloc(sizeof(*block) + size);
+        if (block == NULL) {
+            portENTER_CRITICAL(&s_signal_pool_lock);
+            ctx->signal_pool_stats.allocation_failure_count++;
+            portEXIT_CRITICAL(&s_signal_pool_lock);
+            return NULL;
+        }
+        block->size = size;
+        *owner = block;
+        portENTER_CRITICAL(&s_signal_pool_lock);
+        signal_sample_pool_note_alloc(ctx, size);
+        portEXIT_CRITICAL(&s_signal_pool_lock);
+        return block->data;
+    }
+
+    portENTER_CRITICAL(&s_signal_pool_lock);
+    for (size_t index = 0; index < AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS; index++) {
+        if (!s_static_signal_pool[index].in_use) {
+            s_static_signal_pool[index].in_use = true;
+            s_static_signal_pool[index].size = size;
+            *owner = &s_static_signal_pool[index];
+            signal_sample_pool_note_alloc(ctx, size);
+            portEXIT_CRITICAL(&s_signal_pool_lock);
+            return s_static_signal_pool[index].data;
+        }
+    }
+    portEXIT_CRITICAL(&s_signal_pool_lock);
+
+    portENTER_CRITICAL(&s_signal_pool_lock);
+    ctx->signal_pool_stats.allocation_failure_count++;
+    portEXIT_CRITICAL(&s_signal_pool_lock);
+    return NULL;
+}
+
+static void signal_sample_pool_release(aetus_ctx_t *ctx, void *owner)
+{
+    if (owner == NULL) {
+        return;
+    }
+
+    if (ctx->config.signal_sample_pool_backend == AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP) {
+        aetus_heap_signal_sample_block_t *block = (aetus_heap_signal_sample_block_t *)owner;
+        size_t size = block->size;
+        vPortFree(block);
+        portENTER_CRITICAL(&s_signal_pool_lock);
+        signal_sample_pool_note_release(ctx, size);
+        portEXIT_CRITICAL(&s_signal_pool_lock);
+        return;
+    }
+
+    portENTER_CRITICAL(&s_signal_pool_lock);
+    aetus_static_signal_sample_block_t *block = (aetus_static_signal_sample_block_t *)owner;
+    size_t size = block->size;
+    block->size = 0U;
+    block->in_use = false;
+    signal_sample_pool_note_release(ctx, size);
+    portEXIT_CRITICAL(&s_signal_pool_lock);
+}
+
+static void release_queue_item(aetus_ctx_t *ctx, aetus_queue_item_t *item)
+{
+    if (item == NULL || item->kind != AETUS_QUEUE_ITEM_SIGNAL_FRAME) {
+        return;
+    }
+    signal_sample_pool_release(ctx, item->signal_sample_owner);
+    item->signal_sample_owner = NULL;
+    item->body.signal_frame.samples = NULL;
+    item->body.signal_frame.samples_size = 0U;
 }
 
 static void bytes_to_hex(const uint8_t *bytes, size_t byte_count, char *hex, size_t hex_size)
@@ -462,6 +603,7 @@ static esp_err_t validate_signal_frame(const aetus_signal_frame_t *frame)
     ESP_RETURN_ON_FALSE(frame->channel_count > 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame channel count is required");
     ESP_RETURN_ON_FALSE(frame->channel_count <= AETUS_SIGNAL_CHANNELS_MAX, ESP_ERR_INVALID_ARG, TAG, "too many signal channels");
     ESP_RETURN_ON_FALSE(frame->samples_size > 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame samples are required");
+    ESP_RETURN_ON_FALSE(frame->samples != NULL, ESP_ERR_INVALID_ARG, TAG, "signal frame sample pointer is required");
     ESP_RETURN_ON_FALSE(frame->samples_size <= AETUS_SIGNAL_SAMPLES_MAX, ESP_ERR_INVALID_ARG, TAG, "signal frame samples too large");
 
     for (uint32_t index = 0; index < frame->channel_count; index++) {
@@ -1051,6 +1193,12 @@ static void drain_queue(aetus_ctx_t *ctx)
         uint8_t payload[AETUS_ENCODE_BUFFER_BYTES];
         size_t payload_size = 0;
         if (!encode_queue_item(ctx, &item, payload, sizeof(payload), &payload_size)) {
+            if (item.kind == AETUS_QUEUE_ITEM_SIGNAL_FRAME) {
+                portENTER_CRITICAL(&s_signal_pool_lock);
+                ctx->signal_pool_stats.validation_failure_release_count++;
+                portEXIT_CRITICAL(&s_signal_pool_lock);
+            }
+            release_queue_item(ctx, &item);
             continue;
         }
 
@@ -1058,12 +1206,24 @@ static void drain_queue(aetus_ctx_t *ctx)
         if (err == ESP_OK) {
             ctx->sequence++;
             uploaded++;
+            if (item.kind == AETUS_QUEUE_ITEM_SIGNAL_FRAME) {
+                portENTER_CRITICAL(&s_signal_pool_lock);
+                ctx->signal_pool_stats.upload_success_release_count++;
+                portEXIT_CRITICAL(&s_signal_pool_lock);
+            }
+            release_queue_item(ctx, &item);
             continue;
         }
 
         ESP_LOGW(TAG, "AETUS_UPLOAD_FAILED sequence=%llu; requeueing", ctx->sequence);
         if (xQueueSendToFront(ctx->queue, &item, 0) != pdTRUE) {
             ESP_LOGE(TAG, "failed message dropped because queue is full");
+            if (item.kind == AETUS_QUEUE_ITEM_SIGNAL_FRAME) {
+                portENTER_CRITICAL(&s_signal_pool_lock);
+                ctx->signal_pool_stats.final_drop_release_count++;
+                portEXIT_CRITICAL(&s_signal_pool_lock);
+            }
+            release_queue_item(ctx, &item);
         }
         break;
     }
@@ -1329,9 +1489,7 @@ esp_err_t aetus_signal_frame_set_samples(aetus_signal_frame_t *frame, const void
     ESP_RETURN_ON_FALSE(samples != NULL || samples_size == 0U, ESP_ERR_INVALID_ARG, TAG, "signal frame samples are required");
     ESP_RETURN_ON_FALSE(samples_size <= AETUS_SIGNAL_SAMPLES_MAX, ESP_ERR_INVALID_ARG, TAG, "signal frame samples too large");
 
-    if (samples_size > 0U) {
-        memcpy(frame->samples, samples, samples_size);
-    }
+    frame->samples = (const uint8_t *)samples;
     frame->samples_size = samples_size;
     return ESP_OK;
 }
@@ -1386,6 +1544,11 @@ esp_err_t aetus_start(const aetus_config_t *config)
     if (s_ctx.config.queue_depth == 0) {
         s_ctx.config.queue_depth = 16;
     }
+    if (s_ctx.config.signal_sample_pool_backend != AETUS_SIGNAL_SAMPLE_POOL_STATIC &&
+        s_ctx.config.signal_sample_pool_backend != AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP) {
+        s_ctx.config.signal_sample_pool_backend = AETUS_SIGNAL_SAMPLE_POOL_STATIC;
+    }
+    signal_sample_pool_reset(&s_ctx);
     snprintf(s_ctx.boot_id, sizeof(s_ctx.boot_id), "boot-%08lx", (unsigned long)esp_random());
 
     s_ctx.queue = xQueueCreate(s_ctx.config.queue_depth, sizeof(aetus_queue_item_t));
@@ -1436,6 +1599,14 @@ esp_err_t aetus_update_config(const aetus_config_t *config)
     if (next.queue_depth == 0) {
         next.queue_depth = s_ctx.config.queue_depth;
     }
+    if (next.signal_sample_pool_backend != s_ctx.config.signal_sample_pool_backend) {
+        ESP_RETURN_ON_FALSE(
+            s_ctx.signal_pool_stats.allocated_blocks == 0U,
+            ESP_ERR_INVALID_STATE,
+            TAG,
+            "signal sample pool backend cannot change while frames are queued"
+        );
+    }
     ESP_RETURN_ON_FALSE(
         string_required_fits(next.wifi_ssid, AETUS_WIFI_SSID_MAX),
         ESP_ERR_INVALID_ARG,
@@ -1459,6 +1630,13 @@ esp_err_t aetus_update_config(const aetus_config_t *config)
         ESP_ERR_INVALID_ARG,
         TAG,
         "unsupported auth mode"
+    );
+    ESP_RETURN_ON_FALSE(
+        next.signal_sample_pool_backend == AETUS_SIGNAL_SAMPLE_POOL_STATIC ||
+            next.signal_sample_pool_backend == AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "unsupported signal sample pool backend"
     );
     if (next.wifi_auth == AETUS_WIFI_AUTH_PEAP) {
         ESP_RETURN_ON_FALSE(
@@ -1504,6 +1682,16 @@ esp_err_t aetus_get_config(aetus_config_t *config)
     return ESP_OK;
 }
 
+esp_err_t aetus_get_signal_sample_pool_stats(aetus_signal_sample_pool_stats_t *stats)
+{
+    ESP_RETURN_ON_FALSE(stats != NULL, ESP_ERR_INVALID_ARG, TAG, "signal sample pool stats output is required");
+    ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
+    portENTER_CRITICAL(&s_signal_pool_lock);
+    *stats = s_ctx.signal_pool_stats;
+    portEXIT_CRITICAL(&s_signal_pool_lock);
+    return ESP_OK;
+}
+
 esp_err_t aetus_sync_rtc(TickType_t timeout)
 {
     ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
@@ -1535,11 +1723,25 @@ esp_err_t aetus_enqueue_signal_frame(const aetus_signal_frame_t *frame, TickType
     ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
     ESP_RETURN_ON_ERROR(validate_signal_frame(frame), TAG, "signal frame validation failed");
 
+    void *owner = NULL;
+    uint8_t *samples = signal_sample_pool_alloc(&s_ctx, frame->samples_size, &owner);
+    ESP_RETURN_ON_FALSE(samples != NULL, ESP_ERR_NO_MEM, TAG, "signal sample pool allocation failed");
+    memcpy(samples, frame->samples, frame->samples_size);
+
     aetus_queue_item_t item = {
         .kind = AETUS_QUEUE_ITEM_SIGNAL_FRAME,
         .body.signal_frame = *frame,
+        .signal_sample_owner = owner,
     };
-    return xQueueSend(s_ctx.queue, &item, timeout) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+    item.body.signal_frame.samples = samples;
+    if (xQueueSend(s_ctx.queue, &item, timeout) != pdTRUE) {
+        portENTER_CRITICAL(&s_signal_pool_lock);
+        s_ctx.signal_pool_stats.queue_send_failure_release_count++;
+        portEXIT_CRITICAL(&s_signal_pool_lock);
+        release_queue_item(&s_ctx, &item);
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
 }
 
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout)

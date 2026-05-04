@@ -15,6 +15,10 @@
 AETUS_STATIC_ASSERT(CONTRACT_SAMPLE_COUNT == 600U, "contract sample count changed unexpectedly");
 AETUS_STATIC_ASSERT(CONTRACT_SAMPLE_BYTES == 2400U, "contract sample byte size changed unexpectedly");
 AETUS_STATIC_ASSERT(
+    sizeof(aetus_signal_frame_t) <= AETUS_SIGNAL_FRAME_STRUCT_MAX_BYTES,
+    "signal frame metadata must stay small; sample bytes belong in the pool"
+);
+AETUS_STATIC_ASSERT(
     AETUS_SIGNAL_SAMPLES_MAX >= CONTRACT_SAMPLE_BYTES,
     "AETUS_SIGNAL_SAMPLES_MAX must cover the 200Hz/3s/2ch/int16 signal frame contract"
 );
@@ -33,6 +37,7 @@ static void build_contract_frame(void)
     ESP_ERROR_CHECK(aetus_signal_frame_add_channel(&frame, "axis_x", "raw", NULL, NULL));
     ESP_ERROR_CHECK(aetus_signal_frame_add_channel(&frame, "axis_y", "raw", NULL, NULL));
     ESP_ERROR_CHECK(aetus_signal_frame_set_samples(&frame, samples, sizeof(samples)));
+    ESP_ERROR_CHECK(frame.samples == samples ? ESP_OK : ESP_FAIL);
 }
 
 void app_main(void)

@@ -81,6 +81,18 @@ public:
         return *this;
     }
 
+    constexpr Config &static_signal_sample_pool()
+    {
+        value_.signal_sample_pool_backend = AETUS_SIGNAL_SAMPLE_POOL_STATIC;
+        return *this;
+    }
+
+    constexpr Config &freertos_heap_signal_sample_pool()
+    {
+        value_.signal_sample_pool_backend = AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP;
+        return *this;
+    }
+
     constexpr Config &connected_led(int gpio)
     {
         value_.connected_led_enabled = true;
