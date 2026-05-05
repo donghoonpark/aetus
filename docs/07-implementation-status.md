@@ -137,7 +137,8 @@ Rust client E2E도 compose stack을 통해 provisioning, ingest, Kafka/Kafka Con
 8. protobuf 파싱
 9. body 내부 `device_id`, `boot_id`, `body` 기본 검증
 10. 내부 event object로 normalize
-11. memory publisher 또는 Kafka publisher로 publish
+11. memory publisher 또는 Kafka publisher로 publish (Kafka publish는 `asyncio.to_thread()`로 event loop 비동기 처리)
+12. in-memory rate limiter는 bucket idle 1시간 초과 시 자동 eviction (50,000개 bucket 한도)
 
 HMAC-SHA256 선택 인증 경로는 구현되어 있으며 `X-Aetus-Signature: hmac-sha256-v1=<hex>`가 있으면 HMAC mode로 처리한다. HMAC mode에서도 control DB 조회는 read-only로 수행하고, ingest 경로는 control DB write를 하지 않는다.
 
@@ -436,8 +437,10 @@ TimescaleDB 설정:
 - `summary` 요청은 query-api 런타임에서 raw `BYTEA samples`를 decode해 `signal_frame_features`를 on-demand upsert
 - 만료된 `signal_frame_features`는 query-api가 materialization 시 삭제
 - `frames`는 좁은 구간의 sampled stream에 대해서만 raw decoded sample JSON 반환
-- `Redis` cache를 선택적으로 사용하며, 실패 시 DB 조회 경로로 fallback
+- `Redis` cache를 선택적으로 사용하며, 실패 시 DB 조회 경로로 fallback (`RedisError` 발생 시 `logger.warning`으로 기록)
 - JSON 응답은 `GZipMiddleware` 기반 `Accept-Encoding` 압축을 지원
+- `PostgresQueryRepository`는 `psycopg_pool.ConnectionPool` 기반 connection pooling 사용 (`min_size=2, max_size=10`)
+- repository method는 debug level로 쿼리 지연시간과 row count 로깅
 
 중요한 구현 결정:
 
@@ -630,8 +633,8 @@ uv run pytest -q
 
 현재 통과 기준:
 
-- ingest unit: `34 passed`
-- ingest PostgreSQL/Kafka e2e: `22 passed`
+- ingest unit: `39 passed`
+- ingest PostgreSQL/Kafka e2e: `23 passed`
 - query-api unit/e2e: `17 passed`
 - stream-viewer frontend e2e: `2 passed`
 - QEMU e2e: 기본 실행에서는 skip, `AETUS_RUN_QEMU_E2E=1`일 때 별도 실행
@@ -658,6 +661,8 @@ uv run pytest -q
 - admin page 브랜딩 렌더
 - admin page pagination
 - admin page search + copy token control 렌더
+- admin password 인증 및 session cookie 기반 login/logout
+- `AETUS_ADMIN_PASSWORD` 미설정 시 기존 동작 유지 (하위 호환)
 
 ### e2e coverage
 
@@ -766,17 +771,17 @@ uv run pytest -q
 
 ## 알려진 제약 / 주의사항
 
-## 1. Admin 인증 없음
+## 1. Admin 인증
 
-현재 `/admin/devices`는 내부망 운영 도구 전제다.
+`AETUS_ADMIN_PASSWORD` 환경변수로 admin page와 `/v1/control/*` JSON API의 비밀번호 기반 session 인증을 설정할 수 있다.
 
-`/v1/control/*` JSON API도 현재 같은 전제다.
-
-필요시 다음 중 하나를 추가해야 한다.
-
-- reverse proxy basic auth
-- 별도 admin bearer token
-- 사설망 접근 제어
+- 비밀번호가 설정되면 `POST /v1/control/login` (JSON) 또는 `POST /admin/login` (HTML form)으로 로그인
+- 인증 성공 시 `aetus_admin_session` HttpOnly + SameSite=Strict 쿠키 발급 (기본 8시간 TTL)
+- `/v1/control/status`, `/v1/control/devices`, `/v1/control/devices/issue` 는 유효한 session cookie 필요
+- admin HTML page도 session cookie가 없으면 login form 표시
+- `POST /v1/control/logout` 또는 `POST /admin/logout` 으로 session 제거
+- `AETUS_ADMIN_PASSWORD` 미설정 시 기존처럼 인증 없이 동작 (하위 호환, 내부망 전제)
+- `AETUS_ADMIN_SESSION_TTL_SECONDS`로 session TTL 조정 가능
 
 ## 2. Source IP는 환경 따라 다르게 보일 수 있음
 
@@ -797,7 +802,6 @@ SQLite backend는 단일 Pod 또는 read-only seed 운영에 맞춘다.
 남은 운영 보강:
 
 - SQLite에서 PostgreSQL로 export/import하는 migration command
-- control plane admin 인증
 
 ## 4. sequence 검증은 아직 하지 않음
 
@@ -851,12 +855,9 @@ uv run pytest -q
 
 ## 추천 다음 작업
 
-- admin page 보호 방식 결정
 - query-api 인증 방식 결정
 - query rollup background job 구현
 - stream viewer zoom/drill-down UX 구현
-- control DB backend abstraction
-- control panel 인증/배포 방식 결정
 - provisioning audit log 추가
 - duplicate resend (`same device_id + boot_id + sequence`) E2E 추가
 - FlashDB durable backlog 구현

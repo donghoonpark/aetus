@@ -118,6 +118,8 @@ esp_err_t aetus_status_set_timestamp_rtc(aetus_status_t *status);
 esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t timeout);
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout);
 esp_err_t aetus_flush(TickType_t timeout);
+esp_err_t aetus_enqueue_telemetry_from_isr(const aetus_telemetry_t *telemetry, BaseType_t *pxHigherPriorityTaskWoken);
+esp_err_t aetus_enqueue_status_from_isr(const aetus_status_t *status, BaseType_t *pxHigherPriorityTaskWoken);
 ```
 
 Thread safety 규칙:
@@ -129,8 +131,10 @@ Thread safety 규칙:
 - `aetus_enqueue_telemetry()`는 여러 FreeRTOS task에서 동시에 호출해도 된다.
 - `aetus_enqueue_status()`도 여러 FreeRTOS task에서 동시에 호출해도 된다.
 - enqueue API는 메시지를 내부 queue item으로 복사하므로 caller의 stack-local struct를 재사용해도 된다.
-- 현재 API는 ISR-safe가 아니다.
-- ISR 경로에서 직접 업로드 이벤트를 만들 필요가 생기면 `aetus_enqueue_*_from_isr()`를 별도 추가한다.
+- `aetus_enqueue_telemetry()`와 `aetus_enqueue_status()`는 task context 전용이다.
+- ISR context에서는 `aetus_enqueue_telemetry_from_isr()`와 `aetus_enqueue_status_from_isr()`를 사용한다 (내부적으로 `xQueueSendFromISR` 사용).
+- ISR-safe signal frame enqueue는 의도적으로 제공하지 않는다 (pool allocation이 task context를 요구함).
+- ISR-safe API는 `ESP_LOG`를 호출하지 않으며, queue full 시 반환값으로만 실패를 전달한다.
 
 ## 데이터 모델
 
@@ -281,13 +285,13 @@ static void sensor_task(void *arg)
 - double, int64, bool, string, bytes metric value
 - upload success 후 sequence 증가
 - upload 실패 메시지 requeue
+- ISR-safe enqueue API (`aetus_enqueue_telemetry_from_isr`, `aetus_enqueue_status_from_isr`)
 
 아직 구현하지 않음:
 
 - FlashDB durable backlog
 - PSRAM capability 지정 signal sample pool
 - zero-copy/borrowed 대형 payload queue API
-- ISR-safe enqueue API
 - Wi-Fi ownership 분리
 - HTTPS client/certificate policy
 - server-side provisioning API client

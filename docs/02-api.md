@@ -7,6 +7,8 @@
 - `GET /v1/time`
 - `GET /v1/healthz`
 - `GET /v1/readyz`
+- `POST /v1/control/login`
+- `POST /v1/control/logout`
 
 별도 status endpoint는 선택 사항이며, 초기 권장안은 `event_type=status`를 `POST /v1/ingest`로 함께 수용하는 방식이다.
 
@@ -227,6 +229,51 @@ RTC time sync와 HMAC:
 - `GET /v1/time`은 body가 없으므로 ingest와 동일한 raw body HMAC 규칙을 그대로 적용하기 어렵다.
 - 초기 HMAC 옵션 범위는 `POST /v1/ingest`로 한정한다.
 - `/v1/time`은 기존 bearer token 인증을 유지하거나, 이후 별도 nonce 기반 HMAC 규칙을 추가로 설계한다.
+
+## Admin / Control API 인증
+
+`/v1/control/*` JSON API와 `/admin/*` HTML 페이지는 device token과 분리된 admin 인증을 사용한다.
+
+환경변수:
+
+| 변수 | 용도 |
+| --- | --- |
+| `AETUS_ADMIN_PASSWORD` | admin password. 미설정 시 인증 없이 동작 (하위 호환) |
+| `AETUS_ADMIN_SESSION_TTL_SECONDS` | session 만료 시간 (기본값: `28800` = 8시간) |
+
+### Control JSON API login/logout
+
+`POST /v1/control/login`
+
+요청:
+```json
+{"password": "<admin-password>"}
+```
+
+응답:
+- 성공: `200 {"message": "authenticated"}` + `Set-Cookie: aetus_admin_session=<token>; HttpOnly; SameSite=Strict`
+- 실패: `401 {"detail": "invalid password"}`
+
+`POST /v1/control/logout`
+- 성공: `200 {"message": "logged out"}` + session cookie 제거
+
+### Admin HTML login
+
+`POST /admin/login`
+- HTML form 기반. `password` 필드로 인증.
+- 성공 시 `GET /admin/devices`로 redirect.
+
+### 보호 대상
+
+`AETUS_ADMIN_PASSWORD`가 설정된 경우:
+
+| 엔드포인트 | 인증 방식 |
+| --- | --- |
+| `GET /v1/control/status` | session cookie 검증, 없으면 `401` |
+| `GET /v1/control/devices` | session cookie 검증, 없으면 `401` |
+| `POST /v1/control/devices/issue` | session cookie 검증, 없으면 `401` |
+| `GET /admin/devices` | session cookie 검증, 없으면 login form 표시 |
+| `POST /admin/devices/issue` | session cookie 검증, 없으면 login form 표시 |
 
 ## provisioning API
 
