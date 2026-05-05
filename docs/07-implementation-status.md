@@ -551,6 +551,28 @@ AETUS_QEMU_TARGET=esp32c3 \
 uv run pytest tests/qemu_e2e -q -s
 ```
 
+### 6-1. QEMU ISR Enqueue Test
+
+구현 위치:
+
+- [[../firmware/test-apps/qemu-isr-enqueue]]
+- [[../services/ingest-api/tests/qemu_e2e/test_qemu_isr_enqueue.py]]
+
+목적:
+
+- ESP-IDF `gptimer` ISR callback에서 `aetus_enqueue_telemetry_from_isr()`와 `aetus_enqueue_status_from_isr()`의 패턴을 검증한다.
+- ISR context에서 `aetus_queue_item_t` struct stack frame이 overflow를 일으키지 않는지 확인한다.
+- Queue에 정상적으로 item이 전달되는지, telemetry/status item이 모두 수신되는지 검증한다.
+- `uxTaskGetStackHighWaterMark`로 ISR 실행 전후 stack 사용량을 확인한다.
+
+검증 항목:
+
+1. firmware build (`esp32c3` QEMU target)
+2. QEMU에서 `gptimer` ISR을 통해 telemetry + status item enqueue
+3. main task에서 queue drain 후 item 수신 확인 (telemetry + status 2개)
+4. ISR 실행 후 stack high water mark가 256 bytes 이상 남았는지 확인
+5. ISR stack 사용량이 4096 bytes 미만인지 확인
+
 ## 7. ESP32 AETUS Portable Upload Stack
 
 구현 위치:
@@ -737,6 +759,19 @@ uv run pytest -q
 9. Kafka Connect sink
 10. PostgreSQL row 적재 확인
 11. `device_id`, `boot_id`, `sequence`, `timestamp_ns`, metric payload 보존 확인
+
+### qemu_isr_enqueue coverage
+
+QEMU ISR enqueue test는 다음을 커버한다.
+
+1. ESP-IDF 6.0 project `set-target`
+2. firmware build (aetus component 포함)
+3. QEMU에서 `gptimer` ISR callback 실행
+4. ISR context에서 `aetus_queue_item_t` struct stack frame 검증
+5. `xQueueSendFromISR`으로 telemetry + status item enqueue
+6. main task에서 queue drain 후 item 수신 확인
+7. ISR 실행 후 stack high water mark가 256 bytes 이상 남았는지 확인
+8. ISR stack 사용량이 4096 bytes 미만인지 확인
 
 ### hil firmware coverage
 
