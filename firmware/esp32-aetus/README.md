@@ -309,12 +309,12 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(status.enqueue(pdMS_TO_TICKS(1000)));
 
     constexpr std::array<uint8_t, 4> raw_flags = {0xde, 0xad, 0xbe, 0xef};
-    auto telemetry = aetus::Telemetry()
-                         .timestamp_from_rtc()
-                         .add_double("temperature", 22.5, "celsius")
-                         .add_int64("battery_mv", 4012, "mV")
-                         .add_bool("door_open", false)
-                         .add_bytes("raw_flags", raw_flags);
+    aetus::Telemetry telemetry;
+    telemetry.timestamp_from_rtc()
+        .add_double("temperature", 22.5, "celsius")
+        .add_int64("battery_mv", 4012, "mV")
+        .add_bool("door_open", false)
+        .add_bytes("raw_flags", raw_flags);
 
     ESP_ERROR_CHECK(telemetry.enqueue(pdMS_TO_TICKS(1000)));
 }

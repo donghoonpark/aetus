@@ -4,9 +4,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# Keep this app tiny and deterministic: queue_depth=1 plus two pool blocks lets
-# us verify queue-send-failure release without waiting for Wi-Fi or HTTP.
-CONFIG_AETUS_SIGNAL_SAMPLES_MAX=2400
-CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS=2
-CONFIG_AETUS_ENCODE_BUFFER_BYTES=4096
-CONFIG_AETUS_QUEUE_ITEM_MAX_BYTES=1024
+# Keep this app tiny and deterministic: queue_depth=1 lets us verify
+# queue-send-failure release without waiting for Wi-Fi or HTTP. This app
+# compiles only the signal sample pool source directly, so AETUS Kconfig
+# symbols are intentionally not used here.

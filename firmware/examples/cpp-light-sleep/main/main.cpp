@@ -128,12 +128,12 @@ static void producer_task(void *arg)
     (void)arg;
     while (true) {
         const uint32_t index = s_sample_index.fetch_add(1, std::memory_order_relaxed);
-        auto telemetry = aetus::Telemetry()
-                             .add_int64("sample_index", index)
-                             .add_int64("uptime_ms", esp_timer_get_time() / 1000, "ms")
-                             .add_int64("free_heap", esp_get_free_heap_size(), "bytes")
-                             .add_int64("sleep_entries", s_light_sleep_entries.load(std::memory_order_relaxed))
-                             .add_int64("last_sleep_ms", s_last_light_sleep_ms.load(std::memory_order_relaxed), "ms");
+        aetus::Telemetry telemetry;
+        telemetry.add_int64("sample_index", index)
+            .add_int64("uptime_ms", esp_timer_get_time() / 1000, "ms")
+            .add_int64("free_heap", esp_get_free_heap_size(), "bytes")
+            .add_int64("sleep_entries", s_light_sleep_entries.load(std::memory_order_relaxed))
+            .add_int64("last_sleep_ms", s_last_light_sleep_ms.load(std::memory_order_relaxed), "ms");
         try_attach_rtc_timestamp(telemetry);
 
         const esp_err_t err = telemetry.enqueue(pdMS_TO_TICKS(1000));

@@ -317,7 +317,7 @@ def test_esp32_qemu_signal_sample_pool_runtime_contract() -> None:
     )
     output = "\n".join(lines)
 
-    assert "AETUS_SIGNAL_POOL_STATIC_PASS" in output
+    assert "AETUS_SIGNAL_POOL_HEAP_PASS" in output
     assert "signal frame enqueue failed because queue is full" in output
     assert "allocated_blocks=1" in output
     assert "peak_allocated_blocks=2" in output

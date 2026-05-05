@@ -6,17 +6,8 @@ config AETUS_SIGNAL_SAMPLES_MAX
     range 1 8192
     help
         Maximum raw sample bytes accepted in one signal frame. Samples are
-        borrowed by aetus_signal_frame_t and copied into the AETUS-owned sample
-        pool when enqueued.
-
-config AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS
-    int "Static signal sample pool blocks"
-    default 4
-    range 1 64
-    help
-        Number of fixed-size static sample blocks available when
-        AETUS_SIGNAL_SAMPLE_POOL_STATIC is selected. Each block is
-        AETUS_SIGNAL_SAMPLES_MAX bytes.
+        borrowed by aetus_signal_frame_t and copied into a heap-allocated
+        buffer when enqueued.
 
 config AETUS_ENCODE_BUFFER_BYTES
     int "AETUS protobuf encode buffer bytes"

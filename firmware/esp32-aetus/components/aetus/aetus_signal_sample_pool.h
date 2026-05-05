@@ -11,13 +11,11 @@ extern "C" {
 
 void aetus_signal_sample_pool_reset(aetus_signal_sample_pool_stats_t *stats);
 uint8_t *aetus_signal_sample_pool_alloc(
-    aetus_signal_sample_pool_backend_t backend,
     aetus_signal_sample_pool_stats_t *stats,
     size_t size,
     void **owner
 );
 void aetus_signal_sample_pool_release(
-    aetus_signal_sample_pool_backend_t backend,
     aetus_signal_sample_pool_stats_t *stats,
     void *owner
 );

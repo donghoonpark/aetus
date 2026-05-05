@@ -10,6 +10,23 @@
 
 namespace aetus {
 
+namespace detail {
+
+template <size_t N>
+static bool copy_string(char (&target)[N], std::string_view source)
+{
+    static_assert(N > 0);
+    if (source.size() >= N) {
+        target[0] = '\0';
+        return false;
+    }
+    std::memcpy(target, source.data(), source.size());
+    target[source.size()] = '\0';
+    return true;
+}
+
+} // namespace detail
+
 class Config {
 public:
     constexpr Config() = default;
@@ -81,18 +98,6 @@ public:
         return *this;
     }
 
-    constexpr Config &static_signal_sample_pool()
-    {
-        value_.signal_sample_pool_backend = AETUS_SIGNAL_SAMPLE_POOL_STATIC;
-        return *this;
-    }
-
-    constexpr Config &freertos_heap_signal_sample_pool()
-    {
-        value_.signal_sample_pool_backend = AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP;
-        return *this;
-    }
-
     constexpr Config &connected_led(int gpio)
     {
         value_.connected_led_enabled = true;
@@ -138,6 +143,17 @@ public:
         aetus_telemetry_init(&value_);
     }
 
+    ~Telemetry()
+    {
+        aetus_telemetry_deinit(&value_);
+    }
+
+    // Non-copyable, non-movable (owns heap resources)
+    Telemetry(const Telemetry &) = delete;
+    Telemetry &operator=(const Telemetry &) = delete;
+    Telemetry(Telemetry &&) = delete;
+    Telemetry &operator=(Telemetry &&) = delete;
+
     Telemetry &timestamp(uint64_t timestamp_ns)
     {
         value_.timestamp_ns = timestamp_ns;
@@ -157,63 +173,62 @@ public:
 
     Telemetry &add_int64(std::string_view key, int64_t value, std::string_view unit = {})
     {
-        aetus_metric_t *metric = append_metric(key, unit);
-        if (metric == nullptr) {
+        char key_buffer[AETUS_METRIC_KEY_MAX] = {};
+        char unit_buffer[AETUS_METRIC_UNIT_MAX] = {};
+        if (!detail::copy_string(key_buffer, key) || !detail::copy_string(unit_buffer, unit)) {
+            remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
-        metric->type = AETUS_METRIC_VALUE_INT64;
-        metric->value.int64_value = value;
+        remember(aetus_telemetry_add_int64(&value_, key_buffer, value, unit_buffer));
         return *this;
     }
 
     Telemetry &add_double(std::string_view key, double value, std::string_view unit = {})
     {
-        aetus_metric_t *metric = append_metric(key, unit);
-        if (metric == nullptr) {
+        char key_buffer[AETUS_METRIC_KEY_MAX] = {};
+        char unit_buffer[AETUS_METRIC_UNIT_MAX] = {};
+        if (!detail::copy_string(key_buffer, key) || !detail::copy_string(unit_buffer, unit)) {
+            remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
-        metric->type = AETUS_METRIC_VALUE_DOUBLE;
-        metric->value.double_value = value;
+        remember(aetus_telemetry_add_double(&value_, key_buffer, value, unit_buffer));
         return *this;
     }
 
     Telemetry &add_bool(std::string_view key, bool value, std::string_view unit = {})
     {
-        aetus_metric_t *metric = append_metric(key, unit);
-        if (metric == nullptr) {
+        char key_buffer[AETUS_METRIC_KEY_MAX] = {};
+        char unit_buffer[AETUS_METRIC_UNIT_MAX] = {};
+        if (!detail::copy_string(key_buffer, key) || !detail::copy_string(unit_buffer, unit)) {
+            remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
-        metric->type = AETUS_METRIC_VALUE_BOOL;
-        metric->value.bool_value = value;
+        remember(aetus_telemetry_add_bool(&value_, key_buffer, value, unit_buffer));
         return *this;
     }
 
     Telemetry &add_string(std::string_view key, std::string_view value, std::string_view unit = {})
     {
-        aetus_metric_t *metric = append_metric(key, unit);
-        if (metric == nullptr) {
+        char key_buffer[AETUS_METRIC_KEY_MAX] = {};
+        char unit_buffer[AETUS_METRIC_UNIT_MAX] = {};
+        if (!detail::copy_string(key_buffer, key) || !detail::copy_string(unit_buffer, unit)) {
+            remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
-        metric->type = AETUS_METRIC_VALUE_STRING;
-        if (!copy_string(metric->value.string_value, value)) {
-            remember(ESP_ERR_INVALID_ARG);
-        }
+        remember(aetus_telemetry_add_string_n(&value_, key_buffer, value.data(), value.size(), unit_buffer));
         return *this;
     }
 
     Telemetry &add_bytes(std::string_view key, std::span<const uint8_t> value, std::string_view unit = {})
     {
-        aetus_metric_t *metric = append_metric(key, unit);
-        if (metric == nullptr) {
-            return *this;
-        }
-        if (value.size() > AETUS_METRIC_BYTES_MAX) {
+        char key_buffer[AETUS_METRIC_KEY_MAX] = {};
+        char unit_buffer[AETUS_METRIC_UNIT_MAX] = {};
+        if (!detail::copy_string(key_buffer, key) || !detail::copy_string(unit_buffer, unit)) {
             remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
-        metric->type = AETUS_METRIC_VALUE_BYTES;
-        std::memcpy(metric->value.bytes_value.data, value.data(), value.size());
-        metric->value.bytes_value.size = value.size();
+        remember(aetus_telemetry_add_bytes(
+            &value_, key_buffer, value.data(), value.size(), unit_buffer));
         return *this;
     }
 
@@ -246,41 +261,11 @@ public:
 #endif
 
 private:
-    template <size_t N>
-    static bool copy_string(char (&target)[N], std::string_view source)
-    {
-        static_assert(N > 0);
-        if (source.size() >= N) {
-            target[0] = '\0';
-            return false;
-        }
-        std::memcpy(target, source.data(), source.size());
-        target[source.size()] = '\0';
-        return true;
-    }
-
     void remember(esp_err_t err)
     {
         if (error_ == ESP_OK && err != ESP_OK) {
             error_ = err;
         }
-    }
-
-    aetus_metric_t *append_metric(std::string_view key, std::string_view unit)
-    {
-        if (value_.metric_count >= AETUS_MAX_METRICS || key.empty()) {
-            remember(ESP_ERR_INVALID_ARG);
-            return nullptr;
-        }
-
-        aetus_metric_t *metric = &value_.metrics[value_.metric_count];
-        if (!copy_string(metric->key, key) || !copy_string(metric->unit, unit)) {
-            remember(ESP_ERR_INVALID_ARG);
-            return nullptr;
-        }
-
-        value_.metric_count++;
-        return metric;
     }
 
     aetus_telemetry_t value_{};
@@ -314,7 +299,7 @@ public:
     SignalFrame &stream_key(std::string_view stream_key_value)
     {
         char buffer[AETUS_SIGNAL_STREAM_KEY_MAX] = {};
-        if (!copy_string(buffer, stream_key_value)) {
+        if (!detail::copy_string(buffer, stream_key_value)) {
             remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
@@ -435,25 +420,12 @@ private:
     {
         char key_buffer[AETUS_METRIC_KEY_MAX] = {};
         char unit_buffer[AETUS_METRIC_UNIT_MAX] = {};
-        if (!copy_string(key_buffer, key) || !copy_string(unit_buffer, unit)) {
+        if (!detail::copy_string(key_buffer, key) || !detail::copy_string(unit_buffer, unit)) {
             remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
         remember(aetus_signal_frame_add_channel(&value_, key_buffer, unit_buffer, scale, offset));
         return *this;
-    }
-
-    template <size_t N>
-    static bool copy_string(char (&target)[N], std::string_view source)
-    {
-        static_assert(N > 0);
-        if (source.size() >= N) {
-            target[0] = '\0';
-            return false;
-        }
-        std::memcpy(target, source.data(), source.size());
-        target[source.size()] = '\0';
-        return true;
     }
 
     aetus_signal_frame_t value_{};
@@ -497,7 +469,7 @@ public:
     Status &reboot_reason(std::string_view reason)
     {
         char buffer[sizeof(value_.reboot_reason)] = {};
-        if (!copy_string(buffer, reason)) {
+        if (!detail::copy_string(buffer, reason)) {
             remember(ESP_ERR_INVALID_ARG);
             return *this;
         }
@@ -551,19 +523,6 @@ public:
 #endif
 
 private:
-    template <size_t N>
-    static bool copy_string(char (&target)[N], std::string_view source)
-    {
-        static_assert(N > 0);
-        if (source.size() >= N) {
-            target[0] = '\0';
-            return false;
-        }
-        std::memcpy(target, source.data(), source.size());
-        target[source.size()] = '\0';
-        return true;
-    }
-
     void remember(esp_err_t err)
     {
         if (error_ == ESP_OK && err != ESP_OK) {

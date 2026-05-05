@@ -51,7 +51,7 @@ static esp_err_t enqueue_sample(
 )
 {
     void *owner = NULL;
-    uint8_t *owned_samples = aetus_signal_sample_pool_alloc(AETUS_SIGNAL_SAMPLE_POOL_STATIC, stats, samples_size, &owner);
+    uint8_t *owned_samples = aetus_signal_sample_pool_alloc(stats, samples_size, &owner);
     ESP_RETURN_ON_FALSE(owned_samples != NULL, ESP_ERR_NO_MEM, "qemu_pool", "pool allocation failed");
     memcpy(owned_samples, samples, samples_size);
 
@@ -63,7 +63,7 @@ static esp_err_t enqueue_sample(
     if (xQueueSend(queue, &item, 0) != pdTRUE) {
         aetus_signal_sample_pool_note_queue_send_failure(stats);
         printf("signal frame enqueue failed because queue is full\n");
-        aetus_signal_sample_pool_release(AETUS_SIGNAL_SAMPLE_POOL_STATIC, stats, owner);
+        aetus_signal_sample_pool_release(stats, owner);
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
@@ -96,9 +96,9 @@ void app_main(void)
         snapshot.release_count == 2U &&
         snapshot.queue_send_failure_release_count == 2U &&
         snapshot.allocation_failure_count == 0U) {
-        printf("AETUS_SIGNAL_POOL_STATIC_PASS\n");
+        printf("AETUS_SIGNAL_POOL_HEAP_PASS\n");
     } else {
-        printf("AETUS_SIGNAL_POOL_STATIC_FAIL\n");
+        printf("AETUS_SIGNAL_POOL_HEAP_FAIL\n");
     }
     printf("AETUS_SIGNAL_POOL_TEST_DONE\n");
     fflush(stdout);

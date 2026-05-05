@@ -102,28 +102,28 @@ extern "C" void app_main(void)
 
     constexpr std::array<uint8_t, 4> raw_flags = {0xde, 0xad, 0xbe, 0xef};
     const uint32_t strap_reg = REG_READ(GPIO_STRAP_REG);
-    auto telemetry = aetus::Telemetry()
-                         .add_double("temperature", 23.75, "celsius")
-                         .add_int64("battery_mv", 4012, "mV")
-                         .add_bool("door_open", false)
-                         .add_string("state", "measuring")
-                         .add_bytes("raw_flags", raw_flags)
-                         .add_bool("diag.dis_download_mode", read_efuse_flag(ESP_EFUSE_DIS_DOWNLOAD_MODE))
-                         .add_bool(
-                             "diag.dis_usb_serial_jtag_download_mode",
-                             read_efuse_flag(ESP_EFUSE_DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE)
-                         )
-                         .add_bool(
-                             "diag.enable_security_download",
-                             read_efuse_flag(ESP_EFUSE_ENABLE_SECURITY_DOWNLOAD)
-                         )
-                         .add_bool(
-                             "diag.dis_usb_serial_jtag_rom_print",
-                             read_efuse_flag(ESP_EFUSE_DIS_USB_SERIAL_JTAG_ROM_PRINT)
-                         )
-                         .add_bool("diag.dis_force_download", read_efuse_flag(ESP_EFUSE_DIS_FORCE_DOWNLOAD))
-                         .add_bool("diag.dis_usb_jtag", read_efuse_flag(ESP_EFUSE_DIS_USB_JTAG))
-                         .add_int64("diag.gpio_strap_reg", strap_reg);
+    aetus::Telemetry telemetry;
+    telemetry.add_double("temperature", 23.75, "celsius")
+        .add_int64("battery_mv", 4012, "mV")
+        .add_bool("door_open", false)
+        .add_string("state", "measuring")
+        .add_bytes("raw_flags", raw_flags)
+        .add_bool("diag.dis_download_mode", read_efuse_flag(ESP_EFUSE_DIS_DOWNLOAD_MODE))
+        .add_bool(
+            "diag.dis_usb_serial_jtag_download_mode",
+            read_efuse_flag(ESP_EFUSE_DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE)
+        )
+        .add_bool(
+            "diag.enable_security_download",
+            read_efuse_flag(ESP_EFUSE_ENABLE_SECURITY_DOWNLOAD)
+        )
+        .add_bool(
+            "diag.dis_usb_serial_jtag_rom_print",
+            read_efuse_flag(ESP_EFUSE_DIS_USB_SERIAL_JTAG_ROM_PRINT)
+        )
+        .add_bool("diag.dis_force_download", read_efuse_flag(ESP_EFUSE_DIS_FORCE_DOWNLOAD))
+        .add_bool("diag.dis_usb_jtag", read_efuse_flag(ESP_EFUSE_DIS_USB_JTAG))
+        .add_int64("diag.gpio_strap_reg", strap_reg);
     attach_rtc_timestamp_if_available(telemetry);
     ESP_ERROR_CHECK(telemetry.enqueue(pdMS_TO_TICKS(1000)));
 

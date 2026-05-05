@@ -18,10 +18,9 @@ extern "C" {
 #endif
 
 #define AETUS_MAX_METRICS 8
-#define AETUS_METRIC_KEY_MAX 24
-#define AETUS_METRIC_UNIT_MAX 16
-#define AETUS_METRIC_STRING_MAX 64
-#define AETUS_METRIC_BYTES_MAX 64
+#define AETUS_TELEMETRY_INLINE_METRICS 4
+#define AETUS_METRIC_KEY_MAX 16
+#define AETUS_METRIC_UNIT_MAX 8
 #define AETUS_SIGNAL_STREAM_KEY_MAX 32
 #define AETUS_SIGNAL_CHANNELS_MAX 4
 #ifndef AETUS_SIGNAL_SAMPLES_MAX
@@ -57,6 +56,10 @@ AETUS_STATIC_ASSERT(
     AETUS_SIGNAL_SAMPLES_MAX <= AETUS_SIGNAL_SAMPLES_ABSOLUTE_MAX,
     "AETUS_SIGNAL_SAMPLES_MAX exceeds the supported static frame limit"
 );
+AETUS_STATIC_ASSERT(
+    AETUS_TELEMETRY_INLINE_METRICS <= AETUS_MAX_METRICS,
+    "AETUS_TELEMETRY_INLINE_METRICS must not exceed AETUS_MAX_METRICS"
+);
 
 typedef enum {
     AETUS_METRIC_VALUE_INT64 = 0,
@@ -67,27 +70,24 @@ typedef enum {
 } aetus_metric_value_type_t;
 
 typedef struct {
-    uint8_t data[AETUS_METRIC_BYTES_MAX];
-    size_t size;
-} aetus_metric_bytes_t;
-
-typedef struct {
     char key[AETUS_METRIC_KEY_MAX];
+    char unit[AETUS_METRIC_UNIT_MAX];
     aetus_metric_value_type_t type;
+    uint32_t blob_size;
     union {
         int64_t int64_value;
         double double_value;
         bool bool_value;
-        char string_value[AETUS_METRIC_STRING_MAX];
-        aetus_metric_bytes_t bytes_value;
+        void *blob_data;
     } value;
-    char unit[AETUS_METRIC_UNIT_MAX];
 } aetus_metric_t;
 
 typedef struct {
     uint64_t timestamp_ns;
     uint32_t metric_count;
-    aetus_metric_t metrics[AETUS_MAX_METRICS];
+    uint32_t capacity;
+    aetus_metric_t inline_metrics[AETUS_TELEMETRY_INLINE_METRICS];
+    aetus_metric_t *heap_metrics;
 } aetus_telemetry_t;
 
 typedef enum {
@@ -101,11 +101,6 @@ typedef enum {
     AETUS_SIGNAL_LAYOUT_INTERLEAVED = 0,
     AETUS_SIGNAL_LAYOUT_PLANAR = 1,
 } aetus_signal_layout_t;
-
-typedef enum {
-    AETUS_SIGNAL_SAMPLE_POOL_STATIC = 0,
-    AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP = 1,
-} aetus_signal_sample_pool_backend_t;
 
 typedef struct {
     char key[AETUS_METRIC_KEY_MAX];
@@ -185,7 +180,6 @@ typedef struct {
     uint32_t firmware_version;
     uint32_t upload_interval_ms;
     uint32_t queue_depth;
-    aetus_signal_sample_pool_backend_t signal_sample_pool_backend;
     bool connected_led_enabled;
     int connected_led_gpio;
 } aetus_config_t;
@@ -208,6 +202,7 @@ typedef struct {
 } aetus_provisioning_config_t;
 
 void aetus_telemetry_init(aetus_telemetry_t *telemetry);
+void aetus_telemetry_deinit(aetus_telemetry_t *telemetry);
 void aetus_signal_frame_init(aetus_signal_frame_t *frame);
 void aetus_status_init(aetus_status_t *status, aetus_device_status_t device_status);
 esp_err_t aetus_status_set_reboot_reason(aetus_status_t *status, const char *reboot_reason);
@@ -237,6 +232,13 @@ esp_err_t aetus_telemetry_add_string(
     aetus_telemetry_t *telemetry,
     const char *key,
     const char *value,
+    const char *unit
+);
+esp_err_t aetus_telemetry_add_string_n(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    const char *value,
+    size_t value_size,
     const char *unit
 );
 esp_err_t aetus_telemetry_add_bytes(
