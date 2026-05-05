@@ -44,4 +44,18 @@ config AETUS_QUEUE_ITEM_MAX_BYTES
         frame sample bytes are held by the sample pool, so queue slots should
         stay small even when AETUS_SIGNAL_SAMPLES_MAX grows.
 
+config AETUS_ISR_SAFE_ENQUEUE
+    bool "ISR-safe telemetry and status enqueue"
+    default y
+    help
+        Enable aetus_enqueue_telemetry_from_isr() and
+        aetus_enqueue_status_from_isr(). When enabled, a global buffer
+        (sizeof(aetus_queue_item_t) bytes in BSS) is reserved so the
+        enqueue path never allocates the item on the calling task's stack,
+        making it safe to call from an interrupt even when interrupting
+        a small-stack task such as the IDLE task.
+
+        Disable this option to reclaim the global buffer when the ISR-safe
+        API is not used.
+
 endmenu

@@ -110,6 +110,11 @@ typedef struct {
 
 static aetus_ctx_t s_ctx;
 
+#ifdef CONFIG_AETUS_ISR_SAFE_ENQUEUE
+static aetus_queue_item_t s_isr_item;
+static portMUX_TYPE s_isr_item_lock = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
 static void copy_string(char *target, size_t target_size, const char *source)
 {
     if (target_size == 0) {
@@ -1629,6 +1634,7 @@ esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout)
     return ESP_OK;
 }
 
+#ifdef CONFIG_AETUS_ISR_SAFE_ENQUEUE
 esp_err_t aetus_enqueue_telemetry_from_isr(
     const aetus_telemetry_t *telemetry,
     BaseType_t *pxHigherPriorityTaskWoken
@@ -1638,14 +1644,14 @@ esp_err_t aetus_enqueue_telemetry_from_isr(
         return ESP_ERR_INVALID_ARG;
     }
 
-    aetus_queue_item_t item = {
-        .kind = AETUS_QUEUE_ITEM_TELEMETRY,
-        .body.telemetry = *telemetry,
-    };
-    if (xQueueSendFromISR(s_ctx.queue, &item, pxHigherPriorityTaskWoken) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    return ESP_OK;
+    portENTER_CRITICAL_SAFE(&s_isr_item_lock);
+    s_isr_item.kind = AETUS_QUEUE_ITEM_TELEMETRY;
+    s_isr_item.signal_sample_owner = NULL;
+    memcpy(&s_isr_item.body.telemetry, telemetry, sizeof(aetus_telemetry_t));
+    BaseType_t ok = xQueueSendFromISR(s_ctx.queue, &s_isr_item, pxHigherPriorityTaskWoken);
+    portEXIT_CRITICAL_SAFE(&s_isr_item_lock);
+
+    return ok == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 esp_err_t aetus_enqueue_status_from_isr(
@@ -1657,15 +1663,16 @@ esp_err_t aetus_enqueue_status_from_isr(
         return ESP_ERR_INVALID_ARG;
     }
 
-    aetus_queue_item_t item = {
-        .kind = AETUS_QUEUE_ITEM_STATUS,
-        .body.status = *status,
-    };
-    if (xQueueSendFromISR(s_ctx.queue, &item, pxHigherPriorityTaskWoken) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    return ESP_OK;
+    portENTER_CRITICAL_SAFE(&s_isr_item_lock);
+    s_isr_item.kind = AETUS_QUEUE_ITEM_STATUS;
+    s_isr_item.signal_sample_owner = NULL;
+    memcpy(&s_isr_item.body.status, status, sizeof(aetus_status_t));
+    BaseType_t ok = xQueueSendFromISR(s_ctx.queue, &s_isr_item, pxHigherPriorityTaskWoken);
+    portEXIT_CRITICAL_SAFE(&s_isr_item_lock);
+
+    return ok == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
+#endif
 
 esp_err_t aetus_flush(TickType_t timeout)
 {

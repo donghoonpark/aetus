@@ -265,6 +265,8 @@ esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t
 esp_err_t aetus_enqueue_signal_frame(const aetus_signal_frame_t *frame, TickType_t timeout);
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout);
 esp_err_t aetus_flush(TickType_t timeout);
+
+#ifdef CONFIG_AETUS_ISR_SAFE_ENQUEUE
 esp_err_t aetus_enqueue_telemetry_from_isr(
     const aetus_telemetry_t *telemetry,
     BaseType_t *pxHigherPriorityTaskWoken
@@ -273,6 +275,7 @@ esp_err_t aetus_enqueue_status_from_isr(
     const aetus_status_t *status,
     BaseType_t *pxHigherPriorityTaskWoken
 );
+#endif
 
 #ifdef __cplusplus
 }

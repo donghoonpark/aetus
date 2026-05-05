@@ -328,7 +328,8 @@ extern "C" void app_main(void)
 - In HMAC mode, `device_token` is reused as the shared secret and `/v1/time` still uses bearer token authentication.
 - `aetus_enqueue_telemetry()` and `aetus_enqueue_status()` are thread-safe from normal FreeRTOS task context.
 - Enqueue APIs copy the message into the internal queue, so callers may reuse stack-local structs after the call returns.
-- Enqueue APIs are not ISR-safe. Add `FromISR` variants later if an interrupt path needs direct event emission.
+- Use `aetus_enqueue_telemetry_from_isr()` and `aetus_enqueue_status_from_isr()` from ISR context when `CONFIG_AETUS_ISR_SAFE_ENQUEUE` is enabled.
+- Signal frame enqueue is intentionally task-context only because it copies sample bytes through the configured sample pool.
 - `aetus_flush()` requests an immediate drain and waits for the uploader task to finish or timeout.
 
 ## Runtime Behavior

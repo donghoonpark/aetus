@@ -1,0 +1,51 @@
+set(AETUS_WIFI_SSID "$ENV{AETUS_WIFI_SSID}")
+set(AETUS_WIFI_PASSWORD "$ENV{AETUS_WIFI_PASSWORD}")
+set(AETUS_INGEST_URL "$ENV{AETUS_INGEST_URL}")
+set(AETUS_TIME_URL "$ENV{AETUS_TIME_URL}")
+set(AETUS_DEVICE_ID "$ENV{AETUS_DEVICE_ID}")
+set(AETUS_DEVICE_TOKEN "$ENV{AETUS_DEVICE_TOKEN}")
+set(AETUS_AUTH "$ENV{AETUS_AUTH}")
+
+if(NOT AETUS_AUTH)
+    set(AETUS_AUTH "bearer")
+endif()
+
+foreach(required_var
+    AETUS_WIFI_SSID
+    AETUS_WIFI_PASSWORD
+    AETUS_INGEST_URL
+    AETUS_DEVICE_ID
+    AETUS_DEVICE_TOKEN
+)
+    if(NOT DEFINED ${required_var} OR "${${required_var}}" STREQUAL "")
+        message(FATAL_ERROR "${required_var} environment variable is required")
+    endif()
+endforeach()
+
+if(NOT AETUS_TIME_URL)
+    string(REPLACE "/v1/ingest" "/v1/time" AETUS_TIME_URL "${AETUS_INGEST_URL}")
+endif()
+
+string(TOLOWER "${AETUS_AUTH}" AETUS_AUTH_NORMALIZED)
+if(AETUS_AUTH_NORMALIZED STREQUAL "hmac")
+    set(AETUS_AUTH_HMAC 1)
+elseif(AETUS_AUTH_NORMALIZED STREQUAL "bearer")
+    set(AETUS_AUTH_HMAC 0)
+else()
+    message(FATAL_ERROR "AETUS_AUTH must be either 'bearer' or 'hmac'")
+endif()
+
+configure_file(
+    "${COMPONENT_DIR}/aetus_config.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/aetus_config.h"
+    @ONLY
+)
+
+idf_component_register(
+    SRCS
+        "main.c"
+    INCLUDE_DIRS
+        "${CMAKE_CURRENT_BINARY_DIR}"
+    REQUIRES
+        aetus
+)

@@ -581,7 +581,9 @@ uv run pytest tests/qemu_e2e -q -s
 - [[../firmware/esp32-aetus/components/aetus/include/aetus.h]]
 - [[../firmware/examples]]
 - [[../firmware/test-apps/qemu-telemetry]]
+- [[../firmware/test-apps/qemu-isr-enqueue]]
 - [[../firmware/test-apps/esp32c5-upload-smoke]]
+- [[../firmware/test-apps/esp32c5-isr-enqueue]]
 
 목적:
 
@@ -601,6 +603,8 @@ uv run pytest tests/qemu_e2e -q -s
 - `aetus_status_set_timestamp_rtc`
 - `aetus_enqueue_telemetry`
 - `aetus_enqueue_status`
+- `aetus_enqueue_telemetry_from_isr`
+- `aetus_enqueue_status_from_isr`
 - `aetus_flush`
 
 현재 구현된 runtime 동작:
@@ -619,6 +623,15 @@ uv run pytest tests/qemu_e2e -q -s
 - NimBLE GATT provisioning으로 Wi-Fi/API 설정 갱신
 - Wi-Fi connected LED 제어
 - C++20 wrapper API
+- static 또는 FreeRTOS heap 기반 signal sample memory pool
+- telemetry/status ISR-safe enqueue API (`CONFIG_AETUS_ISR_SAFE_ENQUEUE`)
+
+ISR-safe enqueue 구현 메모:
+
+- `aetus_enqueue_telemetry_from_isr()`와 `aetus_enqueue_status_from_isr()`만 제공한다.
+- `SignalFrame`은 sample pool allocation/copy가 필요하므로 ISR-safe API를 제공하지 않는다.
+- ISR 경로는 task stack에 큰 `aetus_queue_item_t`를 만들지 않도록 BSS global buffer와 spinlock을 사용한다.
+- 이 API는 queue full 시 `ESP_ERR_TIMEOUT`을 반환하며 ISR 내부에서 `ESP_LOG`를 호출하지 않는다.
 
 예제 app:
 
@@ -631,11 +644,19 @@ uv run pytest tests/qemu_e2e -q -s
 - `firmware/examples/cpp-light-sleep`: tickless idle/light sleep 관찰용 예제
 - 모든 예제는 ESP32-C5, ESP-IDF 6.0, 4MB flash, 3MB factory app partition 기준으로 빌드한다.
 
+검증용 firmware:
+
+- `firmware/test-apps/qemu-telemetry`: RISC-V QEMU protobuf stream 생성 및 DB 적재 검증
+- `firmware/test-apps/qemu-isr-enqueue`: QEMU에서 ISR-safe enqueue와 stack high-water mark 검증
+- `firmware/test-apps/esp32c5-upload-smoke`: 실제 ESP32-C5 업로드 HIL 검증
+- `firmware/test-apps/esp32c5-isr-enqueue`: 실제 ESP32-C5 gptimer ISR enqueue + 업로드 HIL 검증
+
+HIL firmware는 개인 Wi-Fi/API credential을 repository에 저장하지 않는다. `AETUS_WIFI_SSID`, `AETUS_WIFI_PASSWORD`, `AETUS_INGEST_URL`, `AETUS_DEVICE_ID`, `AETUS_DEVICE_TOKEN` 환경변수를 통해 build-time config header를 생성한다.
+
 현재 미구현:
 
 - FlashDB durable backlog
 - 대형 payload용 pointer/blob queue API
-- ISR-safe enqueue API
 - Wi-Fi ownership adapter
 - HTTPS client/certificate policy
 - server-side provisioning API client
