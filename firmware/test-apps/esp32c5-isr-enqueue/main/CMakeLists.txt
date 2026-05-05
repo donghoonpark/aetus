@@ -48,4 +48,6 @@ idf_component_register(
         "${CMAKE_CURRENT_BINARY_DIR}"
     REQUIRES
         aetus
+        driver
+        esp_driver_gptimer
 )

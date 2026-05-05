@@ -19,6 +19,67 @@
 static QueueHandle_t test_queue = NULL;
 static UBaseType_t main_task_initial_hwm = 0;
 
+static void test_copy_string(char *target, size_t target_size, const char *source)
+{
+    if (target_size == 0) {
+        return;
+    }
+    size_t index = 0;
+    while (index + 1 < target_size && source[index] != '\0') {
+        target[index] = source[index];
+        index++;
+    }
+    target[index] = '\0';
+}
+
+static void test_telemetry_init(aetus_telemetry_t *telemetry)
+{
+    memset(telemetry, 0, sizeof(*telemetry));
+    telemetry->capacity = AETUS_TELEMETRY_INLINE_METRICS;
+}
+
+static void test_telemetry_add_double(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    double value,
+    const char *unit
+)
+{
+    if (telemetry->metric_count >= AETUS_TELEMETRY_INLINE_METRICS) {
+        return;
+    }
+    aetus_metric_t *metric = &telemetry->inline_metrics[telemetry->metric_count++];
+    memset(metric, 0, sizeof(*metric));
+    test_copy_string(metric->key, sizeof(metric->key), key);
+    test_copy_string(metric->unit, sizeof(metric->unit), unit);
+    metric->type = AETUS_METRIC_VALUE_DOUBLE;
+    metric->value.double_value = value;
+}
+
+static void test_telemetry_add_int64(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    int64_t value,
+    const char *unit
+)
+{
+    if (telemetry->metric_count >= AETUS_TELEMETRY_INLINE_METRICS) {
+        return;
+    }
+    aetus_metric_t *metric = &telemetry->inline_metrics[telemetry->metric_count++];
+    memset(metric, 0, sizeof(*metric));
+    test_copy_string(metric->key, sizeof(metric->key), key);
+    test_copy_string(metric->unit, sizeof(metric->unit), unit);
+    metric->type = AETUS_METRIC_VALUE_INT64;
+    metric->value.int64_value = value;
+}
+
+static void test_status_init(aetus_status_t *status, aetus_device_status_t device_status)
+{
+    memset(status, 0, sizeof(*status));
+    status->status = device_status;
+}
+
 static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
 {
     (void)timer;
@@ -28,9 +89,9 @@ static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_a
     BaseType_t pxHigherPriorityTaskWoken = pdFALSE;
 
     aetus_telemetry_t telemetry;
-    aetus_telemetry_init(&telemetry);
-    aetus_telemetry_add_double(&telemetry, "temperature", 22.25, "celsius");
-    aetus_telemetry_add_int64(&telemetry, "battery_mv", 3800, "mV");
+    test_telemetry_init(&telemetry);
+    test_telemetry_add_double(&telemetry, "temperature", 22.25, "celsius");
+    test_telemetry_add_int64(&telemetry, "battery_mv", 3800, "mV");
 
     aetus_queue_item_t item = {
         .kind = AETUS_QUEUE_ITEM_TELEMETRY,
@@ -39,8 +100,8 @@ static bool IRAM_ATTR timer_isr_callback(gptimer_handle_t timer, const gptimer_a
     xQueueSendFromISR(test_queue, &item, &pxHigherPriorityTaskWoken);
 
     aetus_status_t status;
-    aetus_status_init(&status, AETUS_DEVICE_STATUS_ONLINE);
-    aetus_status_set_reboot_reason(&status, "isr_test_start");
+    test_status_init(&status, AETUS_DEVICE_STATUS_ONLINE);
+    test_copy_string(status.reboot_reason, sizeof(status.reboot_reason), "isr_test_start");
 
     aetus_queue_item_t status_item = {
         .kind = AETUS_QUEUE_ITEM_STATUS,
