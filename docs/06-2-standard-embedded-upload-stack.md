@@ -133,6 +133,8 @@ Thread safety 규칙:
 - enqueue API는 메시지를 내부 queue item으로 복사하므로 caller의 stack-local struct를 재사용해도 된다.
 - `aetus_enqueue_telemetry()`와 `aetus_enqueue_status()`는 task context 전용이다.
 - ISR context에서는 `aetus_enqueue_telemetry_from_isr()`와 `aetus_enqueue_status_from_isr()`를 사용한다 (내부적으로 `xQueueSendFromISR` 사용).
+- C++ wrapper에서는 같은 기능을 `Telemetry::enqueue_from_isr()`와 `Status::enqueue_from_isr()`로 노출한다.
+- 가능하면 telemetry/status 객체는 ISR 밖에서 미리 만들고, ISR 안에서는 이미 준비된 객체를 queue에 복사하는 동작만 수행한다.
 - ISR-safe signal frame enqueue는 의도적으로 제공하지 않는다 (pool allocation이 task context를 요구함).
 - ISR-safe API는 `ESP_LOG`를 호출하지 않으며, queue full 시 반환값으로만 실패를 전달한다.
 

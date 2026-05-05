@@ -629,6 +629,8 @@ uv run pytest tests/qemu_e2e -q -s
 ISR-safe enqueue 구현 메모:
 
 - `aetus_enqueue_telemetry_from_isr()`와 `aetus_enqueue_status_from_isr()`만 제공한다.
+- C++ wrapper는 `Telemetry::enqueue_from_isr()`와 `Status::enqueue_from_isr()`를 같은 `CONFIG_AETUS_ISR_SAFE_ENQUEUE` guard 아래 제공한다.
+- 권장 사용 패턴은 ISR 밖에서 telemetry/status 객체를 준비하고 ISR 안에서는 enqueue만 수행하는 방식이다.
 - `SignalFrame`은 sample pool allocation/copy가 필요하므로 ISR-safe API를 제공하지 않는다.
 - ISR 경로는 task stack에 큰 `aetus_queue_item_t`를 만들지 않도록 BSS global buffer와 spinlock을 사용한다.
 - 이 API는 queue full 시 `ESP_ERR_TIMEOUT`을 반환하며 ISR 내부에서 `ESP_LOG`를 호출하지 않는다.

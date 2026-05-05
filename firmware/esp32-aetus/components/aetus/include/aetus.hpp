@@ -235,6 +235,16 @@ public:
         return aetus_enqueue_telemetry(&value_, timeout);
     }
 
+#ifdef CONFIG_AETUS_ISR_SAFE_ENQUEUE
+    [[nodiscard]] esp_err_t enqueue_from_isr(BaseType_t *higher_priority_task_woken) const
+    {
+        if (error_ != ESP_OK) {
+            return error_;
+        }
+        return aetus_enqueue_telemetry_from_isr(&value_, higher_priority_task_woken);
+    }
+#endif
+
 private:
     template <size_t N>
     static bool copy_string(char (&target)[N], std::string_view source)
@@ -529,6 +539,16 @@ public:
         }
         return aetus_enqueue_status(&value_, timeout);
     }
+
+#ifdef CONFIG_AETUS_ISR_SAFE_ENQUEUE
+    [[nodiscard]] esp_err_t enqueue_from_isr(BaseType_t *higher_priority_task_woken) const
+    {
+        if (error_ != ESP_OK) {
+            return error_;
+        }
+        return aetus_enqueue_status_from_isr(&value_, higher_priority_task_woken);
+    }
+#endif
 
 private:
     template <size_t N>

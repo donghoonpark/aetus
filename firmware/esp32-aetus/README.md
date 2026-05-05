@@ -329,6 +329,8 @@ extern "C" void app_main(void)
 - `aetus_enqueue_telemetry()` and `aetus_enqueue_status()` are thread-safe from normal FreeRTOS task context.
 - Enqueue APIs copy the message into the internal queue, so callers may reuse stack-local structs after the call returns.
 - Use `aetus_enqueue_telemetry_from_isr()` and `aetus_enqueue_status_from_isr()` from ISR context when `CONFIG_AETUS_ISR_SAFE_ENQUEUE` is enabled.
+- The C++ wrapper exposes the same ISR path as `Telemetry::enqueue_from_isr()` and `Status::enqueue_from_isr()` under the same Kconfig guard.
+- Prepare telemetry/status objects outside the ISR when possible; the ISR path is intended to copy already-built objects into the upload queue without allocating a large queue item on the interrupted task stack.
 - Signal frame enqueue is intentionally task-context only because it copies sample bytes through the configured sample pool.
 - `aetus_flush()` requests an immediate drain and waits for the uploader task to finish or timeout.
 

@@ -1,6 +1,7 @@
 #include <array>
 
 #include "aetus.hpp"
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -8,6 +9,27 @@
 #include "freertos/task.h"
 
 static const char *TAG = "aetus_cpp_example";
+
+#ifdef CONFIG_AETUS_ISR_SAFE_ENQUEUE
+struct IsrExampleItems {
+    const aetus::Status *status;
+    const aetus::Telemetry *telemetry;
+};
+
+static bool IRAM_ATTR example_isr_callback(void *user_ctx)
+{
+    const auto *items = static_cast<const IsrExampleItems *>(user_ctx);
+    if (items == nullptr || items->status == nullptr || items->telemetry == nullptr) {
+        return false;
+    }
+
+    BaseType_t woken = pdFALSE;
+
+    (void)items->status->enqueue_from_isr(&woken);
+    (void)items->telemetry->enqueue_from_isr(&woken);
+    return woken != pdFALSE;
+}
+#endif
 
 static void try_attach_rtc_timestamp(aetus::Telemetry &telemetry)
 {
