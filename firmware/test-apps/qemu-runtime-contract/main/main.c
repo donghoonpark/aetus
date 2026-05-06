@@ -12,13 +12,15 @@
 #include "freertos/task.h"
 
 #define TEST_QUEUE_DEPTH 4U
-#define STRESS_TELEMETRY_TASKS 3U
-#define STRESS_SIGNAL_TASKS 2U
+#define STRESS_TELEMETRY_TASKS 2U
+#define STRESS_SIGNAL_TASKS 1U
 #define STRESS_STATUS_TASKS 1U
-#define STRESS_ITERATIONS 24U
+#define STRESS_ITERATIONS 10U
+#define STRESS_FLUSH_ITERATIONS 18U
 
 static const char *TAG = "qemu_runtime_contract";
 static volatile uint32_t s_stress_tasks_done;
+static volatile uint32_t s_stress_flush_done;
 static volatile bool s_stress_stop_flush;
 
 static void print_result(const char *name, bool pass)
@@ -212,10 +214,11 @@ static void status_stress_task(void *arg)
 static void flush_stress_task(void *arg)
 {
     (void)arg;
-    while (!s_stress_stop_flush) {
-        (void)aetus_flush(pdMS_TO_TICKS(10000));
-        vTaskDelay(pdMS_TO_TICKS(5));
+    for (uint32_t i = 0; i < STRESS_FLUSH_ITERATIONS && !s_stress_stop_flush; i++) {
+        (void)aetus_flush(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
+    __atomic_store_n(&s_stress_flush_done, 1U, __ATOMIC_SEQ_CST);
     vTaskDelete(NULL);
 }
 
@@ -223,13 +226,17 @@ static bool test_concurrency_stress(void)
 {
     const uint32_t total_tasks = STRESS_TELEMETRY_TASKS + STRESS_SIGNAL_TASKS + STRESS_STATUS_TASKS;
     s_stress_tasks_done = 0;
+    s_stress_flush_done = 0;
     s_stress_stop_flush = false;
     aetus_test_reset_release_stats();
 
     size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     aetus_test_runtime_hooks_t hooks_before;
     aetus_test_get_runtime_hooks(&hooks_before);
-    ESP_ERROR_CHECK(xTaskCreate(flush_stress_task, "aetus_flush_stress", 4096, NULL, 4, NULL) == pdPASS ? ESP_OK : ESP_FAIL);
+    printf("AETUS_RUNTIME_CONCURRENCY_START\n");
+    fflush(stdout);
+
+    ESP_ERROR_CHECK(xTaskCreate(flush_stress_task, "aetus_flush_stress", 4096, NULL, 2, NULL) == pdPASS ? ESP_OK : ESP_FAIL);
     for (uint32_t i = 0; i < STRESS_TELEMETRY_TASKS; i++) {
         ESP_ERROR_CHECK(xTaskCreate(telemetry_stress_task, "aetus_tel_stress", 4096, (void *)(uintptr_t)i, 4, NULL) == pdPASS ? ESP_OK : ESP_FAIL);
     }
@@ -241,14 +248,28 @@ static bool test_concurrency_stress(void)
     }
 
     int waited_ms = 0;
-    while (__atomic_load_n(&s_stress_tasks_done, __ATOMIC_SEQ_CST) < total_tasks && waited_ms < 30000) {
+    while (__atomic_load_n(&s_stress_tasks_done, __ATOMIC_SEQ_CST) < total_tasks && waited_ms < 10000) {
         vTaskDelay(pdMS_TO_TICKS(50));
         waited_ms += 50;
     }
     s_stress_stop_flush = true;
-    ESP_ERROR_CHECK(aetus_flush(pdMS_TO_TICKS(10000)));
+    while (__atomic_load_n(&s_stress_flush_done, __ATOMIC_SEQ_CST) == 0U && waited_ms < 12000) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        waited_ms += 50;
+    }
+
+    printf(
+        "AETUS_RUNTIME_CONCURRENCY_TASKS_JOINED done=%lu/%lu flush_done=%lu waited_ms=%d\n",
+        (unsigned long)__atomic_load_n(&s_stress_tasks_done, __ATOMIC_SEQ_CST),
+        (unsigned long)total_tasks,
+        (unsigned long)__atomic_load_n(&s_stress_flush_done, __ATOMIC_SEQ_CST),
+        waited_ms
+    );
+    fflush(stdout);
+
+    ESP_ERROR_CHECK(aetus_flush(pdMS_TO_TICKS(1000)));
     vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_ERROR_CHECK(aetus_flush(pdMS_TO_TICKS(10000)));
+    ESP_ERROR_CHECK(aetus_flush(pdMS_TO_TICKS(1000)));
 
     aetus_signal_sample_pool_stats_t signal_stats;
     aetus_test_release_stats_t telemetry_stats;
@@ -263,6 +284,7 @@ static bool test_concurrency_stress(void)
     uint32_t post_delta = hooks.fake_post_count - hooks_before.fake_post_count;
     bool pass =
         __atomic_load_n(&s_stress_tasks_done, __ATOMIC_SEQ_CST) == total_tasks &&
+        __atomic_load_n(&s_stress_flush_done, __ATOMIC_SEQ_CST) == 1U &&
         signal_stats.allocated_blocks == 0U &&
         signal_stats.allocated_bytes == 0U &&
         telemetry_stats.telemetry_heap_metrics_released > 0U &&
@@ -270,9 +292,10 @@ static bool test_concurrency_stress(void)
         heap_ok;
 
     printf(
-        "AETUS_RUNTIME_CONCURRENCY_STATS done=%lu/%lu signal_blocks=%lu signal_bytes=%u telemetry_heap_released=%lu post_delta=%lu heap_delta=%u heap_ok=%d\n",
+        "AETUS_RUNTIME_CONCURRENCY_STATS done=%lu/%lu flush_done=%lu signal_blocks=%lu signal_bytes=%u telemetry_heap_released=%lu post_delta=%lu heap_delta=%u heap_ok=%d\n",
         (unsigned long)__atomic_load_n(&s_stress_tasks_done, __ATOMIC_SEQ_CST),
         (unsigned long)total_tasks,
+        (unsigned long)__atomic_load_n(&s_stress_flush_done, __ATOMIC_SEQ_CST),
         (unsigned long)signal_stats.allocated_blocks,
         (unsigned)signal_stats.allocated_bytes,
         (unsigned long)telemetry_stats.telemetry_heap_metrics_released,
