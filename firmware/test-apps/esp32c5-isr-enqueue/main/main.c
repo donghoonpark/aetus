@@ -13,6 +13,7 @@ static const char *TAG = "isr_enqueue_hil";
 static volatile int isr_fire_count = 0;
 static volatile bool isr_telemetry_ok = false;
 static volatile bool isr_status_ok = false;
+static volatile bool isr_overflow_rejected = false;
 static volatile BaseType_t isr_woken = pdFALSE;
 
 static bool IRAM_ATTR isr_timer_callback(
@@ -35,6 +36,11 @@ static bool IRAM_ATTR isr_timer_callback(
 
     esp_err_t telemetry_err = aetus_enqueue_telemetry_from_isr(&telemetry, &pxHigherPriorityTaskWoken);
 
+    aetus_telemetry_t overflow;
+    aetus_telemetry_init(&overflow);
+    overflow.metric_count = AETUS_TELEMETRY_INLINE_METRICS + 1;
+    esp_err_t overflow_err = aetus_enqueue_telemetry_from_isr(&overflow, &pxHigherPriorityTaskWoken);
+
     aetus_status_t status;
     aetus_status_init(&status, AETUS_DEVICE_STATUS_ONLINE);
     aetus_status_set_reboot_reason(&status, "isr_hil_start");
@@ -43,9 +49,11 @@ static bool IRAM_ATTR isr_timer_callback(
 
     isr_telemetry_ok = (telemetry_err == ESP_OK);
     isr_status_ok = (status_err == ESP_OK);
+    isr_overflow_rejected = (overflow_err == ESP_ERR_INVALID_ARG);
 #else
     isr_telemetry_ok = false;
     isr_status_ok = false;
+    isr_overflow_rejected = false;
 #endif
     isr_fire_count++;
     isr_woken = pxHigherPriorityTaskWoken;
@@ -106,8 +114,8 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(20000));
 
     UBaseType_t final_hwm = uxTaskGetStackHighWaterMark(NULL);
-    ESP_LOGI(TAG, "ISR_HIL_RESULT fire_count=%d telemetry_ok=%d status_ok=%d isr_woken=%d initial_hwm=%lu final_hwm=%lu",
-             isr_fire_count, isr_telemetry_ok, isr_status_ok, (int)isr_woken,
+    ESP_LOGI(TAG, "ISR_HIL_RESULT fire_count=%d telemetry_ok=%d status_ok=%d overflow_rejected=%d isr_woken=%d initial_hwm=%lu final_hwm=%lu",
+             isr_fire_count, isr_telemetry_ok, isr_status_ok, isr_overflow_rejected, (int)isr_woken,
              (unsigned long)initial_hwm, (unsigned long)final_hwm);
 
     if (isr_fire_count == 0) {
@@ -116,6 +124,8 @@ void app_main(void)
         ESP_LOGE(TAG, "ISR_HIL_FAIL: telemetry enqueue from ISR failed");
     } else if (!isr_status_ok) {
         ESP_LOGE(TAG, "ISR_HIL_FAIL: status enqueue from ISR failed");
+    } else if (!isr_overflow_rejected) {
+        ESP_LOGE(TAG, "ISR_HIL_FAIL: overflow telemetry was not rejected");
     } else if (final_hwm < 256) {
         ESP_LOGE(TAG, "ISR_HIL_FAIL: stack high water mark too low (%lu)", (unsigned long)final_hwm);
     } else {

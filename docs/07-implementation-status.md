@@ -632,6 +632,7 @@ ISR-safe enqueue 구현 메모:
 - `SignalFrame`은 sample pool allocation/copy가 필요하므로 ISR-safe API를 제공하지 않는다.
 - ISR 경로는 task stack에 큰 `aetus_queue_item_t`를 만들지 않도록 BSS global buffer와 spinlock을 사용한다.
 - 이 API는 queue full 시 `ESP_ERR_TIMEOUT`을 반환하며 ISR 내부에서 `ESP_LOG`를 호출하지 않는다.
+- telemetry ISR 경로는 inline scalar metric만 허용하므로 `AETUS_TELEMETRY_INLINE_METRICS`(기본 4개)를 초과하면 `ESP_ERR_INVALID_ARG`를 반환한다.
 
 예제 app:
 
@@ -649,7 +650,8 @@ ISR-safe enqueue 구현 메모:
 - `firmware/test-apps/qemu-telemetry`: RISC-V QEMU protobuf stream 생성 및 DB 적재 검증
 - `firmware/test-apps/qemu-isr-enqueue`: QEMU에서 ISR-safe enqueue와 stack high-water mark 검증
 - `firmware/test-apps/esp32c5-upload-smoke`: 실제 ESP32-C5 업로드 HIL 검증
-- `firmware/test-apps/esp32c5-isr-enqueue`: 실제 ESP32-C5 gptimer ISR enqueue + 업로드 HIL 검증
+- `firmware/test-apps/esp32c5-isr-enqueue`: 실제 ESP32-C5 gptimer ISR enqueue + 4개 초과 metric overflow 거부 + 업로드 HIL 검증
+- `firmware/test-apps/cpp-literal-limit-negative`: C++ wrapper overlong metric key literal static_assert 검증용 negative build
 
 HIL firmware는 개인 Wi-Fi/API credential을 repository에 저장하지 않는다. `AETUS_WIFI_SSID`, `AETUS_WIFI_PASSWORD`, `AETUS_INGEST_URL`, `AETUS_DEVICE_ID`, `AETUS_DEVICE_TOKEN` 환경변수를 통해 build-time config header를 생성한다.
 

@@ -43,6 +43,9 @@ jobs:
           - name: esp32c5-upload-smoke
             path: firmware/test-apps/esp32c5-upload-smoke
             target: esp32c5
+          - name: esp32c5-isr-enqueue
+            path: firmware/test-apps/esp32c5-isr-enqueue
+            target: esp32c5
           - name: signal-frame-contract
             path: firmware/test-apps/signal-frame-contract
             target: esp32c5
@@ -68,3 +71,31 @@ jobs:
             -w /workspace \
             espressif/idf:release-v6.0 \
             bash -lc '. "$IDF_PATH/export.sh" && idf.py -C "${{ matrix.app.path }}" -B "${{ matrix.app.path }}/build-ci" set-target "${{ matrix.app.target }}" build'
+
+  negative-builds:
+    name: Negative compile checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Reject overlong C++ metric key literals
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -w /workspace \
+            espressif/idf:release-v6.0 \
+            bash -lc '
+              set +e
+              . "$IDF_PATH/export.sh"
+              idf.py -C firmware/test-apps/cpp-literal-limit-negative -B firmware/test-apps/cpp-literal-limit-negative/build-ci set-target esp32c5 build > /tmp/aetus-cpp-literal-limit.log 2>&1
+              status=$?
+              set -e
+              cat /tmp/aetus-cpp-literal-limit.log
+              if [ "$status" -eq 0 ]; then
+                echo "Expected overlong C++ metric key literal build to fail"
+                exit 1
+              fi
+              grep -q "AETUS metric key literal is too long" /tmp/aetus-cpp-literal-limit.log
+            '

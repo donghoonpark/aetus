@@ -42,6 +42,7 @@ flowchart TB
 | ingest-control-panel build | `frontend/ingest-control-panel` | yes | control panel bundle build |
 | firmware examples build | `firmware/examples` | yes | ESP-IDF 6.0, ESP32-C5 target compile coverage for standalone examples |
 | firmware test-apps build | `firmware/test-apps` | yes | QEMU fixture, HIL app, signal frame memory contract app의 compile coverage |
+| firmware negative compile | `firmware/test-apps/cpp-literal-limit-negative` | yes | C++ wrapper가 overlong metric key literal을 static_assert로 거부하는지 검증 |
 | QEMU firmware e2e | `services/ingest-api/tests/qemu_e2e` | manual workflow | ESP-IDF firmware build, QEMU 실행, UART protobuf stream, DB 적재 |
 | HIL firmware runtime | `firmware/test-apps/esp32c5-upload-smoke`, `firmware/examples/cpp-basic`, `firmware/examples/cpp-signal-frame` | no | 실제 ESP32-C5 Wi-Fi/HMAC/provisioning/upload 검증 |
 
@@ -58,6 +59,7 @@ flowchart TB
 - `e2e`: `uv run pytest tests/e2e -q` in `services/ingest-api`
 - `Firmware Examples Build`: `idf.py -C firmware/examples/<example> -B build-ci set-target esp32c5 build`
 - `Firmware Test Apps Build`: `idf.py -C firmware/test-apps/<app> -B build-ci set-target <target> build`
+- `Negative compile checks`: C++ wrapper overlong metric key literal build가 실패하고 `AETUS metric key literal is too long` static_assert 문구를 내는지 확인
 
 `ESP32 QEMU E2E` workflow는 수동 실행이다.
 
@@ -172,6 +174,7 @@ flowchart TB
 
 HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같은 물리 조건을 보기 위한 영역이다.
 `firmware/test-apps/esp32c5-upload-smoke`의 compile coverage는 GitHub Actions에 포함하지만, 실제 flash/monitor/runtime 검증은 로컬 HIL로만 수행한다.
+`firmware/test-apps/esp32c5-isr-enqueue`는 runtime에서 ISR 정상 enqueue와 4개 초과 metric overflow 거부를 함께 확인한다.
 
 ## 현재 남은 테스트 구멍
 
