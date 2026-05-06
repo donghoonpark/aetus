@@ -30,6 +30,16 @@ typedef struct {
     uint32_t telemetry_blobs_released;
 } aetus_test_release_stats_t;
 
+typedef struct {
+    bool bypass_wifi;
+    bool fake_post;
+    esp_err_t fake_post_result;
+    bool fake_time;
+    esp_err_t fake_time_result;
+    uint64_t fake_time_ns;
+    uint32_t fake_post_count;
+} aetus_test_runtime_hooks_t;
+
 void aetus_test_reset_release_stats(void);
 void aetus_test_get_release_stats(aetus_test_release_stats_t *stats);
 esp_err_t aetus_test_copy_telemetry_to_queue_item(
@@ -37,4 +47,6 @@ esp_err_t aetus_test_copy_telemetry_to_queue_item(
     aetus_queue_item_t *item
 );
 void aetus_test_release_queue_item(aetus_queue_item_t *item);
+void aetus_test_set_runtime_hooks(const aetus_test_runtime_hooks_t *hooks);
+void aetus_test_get_runtime_hooks(aetus_test_runtime_hooks_t *hooks);
 #endif

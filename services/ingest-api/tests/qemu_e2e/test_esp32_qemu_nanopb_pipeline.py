@@ -21,6 +21,7 @@ COMPOSE_FILE = ROOT_DIR / "compose" / "e2e-compose.yml"
 FIRMWARE_DIR = ROOT_DIR / "firmware" / "test-apps" / "qemu-telemetry"
 SIGNAL_POOL_FIRMWARE_DIR = ROOT_DIR / "firmware" / "test-apps" / "qemu-signal-pool"
 TELEMETRY_HEAP_FIRMWARE_DIR = ROOT_DIR / "firmware" / "test-apps" / "qemu-telemetry-heap"
+RUNTIME_CONTRACT_FIRMWARE_DIR = ROOT_DIR / "firmware" / "test-apps" / "qemu-runtime-contract"
 INGEST_API_URL = "http://127.0.0.1:18000"
 POSTGRES_DSN = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
 DEVICE_ID = "esp32c5-test-001"
@@ -348,3 +349,26 @@ def test_esp32_qemu_telemetry_heap_metric_release_contract() -> None:
     assert "iterations=20" in output
     assert "heap_metrics_released=20" in output
     assert "blobs_released=80" in output
+
+
+def test_esp32_qemu_runtime_memory_and_failure_contracts() -> None:
+    if os.getenv("AETUS_RUN_QEMU_E2E") != "1":
+        pytest.skip("Set AETUS_RUN_QEMU_E2E=1 to run ESP-IDF QEMU e2e")
+
+    target = os.getenv("AETUS_QEMU_TARGET", "esp32c3")
+    _idf_command("idf.py --version", timeout=60, cwd=RUNTIME_CONTRACT_FIRMWARE_DIR)
+    _idf_command(f"idf.py set-target {shlex.quote(target)}", timeout=180, cwd=RUNTIME_CONTRACT_FIRMWARE_DIR)
+    _idf_command("idf.py build", timeout=600, cwd=RUNTIME_CONTRACT_FIRMWARE_DIR)
+
+    lines = _capture_qemu_foreground_output_until(
+        cwd=RUNTIME_CONTRACT_FIRMWARE_DIR,
+        end_marker="AETUS_RUNTIME_TEST_DONE",
+        timeout=180.0,
+    )
+    output = "\n".join(lines)
+
+    assert "AETUS_RUNTIME_TELEMETRY_RELEASE_PASS" in output
+    assert "AETUS_RUNTIME_SIGNAL_FAIL_RELEASE_PASS" in output
+    assert "AETUS_RUNTIME_CONCURRENCY_PASS" in output
+    assert "AETUS_RUNTIME_TIME_FAIL_SURVIVES_PASS" in output
+    assert "AETUS_RUNTIME_ALL_PASS" in output

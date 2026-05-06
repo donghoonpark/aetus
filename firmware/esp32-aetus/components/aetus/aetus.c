@@ -86,6 +86,10 @@ AETUS_STATIC_ASSERT(
     "aetus_queue_item_t exceeds the configured FreeRTOS queue slot budget"
 );
 
+#ifdef CONFIG_AETUS_TEST_HOOKS
+static aetus_test_runtime_hooks_t s_test_runtime_hooks;
+#endif
+
 typedef struct {
     const uint8_t *data;
     size_t size;
@@ -674,6 +678,11 @@ static esp_err_t wifi_start(aetus_ctx_t *ctx)
 
 static esp_err_t wifi_wait_connected_for(aetus_ctx_t *ctx, TickType_t timeout)
 {
+#ifdef CONFIG_AETUS_TEST_HOOKS
+    if (s_test_runtime_hooks.bypass_wifi) {
+        return ESP_OK;
+    }
+#endif
     ESP_RETURN_ON_ERROR(wifi_start(ctx), TAG, "wifi start failed");
     EventBits_t bits = xEventGroupWaitBits(
         ctx->events,
@@ -767,6 +776,14 @@ static esp_err_t parse_unix_time_ns(const char *body, uint64_t *unix_time_ns)
 
 static esp_err_t fetch_server_time_ns(aetus_ctx_t *ctx, uint64_t *unix_time_ns)
 {
+#ifdef CONFIG_AETUS_TEST_HOOKS
+    if (s_test_runtime_hooks.fake_time) {
+        if (s_test_runtime_hooks.fake_time_result == ESP_OK && unix_time_ns != NULL) {
+            *unix_time_ns = s_test_runtime_hooks.fake_time_ns;
+        }
+        return s_test_runtime_hooks.fake_time_result;
+    }
+#endif
     char time_url_buffer[160] = {0};
     const char *time_url = NULL;
     ESP_RETURN_ON_ERROR(resolve_time_url(ctx, time_url_buffer, sizeof(time_url_buffer), &time_url), TAG, "time url failed");
@@ -1018,6 +1035,19 @@ static bool encode_queue_item(
 
 static esp_err_t post_payload(aetus_ctx_t *ctx, const uint8_t *payload, size_t payload_size)
 {
+#ifdef CONFIG_AETUS_TEST_HOOKS
+    if (s_test_runtime_hooks.fake_post) {
+        s_test_runtime_hooks.fake_post_count++;
+        ESP_LOGI(
+            TAG,
+            "AETUS_TEST_POST sequence=%llu result=%s bytes=%u",
+            ctx->sequence,
+            esp_err_to_name(s_test_runtime_hooks.fake_post_result),
+            (unsigned)payload_size
+        );
+        return s_test_runtime_hooks.fake_post_result;
+    }
+#endif
     esp_http_client_config_t http_config = {
         .url = ctx->config.ingest_url,
         .method = HTTP_METHOD_POST,
@@ -1756,6 +1786,25 @@ esp_err_t aetus_enqueue_status_from_isr(
     portEXIT_CRITICAL_SAFE(&s_isr_item_lock);
 
     return ok == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+#endif
+
+#ifdef CONFIG_AETUS_TEST_HOOKS
+void aetus_test_set_runtime_hooks(const aetus_test_runtime_hooks_t *hooks)
+{
+    if (hooks == NULL) {
+        memset(&s_test_runtime_hooks, 0, sizeof(s_test_runtime_hooks));
+        return;
+    }
+    s_test_runtime_hooks = *hooks;
+}
+
+void aetus_test_get_runtime_hooks(aetus_test_runtime_hooks_t *hooks)
+{
+    if (hooks == NULL) {
+        return;
+    }
+    *hooks = s_test_runtime_hooks;
 }
 #endif
 
