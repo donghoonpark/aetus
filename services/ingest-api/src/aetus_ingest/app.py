@@ -24,6 +24,7 @@ from aetus_ingest.control_backup import run_sqlite_backup_loop
 from aetus_ingest.control_db import ControlStore, DeviceRecord, SqliteControlStore, create_control_store
 from aetus_ingest.control_status import build_control_status
 from aetus_ingest.generated import ingest_pb2
+from aetus_ingest.metrics import MetricsRegistry
 from aetus_ingest.normalize import normalize_event
 from aetus_ingest.publisher import InMemoryEventPublisher, KafkaEventPublisher
 from aetus_ingest.rate_limit import InMemoryRateLimiter, RateLimitDecision, RateLimitPlan
@@ -133,6 +134,7 @@ def create_app(
     app.state.control_db.initialize()
     app.state.control_db.seed_hardware_allowlist(app.state.settings.allowed_hardware_ids)
     app.state.control_db.seed_devices(app.state.settings.device_tokens)
+    app.state.metrics = MetricsRegistry()
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     if publisher is not None:
         app.state.publisher = publisher
@@ -142,6 +144,46 @@ def create_app(
         app.state.publisher = InMemoryEventPublisher()
     app.state.rate_limiter = rate_limiter or InMemoryRateLimiter()
     app.state.admin_sessions = _AdminSessionStore(resolved_settings.admin_session_ttl_seconds)
+
+    @app.middleware("http")
+    async def record_http_metrics(request: Request, call_next):
+        started = time.perf_counter()
+        route_path = request.url.path
+        try:
+            response = await call_next(request)
+        except Exception:
+            app.state.metrics.increment(
+                "aetus_http_requests_total",
+                method=request.method,
+                path=route_path,
+                status_code=500,
+            )
+            app.state.metrics.increment(
+                "aetus_http_request_duration_ms_total",
+                int((time.perf_counter() - started) * 1000),
+                method=request.method,
+                path=route_path,
+                status_code=500,
+            )
+            raise
+
+        route = request.scope.get("route")
+        if route is not None and getattr(route, "path", None):
+            route_path = route.path
+        app.state.metrics.increment(
+            "aetus_http_requests_total",
+            method=request.method,
+            path=route_path,
+            status_code=response.status_code,
+        )
+        app.state.metrics.increment(
+            "aetus_http_request_duration_ms_total",
+            int((time.perf_counter() - started) * 1000),
+            method=request.method,
+            path=route_path,
+            status_code=response.status_code,
+        )
+        return response
 
     def raise_rate_limited(decision: RateLimitDecision, detail: str) -> None:
         retry_after = max(1, ceil(decision.retry_after_seconds))
@@ -271,6 +313,14 @@ def create_app(
     @app.get("/v1/readyz")
     async def readyz() -> dict[str, str]:
         return {"status": "ready"}
+
+    @app.get("/v1/metrics")
+    async def metrics_json() -> dict[str, object]:
+        return app.state.metrics.to_json()
+
+    @app.get("/metrics")
+    async def metrics_prometheus() -> Response:
+        return Response(app.state.metrics.to_prometheus_text(), media_type="text/plain; version=0.0.4")
 
     @app.get("/v1/time", response_model=TimeSyncResponse)
     async def time_sync(
@@ -414,7 +464,22 @@ def create_app(
             raise HTTPException(status_code=400, detail="body missing")
 
         normalized = normalize_event(event, source_ip=source_ip)
-        await app.state.publisher.publish(normalized)
+        try:
+            await app.state.publisher.publish(normalized)
+        except Exception as exc:
+            app.state.metrics.increment(
+                "aetus_ingest_publish_failures_total",
+                event_type=normalized["event_type"],
+            )
+            raise HTTPException(status_code=503, detail="event publisher unavailable") from exc
+
+        payload_kind = normalized["payload"].get("kind") if isinstance(normalized.get("payload"), dict) else None
+        app.state.metrics.increment(
+            "aetus_ingest_events_accepted_total",
+            event_type=normalized["event_type"],
+            payload_kind=payload_kind,
+        )
+        app.state.metrics.increment("aetus_ingest_payload_bytes_total", len(body))
 
         response.headers["X-Request-Id"] = normalized["request_id"]
         return {

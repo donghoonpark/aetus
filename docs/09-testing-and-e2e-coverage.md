@@ -34,7 +34,7 @@ flowchart TB
 | 계층 | 위치 | 자동 CI | 목적 |
 | --- | --- | --- | --- |
 | ingest unit | `services/ingest-api/tests/unit` | yes | 인증, rate limit, protobuf normalize, publisher contract |
-| ingest compose e2e | `services/ingest-api/tests/e2e` | yes | provisioning, ingest, Kafka, Kafka Connect, PostgreSQL 적재 |
+| ingest compose e2e | `services/ingest-api/tests/e2e` | yes | provisioning, ingest, Kafka, Kafka Connect, PostgreSQL 적재, Kafka Connect 장애/복구 |
 | Python ingest client unit/e2e | `clients/python-ingest/tests` | yes | Python SDK event building, protobuf upload, PostgreSQL normalized 적재 |
 | Rust ingest client unit/e2e | `clients/rust-ingest/tests` | yes | Rust SDK event building, protobuf upload, PostgreSQL normalized 적재 |
 | query-api unit/e2e | `services/query-api/tests` | yes | stream 조회, raw sample decode, downsampling, Redis cache, DB-backed query |
@@ -86,10 +86,28 @@ flowchart TB
 - rate limit
 - Kafka publish
 - Kafka Connect JDBC Sink
+- Kafka Connect 중단 중 ingest 수락, DB 적재 지연, Connect 재기동 후 Kafka backlog 적재
 - `raw_device_events`
 - `device_metric_points`
 - `device_signal_frames`
 - Timescale hypertable/compression/retention policy 존재
+
+### 1-0. Ingest Observability Contract
+
+```mermaid
+flowchart TB
+    Ingest["ingest-api"] --> JSON["GET /v1/metrics\nJSON counters"]
+    Ingest --> Prom["GET /metrics\nPrometheus text"]
+    Ingest --> Status["GET /v1/control/status\ncomponent health"]
+```
+
+검증 내용:
+
+- HTTP method/path/status counter
+- accepted ingest event counter by `event_type` and `payload_kind`
+- ingest payload byte counter
+- publisher failure counter
+- Prometheus text exposition format
 
 ### 1-1. Client SDKs to PostgreSQL
 
@@ -193,6 +211,8 @@ HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같
 - rollup row가 존재할 때 query-api가 raw fallback 대신 rollup을 선택하는 DB-backed e2e가 없다.
 - multi-channel sampled stream에서 모든 channel이 동일 timestamp alignment와 point count를 유지하는지 unit/e2e 보강이 필요하다.
 - cache key가 `device_id`, `stream_key`, `from`, `to`, `max_points` 변화에 따라 섞이지 않는지 더 직접적인 테스트가 필요하다.
+- Kafka broker 자체 중단 시 ingest-api가 `503`으로 빠르게 실패하고 recovery 후 다시 수락하는 장애 주입 E2E가 필요하다. 현재는 Kafka Connect sink 장애/복구를 먼저 커버한다.
+- PostgreSQL 중단 시 Kafka Connect task 상태, backlog 유지, DB 복구 후 적재 재개를 확인하는 장애 주입 E2E가 필요하다.
 
 ### P2
 

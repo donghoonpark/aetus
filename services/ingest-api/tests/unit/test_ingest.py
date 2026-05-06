@@ -90,6 +90,38 @@ def test_virtual_device_can_upload_telemetry() -> None:
     assert metric_payload["value_double"] == 22.25
 
 
+def test_metrics_endpoints_track_http_and_ingest_counters() -> None:
+    client, _ = make_client()
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+
+    upload_response = device.upload(client, device.build_telemetry())
+    json_response = client.get("/v1/metrics")
+    prometheus_response = client.get("/metrics")
+
+    assert upload_response.status_code == 202
+    assert json_response.status_code == 200
+    body = json_response.json()
+    counters = {
+        (item["name"], tuple(sorted(item["labels"].items()))): item["value"]
+        for item in body["counters"]
+    }
+    assert counters[
+        (
+            "aetus_ingest_events_accepted_total",
+            (("event_type", "telemetry"), ("payload_kind", "metric_set")),
+        )
+    ] == 1
+    assert counters[
+        (
+            "aetus_http_requests_total",
+            (("method", "POST"), ("path", "/v1/ingest"), ("status_code", "202")),
+        )
+    ] == 1
+    assert prometheus_response.status_code == 200
+    assert "aetus_ingest_events_accepted_total" in prometheus_response.text
+    assert 'path="/v1/ingest"' in prometheus_response.text
+
+
 def test_virtual_device_can_upload_signal_frame() -> None:
     client, publisher = make_client()
     device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")

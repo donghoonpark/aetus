@@ -74,6 +74,7 @@ Detailed Kafka topic, staging table, trigger, and retention design lives in `doc
 - `POST /v1/ingest` protobuf telemetry API
 - `GET /v1/time` RTC sync endpoint
 - `POST /v1/provision` device token issuance
+- `GET /v1/metrics` JSON counters and `GET /metrics` Prometheus text counters
 - Device bearer token authentication
 - Optional HMAC-SHA256 ingest authentication
 - In-memory rate limiting for ingest and provisioning
@@ -155,6 +156,8 @@ uv run pytest -q
 ```
 
 The default test suite covers unit tests plus Docker-based E2E pipeline checks. QEMU and real-device HIL paths are intentionally separated because they are heavier and environment-specific.
+
+The compose E2E suite also includes a fault-injection path: Kafka Connect is stopped, ingest still accepts data into Kafka, PostgreSQL writes are observed as delayed, Kafka Connect is restarted, and the Kafka backlog is verified in PostgreSQL.
 
 ### 3. Run the control panel
 

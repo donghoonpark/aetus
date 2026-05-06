@@ -109,12 +109,15 @@ Rust client E2E도 compose stack을 통해 provisioning, ingest, Kafka/Kafka Con
 - [[../services/ingest-api/src/aetus_ingest/normalize.py]]
 - [[../services/ingest-api/src/aetus_ingest/publisher.py]]
 - [[../services/ingest-api/src/aetus_ingest/rate_limit.py]]
+- [[../services/ingest-api/src/aetus_ingest/metrics.py]]
 
 현재 구현된 endpoint:
 
 - `GET /v1/healthz`
 - `GET /v1/readyz`
 - `GET /v1/time`
+- `GET /v1/metrics`
+- `GET /metrics`
 - `POST /v1/ingest`
 - `POST /v1/provision`
 - `GET /v1/control/status`
@@ -122,6 +125,13 @@ Rust client E2E도 compose stack을 통해 provisioning, ingest, Kafka/Kafka Con
 - `POST /v1/control/devices/issue`
 - `GET /admin/devices`
 - `POST /admin/devices/issue`
+
+운영 관측성:
+
+- `/v1/metrics`는 JSON counter snapshot을 반환한다.
+- `/metrics`는 Prometheus text exposition format을 반환한다.
+- 현재 counter는 HTTP method/path/status, ingest accepted event, payload byte total, publisher failure를 포함한다.
+- dependency 상태는 기존 `/v1/control/status`에서 API, control DB, Kafka, Kafka Connect, PostgreSQL 단위로 확인한다.
 
 ### ingest 동작
 
