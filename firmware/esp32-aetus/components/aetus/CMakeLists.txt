@@ -6,17 +6,22 @@ set(AETUS_SRCS
 )
 
 set(AETUS_REQUIRES
-    esp_event
-    esp_http_client
-    esp_netif
     esp_timer
-    esp_wifi
     esp_driver_gpio
     mbedtls
     nanopb
-    nvs_flash
-    wpa_supplicant
 )
+
+if(NOT CONFIG_AETUS_TEST_NO_NETWORK)
+    list(APPEND AETUS_REQUIRES
+        esp_event
+        esp_http_client
+        esp_netif
+        esp_wifi
+        nvs_flash
+        wpa_supplicant
+    )
+endif()
 
 if(CONFIG_BT_NIMBLE_ENABLED)
     list(APPEND AETUS_SRCS "aetus_provisioning.c")

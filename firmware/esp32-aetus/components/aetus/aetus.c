@@ -8,14 +8,9 @@
 #include <sys/time.h>
 
 #include "esp_check.h"
-#include "esp_event.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
-#include "esp_eap_client.h"
 #include "driver/gpio.h"
 #include "freertos/event_groups.h"
 #include "freertos/FreeRTOS.h"
@@ -23,8 +18,16 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "mbedtls/md.h"
-#include "nvs_flash.h"
 #include "pb_encode.h"
+
+#ifndef CONFIG_AETUS_TEST_NO_NETWORK
+#include "esp_event.h"
+#include "esp_http_client.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "esp_eap_client.h"
+#include "nvs_flash.h"
+#endif
 
 #include "aetus_signal_sample_pool.h"
 #include "ingest.pb.h"
@@ -99,12 +102,14 @@ typedef struct {
     const aetus_signal_frame_t *frame;
 } aetus_signal_frame_arg_t;
 
+#ifndef CONFIG_AETUS_TEST_NO_NETWORK
 typedef struct {
     char *data;
     size_t capacity;
     size_t length;
     bool overflow;
 } aetus_http_body_t;
+#endif
 
 typedef struct {
     aetus_config_t config;
@@ -503,6 +508,7 @@ static esp_err_t validate_signal_frame(const aetus_signal_frame_t *frame)
     return ESP_OK;
 }
 
+#ifndef CONFIG_AETUS_TEST_NO_NETWORK
 static void wifi_event_handler(
     void *arg,
     esp_event_base_t event_base,
@@ -675,6 +681,25 @@ static esp_err_t wifi_start(aetus_ctx_t *ctx)
     ctx->wifi_started = true;
     return ESP_OK;
 }
+#else
+static esp_err_t configure_connected_led(aetus_ctx_t *ctx)
+{
+    (void)ctx;
+    return ESP_OK;
+}
+
+static esp_err_t wifi_apply_sta_config(aetus_ctx_t *ctx)
+{
+    (void)ctx;
+    return ESP_OK;
+}
+
+static esp_err_t wifi_start(aetus_ctx_t *ctx)
+{
+    ctx->wifi_started = true;
+    return ESP_OK;
+}
+#endif
 
 static esp_err_t wifi_wait_connected_for(aetus_ctx_t *ctx, TickType_t timeout)
 {
@@ -699,6 +724,7 @@ static esp_err_t wifi_wait_connected(aetus_ctx_t *ctx)
     return wifi_wait_connected_for(ctx, pdMS_TO_TICKS(AETUS_WIFI_CONNECT_TIMEOUT_MS));
 }
 
+#ifndef CONFIG_AETUS_TEST_NO_NETWORK
 static esp_err_t collect_http_body(esp_http_client_event_t *event)
 {
     if (event->event_id != HTTP_EVENT_ON_DATA || event->user_data == NULL || event->data == NULL) {
@@ -718,6 +744,7 @@ static esp_err_t collect_http_body(esp_http_client_event_t *event)
     }
     return ESP_OK;
 }
+#endif
 
 static esp_err_t resolve_time_url(const aetus_ctx_t *ctx, char *buffer, size_t buffer_size, const char **time_url)
 {
@@ -784,6 +811,11 @@ static esp_err_t fetch_server_time_ns(aetus_ctx_t *ctx, uint64_t *unix_time_ns)
         return s_test_runtime_hooks.fake_time_result;
     }
 #endif
+#ifdef CONFIG_AETUS_TEST_NO_NETWORK
+    (void)ctx;
+    (void)unix_time_ns;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     char time_url_buffer[160] = {0};
     const char *time_url = NULL;
     ESP_RETURN_ON_ERROR(resolve_time_url(ctx, time_url_buffer, sizeof(time_url_buffer), &time_url), TAG, "time url failed");
@@ -826,6 +858,7 @@ static esp_err_t fetch_server_time_ns(aetus_ctx_t *ctx, uint64_t *unix_time_ns)
     }
     ESP_RETURN_ON_FALSE(!body.overflow, ESP_ERR_NO_MEM, TAG, "time response too large");
     return parse_unix_time_ns(response_body, unix_time_ns);
+#endif
 }
 
 static esp_err_t set_rtc_from_unix_time_ns(uint64_t unix_time_ns)
@@ -1048,6 +1081,12 @@ static esp_err_t post_payload(aetus_ctx_t *ctx, const uint8_t *payload, size_t p
         return s_test_runtime_hooks.fake_post_result;
     }
 #endif
+#ifdef CONFIG_AETUS_TEST_NO_NETWORK
+    (void)ctx;
+    (void)payload;
+    (void)payload_size;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     esp_http_client_config_t http_config = {
         .url = ctx->config.ingest_url,
         .method = HTTP_METHOD_POST,
@@ -1092,6 +1131,7 @@ static esp_err_t post_payload(aetus_ctx_t *ctx, const uint8_t *payload, size_t p
 
     ESP_LOGI(TAG, "AETUS_UPLOAD_OK sequence=%llu status=%d bytes=%u", ctx->sequence, status, (unsigned)payload_size);
     return ESP_OK;
+#endif
 }
 
 static void drain_queue(aetus_ctx_t *ctx)
@@ -1626,6 +1666,9 @@ esp_err_t aetus_update_config(const aetus_config_t *config)
         xTimerChangePeriod(s_ctx.upload_timer, pdMS_TO_TICKS(s_ctx.config.upload_interval_ms), 0);
     }
     if (s_ctx.wifi_started) {
+#ifdef CONFIG_AETUS_TEST_NO_NETWORK
+        ESP_RETURN_ON_ERROR(wifi_apply_sta_config(&s_ctx), TAG, "wifi config update failed");
+#else
         esp_err_t err = ESP_OK;
         xEventGroupClearBits(s_ctx.events, AETUS_WIFI_CONNECTED_BIT);
         if (s_ctx.config.connected_led_enabled) {
@@ -1639,6 +1682,7 @@ esp_err_t aetus_update_config(const aetus_config_t *config)
         ESP_RETURN_ON_ERROR(err, TAG, "wifi config update failed");
         ESP_LOGI(TAG, "wifi reconnect after config update");
         ESP_RETURN_ON_ERROR(esp_wifi_connect(), TAG, "wifi reconnect after config update failed");
+#endif
     }
     return ESP_OK;
 }

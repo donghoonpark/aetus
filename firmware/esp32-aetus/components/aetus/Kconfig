@@ -67,4 +67,14 @@ config AETUS_TEST_HOOKS
         Expose internal ownership helpers for ESP-IDF/QEMU contract tests.
         Keep this disabled in production firmware.
 
+config AETUS_TEST_NO_NETWORK
+    bool "AETUS test build without WiFi/HTTP backends"
+    default n
+    depends on AETUS_TEST_HOOKS
+    help
+        Build the uploader runtime against test hooks only, without linking the
+        ESP WiFi/PHY/HTTP backend. This keeps QEMU ownership tests focused on
+        queue, encode, and release behavior while avoiding unsupported radio
+        startup paths in emulation.
+
 endmenu
