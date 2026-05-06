@@ -121,6 +121,10 @@ static aetus_queue_item_t s_isr_item;
 static portMUX_TYPE s_isr_item_lock = portMUX_INITIALIZER_UNLOCKED;
 #endif
 
+#ifdef CONFIG_AETUS_TEST_HOOKS
+static aetus_test_release_stats_t s_test_release_stats;
+#endif
+
 static void copy_string(char *target, size_t target_size, const char *source)
 {
     if (target_size == 0) {
@@ -176,6 +180,9 @@ static void release_queue_item(aetus_ctx_t *ctx, aetus_queue_item_t *item)
             if ((m->type == AETUS_METRIC_VALUE_STRING || m->type == AETUS_METRIC_VALUE_BYTES)
                 && m->value.blob_data != NULL) {
                 vPortFree(m->value.blob_data);
+#ifdef CONFIG_AETUS_TEST_HOOKS
+                s_test_release_stats.telemetry_blobs_released++;
+#endif
                 m->value.blob_data = NULL;
                 m->blob_size = 0;
             }
@@ -188,11 +195,17 @@ static void release_queue_item(aetus_ctx_t *ctx, aetus_queue_item_t *item)
                 if ((m->type == AETUS_METRIC_VALUE_STRING || m->type == AETUS_METRIC_VALUE_BYTES)
                     && m->value.blob_data != NULL) {
                     vPortFree(m->value.blob_data);
+#ifdef CONFIG_AETUS_TEST_HOOKS
+                    s_test_release_stats.telemetry_blobs_released++;
+#endif
                     m->value.blob_data = NULL;
                     m->blob_size = 0;
                 }
             }
             vPortFree(t->heap_metrics);
+#ifdef CONFIG_AETUS_TEST_HOOKS
+            s_test_release_stats.telemetry_heap_metrics_released++;
+#endif
             t->heap_metrics = NULL;
         }
         return;
@@ -1162,6 +1175,98 @@ static void uploader_task(void *arg)
     }
 }
 
+static esp_err_t copy_telemetry_to_queue_item(
+    const aetus_telemetry_t *telemetry,
+    aetus_queue_item_t *item
+)
+{
+    ESP_RETURN_ON_FALSE(telemetry != NULL, ESP_ERR_INVALID_ARG, TAG, "telemetry is required");
+    ESP_RETURN_ON_FALSE(item != NULL, ESP_ERR_INVALID_ARG, TAG, "queue item is required");
+
+    memset(item, 0, sizeof(*item));
+    item->kind = AETUS_QUEUE_ITEM_TELEMETRY;
+    memcpy(&item->body.telemetry, telemetry, sizeof(aetus_telemetry_t));
+
+    uint32_t count = telemetry->metric_count;
+    if (telemetry->heap_metrics != NULL) {
+        uint32_t heap_slots = AETUS_MAX_METRICS - AETUS_TELEMETRY_INLINE_METRICS;
+        item->body.telemetry.heap_metrics = (aetus_metric_t *)pvPortMalloc(
+            heap_slots * sizeof(aetus_metric_t));
+        if (item->body.telemetry.heap_metrics == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(item->body.telemetry.heap_metrics, telemetry->heap_metrics,
+               heap_slots * sizeof(aetus_metric_t));
+    } else {
+        item->body.telemetry.heap_metrics = NULL;
+    }
+
+    bool alloc_failed = false;
+    for (uint32_t i = 0; i < count && !alloc_failed; i++) {
+        const aetus_metric_t *src;
+        aetus_metric_t *dst;
+        if (i < AETUS_TELEMETRY_INLINE_METRICS) {
+            src = &telemetry->inline_metrics[i];
+            dst = &item->body.telemetry.inline_metrics[i];
+        } else {
+            uint32_t hi = i - AETUS_TELEMETRY_INLINE_METRICS;
+            src = &telemetry->heap_metrics[hi];
+            dst = &item->body.telemetry.heap_metrics[hi];
+        }
+
+        if ((src->type == AETUS_METRIC_VALUE_STRING
+             || (src->type == AETUS_METRIC_VALUE_BYTES && src->blob_size > 0))
+            && src->value.blob_data != NULL) {
+            size_t copy_size = src->blob_size;
+            if (src->type == AETUS_METRIC_VALUE_STRING) {
+                copy_size++;
+            }
+            void *blob_copy = pvPortMalloc(copy_size);
+            if (blob_copy == NULL) {
+                alloc_failed = true;
+            } else {
+                memcpy(blob_copy, src->value.blob_data, copy_size);
+                dst->value.blob_data = blob_copy;
+                dst->blob_size = src->blob_size;
+            }
+        }
+    }
+
+    if (alloc_failed) {
+        release_queue_item(&s_ctx, item);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+#ifdef CONFIG_AETUS_TEST_HOOKS
+void aetus_test_reset_release_stats(void)
+{
+    memset(&s_test_release_stats, 0, sizeof(s_test_release_stats));
+}
+
+void aetus_test_get_release_stats(aetus_test_release_stats_t *stats)
+{
+    if (stats == NULL) {
+        return;
+    }
+    *stats = s_test_release_stats;
+}
+
+esp_err_t aetus_test_copy_telemetry_to_queue_item(
+    const aetus_telemetry_t *telemetry,
+    aetus_queue_item_t *item
+)
+{
+    return copy_telemetry_to_queue_item(telemetry, item);
+}
+
+void aetus_test_release_queue_item(aetus_queue_item_t *item)
+{
+    release_queue_item(&s_ctx, item);
+}
+#endif
+
 void aetus_telemetry_init(aetus_telemetry_t *telemetry)
 {
     if (telemetry == NULL) {
@@ -1672,61 +1777,8 @@ esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t
     ESP_RETURN_ON_FALSE(telemetry != NULL, ESP_ERR_INVALID_ARG, TAG, "telemetry is required");
     ESP_RETURN_ON_FALSE(s_ctx.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "aetus not started");
 
-    aetus_queue_item_t item = {
-        .kind = AETUS_QUEUE_ITEM_TELEMETRY,
-    };
-
-    memcpy(&item.body.telemetry, telemetry, sizeof(aetus_telemetry_t));
-
-    uint32_t count = telemetry->metric_count;
-    if (telemetry->heap_metrics != NULL) {
-        uint32_t heap_slots = AETUS_MAX_METRICS - AETUS_TELEMETRY_INLINE_METRICS;
-        item.body.telemetry.heap_metrics = (aetus_metric_t *)pvPortMalloc(
-            heap_slots * sizeof(aetus_metric_t));
-        if (item.body.telemetry.heap_metrics == NULL) {
-            return ESP_ERR_NO_MEM;
-        }
-        memcpy(item.body.telemetry.heap_metrics, telemetry->heap_metrics,
-               heap_slots * sizeof(aetus_metric_t));
-    } else {
-        item.body.telemetry.heap_metrics = NULL;
-    }
-
-    bool alloc_failed = false;
-    for (uint32_t i = 0; i < count && !alloc_failed; i++) {
-        const aetus_metric_t *src;
-        aetus_metric_t *dst;
-        if (i < AETUS_TELEMETRY_INLINE_METRICS) {
-            src = &telemetry->inline_metrics[i];
-            dst = &item.body.telemetry.inline_metrics[i];
-        } else {
-            uint32_t hi = i - AETUS_TELEMETRY_INLINE_METRICS;
-            src = &telemetry->heap_metrics[hi];
-            dst = &item.body.telemetry.heap_metrics[hi];
-        }
-
-        if ((src->type == AETUS_METRIC_VALUE_STRING
-             || (src->type == AETUS_METRIC_VALUE_BYTES && src->blob_size > 0))
-            && src->value.blob_data != NULL) {
-            size_t copy_size = src->blob_size;
-            if (src->type == AETUS_METRIC_VALUE_STRING) {
-                copy_size++;
-            }
-            void *blob_copy = pvPortMalloc(copy_size);
-            if (blob_copy == NULL) {
-                alloc_failed = true;
-            } else {
-                memcpy(blob_copy, src->value.blob_data, copy_size);
-                dst->value.blob_data = blob_copy;
-                dst->blob_size = src->blob_size;
-            }
-        }
-    }
-
-    if (alloc_failed) {
-        release_queue_item(&s_ctx, &item);
-        return ESP_ERR_NO_MEM;
-    }
+    aetus_queue_item_t item;
+    ESP_RETURN_ON_ERROR(copy_telemetry_to_queue_item(telemetry, &item), TAG, "telemetry copy failed");
 
     if (xQueueSend(s_ctx.queue, &item, timeout) != pdTRUE) {
         ESP_LOGW(TAG, "telemetry enqueue failed because queue is full");

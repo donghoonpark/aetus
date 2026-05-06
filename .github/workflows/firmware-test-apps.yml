@@ -40,6 +40,9 @@ jobs:
           - name: qemu-signal-pool
             path: firmware/test-apps/qemu-signal-pool
             target: esp32c3
+          - name: qemu-telemetry-heap
+            path: firmware/test-apps/qemu-telemetry-heap
+            target: esp32c3
           - name: esp32c5-upload-smoke
             path: firmware/test-apps/esp32c5-upload-smoke
             target: esp32c5

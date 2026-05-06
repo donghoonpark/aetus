@@ -175,6 +175,7 @@ flowchart TB
 HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같은 물리 조건을 보기 위한 영역이다.
 `firmware/test-apps/esp32c5-upload-smoke`의 compile coverage는 GitHub Actions에 포함하지만, 실제 flash/monitor/runtime 검증은 로컬 HIL로만 수행한다.
 `firmware/test-apps/esp32c5-isr-enqueue`는 runtime에서 ISR 정상 enqueue와 4개 초과 metric overflow 거부를 함께 확인한다.
+`firmware/test-apps/qemu-telemetry-heap`은 QEMU runtime에서 5개 이상 metric의 heap storage, string/bytes blob deep-copy, producer deinit 이후 queue item ownership 유지, release counter, 반복 실행 후 heap 회복을 확인한다.
 
 ## 현재 남은 테스트 구멍
 
@@ -198,7 +199,7 @@ HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같
 - `seed_dense_query_data.py`는 CLI help와 수동 실행 위주다. 작은 규모의 deterministic seed unit 또는 integration test가 있으면 좋다.
 - `ingest-control-panel`은 build만 있고 브라우저 e2e가 없다.
 - firmware portable component는 host-side C/C++ unit test가 거의 없다. ESP-IDF 없이 검증 가능한 string copy, queue policy, HMAC signing input construction 같은 순수 로직은 분리하면 테스트 가능하다.
-- signal frame sample memory pool은 static/FreeRTOS heap backend와 기본 release stats를 갖췄다. `signal-frame-contract` compile test는 유지하고, 이후에는 pool exhaustion, queue send failure, upload success release, retry ownership 유지, final drop release를 ESP-IDF Unity 또는 host-testable module로 더 촘촘히 보강해야 한다.
+- signal frame sample memory pool은 static/FreeRTOS heap backend와 기본 release stats를 갖췄다. `signal-frame-contract` compile test는 유지하고, 이후에는 upload success release, retry ownership 유지, final drop release를 ESP-IDF Unity 또는 host-testable module로 더 촘촘히 보강해야 한다.
 - HIL 결과를 사람이 읽는 로그에 의존한다. 장기적으로는 HIL pytest marker와 장치 포트/env 기반 수동 test runner가 있으면 좋다.
 
 ## 권장 다음 작업

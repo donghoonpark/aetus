@@ -649,6 +649,7 @@ ISR-safe enqueue 구현 메모:
 
 - `firmware/test-apps/qemu-telemetry`: RISC-V QEMU protobuf stream 생성 및 DB 적재 검증
 - `firmware/test-apps/qemu-isr-enqueue`: QEMU에서 ISR-safe enqueue와 stack high-water mark 검증
+- `firmware/test-apps/qemu-telemetry-heap`: QEMU에서 dynamic metric heap storage, blob deep-copy, queue item release counter, heap recovery 검증
 - `firmware/test-apps/esp32c5-upload-smoke`: 실제 ESP32-C5 업로드 HIL 검증
 - `firmware/test-apps/esp32c5-isr-enqueue`: 실제 ESP32-C5 gptimer ISR enqueue + 4개 초과 metric overflow 거부 + 업로드 HIL 검증
 - `firmware/test-apps/cpp-literal-limit-negative`: C++ wrapper overlong metric key literal static_assert 검증용 negative build

@@ -60,4 +60,11 @@ config AETUS_ISR_SAFE_ENQUEUE
         Disable this option to reclaim the global buffer when the ISR-safe
         API is not used.
 
+config AETUS_TEST_HOOKS
+    bool "AETUS internal test hooks"
+    default n
+    help
+        Expose internal ownership helpers for ESP-IDF/QEMU contract tests.
+        Keep this disabled in production firmware.
+
 endmenu
