@@ -231,7 +231,7 @@ def _capture_qemu_foreground_output_until(
                 continue
             stripped = line.strip()
             lines.append(stripped)
-            if stripped == end_marker:
+            if end_marker in stripped:
                 return lines
     finally:
         if proc.poll() is None:
@@ -339,12 +339,12 @@ def test_esp32_qemu_telemetry_heap_metric_release_contract() -> None:
 
     lines = _capture_qemu_foreground_output_until(
         cwd=TELEMETRY_HEAP_FIRMWARE_DIR,
-        end_marker="AETUS_TELEMETRY_HEAP_TEST_DONE",
+        end_marker="AETUS_TELEMETRY_HEAP_STATS",
         timeout=120.0,
     )
     output = "\n".join(lines)
 
-    assert "AETUS_TELEMETRY_HEAP_PASS" in output
+    assert "status=pass" in output
     assert "iterations=20" in output
     assert "heap_metrics_released=20" in output
     assert "blobs_released=80" in output

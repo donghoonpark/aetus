@@ -253,13 +253,21 @@ void app_main(void)
     size_t final_free = heap_caps_get_free_size(MALLOC_CAP_8BIT);
 
     aetus_test_get_release_stats(&stats);
+    bool release_counts_ok =
+        stats.telemetry_heap_metrics_released == TEST_ITERATIONS &&
+        stats.telemetry_blobs_released == (TEST_ITERATIONS * 4U);
+    bool heap_ok = final_free + HEAP_TOLERANCE_BYTES >= baseline;
+    bool passed = release_counts_ok && heap_ok;
+
     printf(
         "AETUS_TELEMETRY_HEAP_STATS "
+        "status=%s "
         "iterations=%lu "
         "heap_metrics_released=%lu "
         "blobs_released=%lu "
         "baseline_free=%lu "
         "final_free=%lu\n",
+        passed ? "pass" : "fail",
         (unsigned long)TEST_ITERATIONS,
         (unsigned long)stats.telemetry_heap_metrics_released,
         (unsigned long)stats.telemetry_blobs_released,
@@ -267,12 +275,7 @@ void app_main(void)
         (unsigned long)final_free
     );
 
-    bool release_counts_ok =
-        stats.telemetry_heap_metrics_released == TEST_ITERATIONS &&
-        stats.telemetry_blobs_released == (TEST_ITERATIONS * 4U);
-    bool heap_ok = final_free + HEAP_TOLERANCE_BYTES >= baseline;
-
-    if (release_counts_ok && heap_ok) {
+    if (passed) {
         printf("AETUS_TELEMETRY_HEAP_PASS\n");
     } else {
         printf("AETUS_TELEMETRY_HEAP_FAIL release_counts_ok=%d heap_ok=%d\n",
