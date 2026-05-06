@@ -96,16 +96,30 @@
 현재 권장안:
 
 - `X-Device-Id` + `Authorization: Bearer <device-token>`
+- `POST /v1/ingest`는 HMAC-SHA256 인증을 강력 권장 옵션으로 제공
 - 기본 전송 방식은 `HTTP`
 - `HTTPS`를 사용하는 경우에도 장치에서는 인증서 검증을 수행하지 않음
 - 네트워크 ACL로 허용된 대역에서만 ingress 접근
 - source IP는 `L4` 직결로 원본 주소가 보존된다고 가정
+- 현재 제품 범위는 제한된 장치망/분리망을 전제로 하며, 공개망 직접 노출 수준까지 보안을 올리는 것은 현 단계 범위에서 제외
 
 ### 선택 인증 경로: HMAC-SHA256
 
-공개망 또는 보안 요구가 높은 배포를 고려해 `POST /v1/ingest`에 HMAC 인증 경로를 선택 옵션으로 제공한다.
+보안 요구가 더 높은 제한망 배포를 고려해 `POST /v1/ingest`에 HMAC 인증 경로를 선택 옵션으로 제공한다.
 
 기존 bearer token 경로를 제거하지 않고 병행 지원하는 `dual mode`이며, 장치별로 펌웨어 설정에서 bearer 또는 HMAC mode를 선택한다.
+
+서버 기본값은 HMAC 지원 활성화이며, 운영자가 단순 bearer-only 배포를 원하면 `AETUS_HMAC_AUTH_ENABLED=false`로 HMAC 경로를 끌 수 있다. HMAC이 비활성화된 서버에 `X-Aetus-Signature`가 들어오면 `401 Unauthorized`를 반환한다.
+
+서버가 인증 강도를 더 높여 `POST /v1/ingest`를 HMAC-only로 운영하려면 `AETUS_HMAC_AUTH_REQUIRED=true`를 설정한다. 이 경우 bearer token만 포함한 ingest 요청은 `401 Unauthorized`를 반환한다. 단, `/v1/time`은 body 없는 RTC sync endpoint이므로 계속 bearer token 인증을 사용한다.
+
+운영 프로파일:
+
+| Profile | `AETUS_HMAC_AUTH_ENABLED` | `AETUS_HMAC_AUTH_REQUIRED` | 동작 |
+| --- | --- | --- | --- |
+| bearer-only | `false` | `false` | ingest는 bearer token만 허용 |
+| dual-mode | `true` | `false` | bearer와 HMAC 모두 허용. 기본값 |
+| hmac-only ingest | `true` | `true` | `/v1/ingest`는 HMAC만 허용, `/v1/time`은 bearer 유지 |
 
 목표:
 

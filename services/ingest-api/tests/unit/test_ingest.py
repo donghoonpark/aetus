@@ -196,6 +196,43 @@ def test_ingest_rejects_unknown_hmac_scheme() -> None:
     assert response.status_code == 401
 
 
+def test_ingest_can_disable_hmac_authentication() -> None:
+    client, publisher = make_client(hmac_auth_enabled=False)
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+    payload = device.build_telemetry()
+
+    hmac_response = device.upload_hmac(client, payload)
+    bearer_response = device.upload(client, payload)
+
+    assert hmac_response.status_code == 401
+    assert hmac_response.json()["detail"] == "hmac authentication disabled"
+    assert bearer_response.status_code == 202
+    assert len(publisher.events) == 1
+
+
+def test_ingest_can_require_hmac_authentication() -> None:
+    client, publisher = make_client(hmac_auth_required=True)
+    device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")
+    payload = device.build_telemetry()
+
+    bearer_response = device.upload(client, payload)
+    hmac_response = device.upload_hmac(client, payload)
+
+    assert bearer_response.status_code == 401
+    assert bearer_response.json()["detail"] == "hmac authentication required"
+    assert hmac_response.status_code == 202
+    assert len(publisher.events) == 1
+
+
+def test_hmac_required_rejects_disabled_hmac_configuration() -> None:
+    try:
+        make_client(hmac_auth_enabled=False, hmac_auth_required=True)
+    except ValueError as exc:
+        assert "hmac_auth_required requires hmac_auth_enabled" in str(exc)
+    else:
+        raise AssertionError("expected invalid hmac policy to fail")
+
+
 def test_virtual_device_preserves_timestamp_ns() -> None:
     client, publisher = make_client()
     device = NanopbMockDevice(device_id="esp32c5-test-001", token="devtok_test_001")

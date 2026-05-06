@@ -144,6 +144,8 @@ def create_app(
         app.state.publisher = InMemoryEventPublisher()
     app.state.rate_limiter = rate_limiter or InMemoryRateLimiter()
     app.state.admin_sessions = _AdminSessionStore(resolved_settings.admin_session_ttl_seconds)
+    if app.state.settings.hmac_auth_required and not app.state.settings.hmac_auth_enabled:
+        raise ValueError("hmac_auth_required requires hmac_auth_enabled")
 
     @app.middleware("http")
     async def record_http_metrics(request: Request, call_next):
@@ -254,6 +256,8 @@ def create_app(
         body: bytes,
     ) -> None:
         if x_aetus_signature:
+            if not app.state.settings.hmac_auth_enabled:
+                raise HTTPException(status_code=401, detail="hmac authentication disabled")
             ok = await verify_hmac_signature(
                 device_id=x_device_id,
                 method=request.method,
@@ -265,6 +269,9 @@ def create_app(
             if not ok:
                 raise HTTPException(status_code=401, detail="invalid hmac signature")
             return
+
+        if app.state.settings.hmac_auth_required:
+            raise HTTPException(status_code=401, detail="hmac authentication required")
 
         await require_bearer_device_auth(x_device_id=x_device_id, authorization=authorization)
 

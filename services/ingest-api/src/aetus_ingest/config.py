@@ -55,6 +55,8 @@ class Settings:
     allowlist_burst: int = 20
     bootstrap_requests_per_window: int = 1
     bootstrap_window_seconds: float = 10.0
+    hmac_auth_enabled: bool = True
+    hmac_auth_required: bool = False
     kafka_bootstrap_servers: str = "127.0.0.1:19092"
     kafka_topic: str = "device.raw.v1"
     kafka_metric_topic: str = "device.metric.v1"
@@ -101,6 +103,8 @@ class Settings:
             allowlist_burst=int(os.getenv("AETUS_ALLOWLIST_INGEST_BURST", "20")),
             bootstrap_requests_per_window=int(os.getenv("AETUS_BOOTSTRAP_REQUESTS_PER_WINDOW", "1")),
             bootstrap_window_seconds=float(os.getenv("AETUS_BOOTSTRAP_WINDOW_SECONDS", "10")),
+            hmac_auth_enabled=_parse_bool(os.getenv("AETUS_HMAC_AUTH_ENABLED", "true")),
+            hmac_auth_required=_parse_bool(os.getenv("AETUS_HMAC_AUTH_REQUIRED", "false")),
             kafka_bootstrap_servers=os.getenv("AETUS_KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:19092"),
             kafka_topic=os.getenv("AETUS_KAFKA_TOPIC", "device.raw.v1"),
             kafka_metric_topic=os.getenv("AETUS_KAFKA_METRIC_TOPIC", "device.metric.v1"),

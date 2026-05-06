@@ -117,6 +117,8 @@ services:
     environment:
       AETUS_PUBLISHER_BACKEND: kafka
       AETUS_BOOTSTRAP_TOKEN: ${AETUS_BOOTSTRAP_TOKEN:-bootstrap_shared_token}
+      AETUS_HMAC_AUTH_ENABLED: ${AETUS_HMAC_AUTH_ENABLED:-true}
+      AETUS_HMAC_AUTH_REQUIRED: ${AETUS_HMAC_AUTH_REQUIRED:-false}
       AETUS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       AETUS_KAFKA_TOPIC: device.raw.v1
       AETUS_KAFKA_METRIC_TOPIC: device.metric.v1

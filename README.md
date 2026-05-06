@@ -241,23 +241,25 @@ Provisioning/control metadata is deliberately separate from telemetry storage. S
 
 ## Security Posture
 
-The original deployment assumption is a restricted device network, but the stack includes a stronger optional HMAC path.
+AETUS currently targets restricted device networks, not direct public-internet exposure. The ingest path is designed to be operationally simple for private network deployments while keeping a stronger optional authentication mode available.
 
 - Bearer token mode is the simplest path for isolated deployments.
-- HMAC-SHA256 mode signs the protobuf body hash and avoids sending the shared secret directly on every ingest request.
+- HMAC-SHA256 mode is strongly recommended when the device network is shared, less trusted, or routed through more infrastructure.
+- HMAC support is enabled by default and can be disabled with `AETUS_HMAC_AUTH_ENABLED=false`.
+- Ingest can be made HMAC-only with `AETUS_HMAC_AUTH_REQUIRED=true`.
 - `/v1/time` currently uses bearer authentication.
 - Source CIDR limits and in-memory rate limits are applied before ingest processing.
 - The admin/control surfaces are intended for internal networks unless protected by a reverse proxy or an additional admin auth layer.
 
 ## Project Status
 
-AETUS is not production-ready yet. Treat it as an active reference implementation and lab stack.
+AETUS embedded ingest and backend ingest paths are close to product freeze for restricted-network deployments. Query/visualization, public-internet hardening, and long-running fleet operations remain active areas.
 
 Known gaps:
 
 - FlashDB durable backlog integration is still pending.
 - Large payload pointer/blob queue API is still pending.
-- Admin/control-plane authentication needs a deployment-specific decision.
+- Public-internet security hardening is intentionally out of current scope.
 - SQLite control DB is suitable for early deployments, but high-throughput multi-pod deployments should move to a shared DB backend.
 - QEMU and HIL tests are intentionally not part of the default quick test loop.
 

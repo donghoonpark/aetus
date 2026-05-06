@@ -169,6 +169,9 @@ HMAC-SHA256 선택 인증 경로는 구현되어 있으며 `X-Aetus-Signature: h
 - `timestamp_ns`는 장치 시각으로 별도 보존하고, `received_at`은 서버 수신 시각으로 별도 기록한다.
 - `sequence` 순서가 꼬여 들어와도 ingest 레벨에서는 막지 않는다.
 - HMAC 인증에서도 ingest 경로 DB write 원칙을 유지하고, replay guard는 별도 확장으로 둔다.
+- HMAC 지원은 기본 활성화이며 `AETUS_HMAC_AUTH_ENABLED=false`로 bearer-only 배포를 선택할 수 있다.
+- `AETUS_HMAC_AUTH_REQUIRED=true`를 설정하면 `POST /v1/ingest`는 HMAC-only로 동작하고 bearer-only 업로드를 거부한다.
+- 현재 제품 보안 범위는 제한된 장치망/분리망 배포까지로 닫고, 공개망 직접 노출 수준의 hardening은 현 단계 범위에서 제외한다.
 
 ## 2. Provisioning / Control Plane
 
