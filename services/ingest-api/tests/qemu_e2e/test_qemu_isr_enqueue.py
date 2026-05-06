@@ -72,7 +72,7 @@ def _build_firmware() -> None:
 
 def _find_qemu_binary() -> str:
     qemu_name = f"qemu-system-riscv32"
-    result = subprocess.run(["which", qemu_name], capture_output=True, text=True)
+    result = subprocess.run(["which", qemu_name], capture_output=True, text=True, env=_idf_environment())
     if result.returncode == 0:
         return result.stdout.strip()
     raise RuntimeError(f"{qemu_name} not found in PATH")

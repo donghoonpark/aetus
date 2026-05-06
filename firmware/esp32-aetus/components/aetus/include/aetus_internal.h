@@ -18,6 +18,12 @@ typedef struct {
     } body;
 } aetus_queue_item_t;
 
+esp_err_t aetus_internal_copy_telemetry_to_queue_item(
+    const aetus_telemetry_t *telemetry,
+    aetus_queue_item_t *item
+);
+void aetus_internal_release_telemetry_queue_item(aetus_queue_item_t *item);
+
 #ifdef CONFIG_AETUS_TEST_HOOKS
 typedef struct {
     uint32_t telemetry_heap_metrics_released;

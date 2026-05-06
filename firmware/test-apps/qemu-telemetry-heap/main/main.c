@@ -16,19 +16,152 @@
 
 static const char *TAG = "qemu_metric_heap";
 
+static void telemetry_init(aetus_telemetry_t *telemetry)
+{
+    memset(telemetry, 0, sizeof(*telemetry));
+    telemetry->capacity = AETUS_TELEMETRY_INLINE_METRICS;
+}
+
+static void telemetry_deinit(aetus_telemetry_t *telemetry)
+{
+    if (telemetry == NULL) {
+        return;
+    }
+
+    uint32_t count = telemetry->metric_count;
+    for (uint32_t i = 0; i < count && i < AETUS_TELEMETRY_INLINE_METRICS; i++) {
+        aetus_metric_t *metric = &telemetry->inline_metrics[i];
+        if ((metric->type == AETUS_METRIC_VALUE_STRING || metric->type == AETUS_METRIC_VALUE_BYTES)
+            && metric->value.blob_data != NULL) {
+            vPortFree(metric->value.blob_data);
+        }
+    }
+
+    if (telemetry->heap_metrics != NULL) {
+        uint32_t heap_count = count > AETUS_TELEMETRY_INLINE_METRICS
+            ? count - AETUS_TELEMETRY_INLINE_METRICS : 0;
+        for (uint32_t i = 0; i < heap_count; i++) {
+            aetus_metric_t *metric = &telemetry->heap_metrics[i];
+            if ((metric->type == AETUS_METRIC_VALUE_STRING || metric->type == AETUS_METRIC_VALUE_BYTES)
+                && metric->value.blob_data != NULL) {
+                vPortFree(metric->value.blob_data);
+            }
+        }
+        vPortFree(telemetry->heap_metrics);
+    }
+    telemetry_init(telemetry);
+}
+
+static void copy_limited_string(char *target, size_t target_size, const char *source)
+{
+    if (target_size == 0U) {
+        return;
+    }
+    size_t index = 0;
+    while (index + 1U < target_size && source[index] != '\0') {
+        target[index] = source[index];
+        index++;
+    }
+    target[index] = '\0';
+}
+
+static esp_err_t telemetry_next_metric(aetus_telemetry_t *telemetry, aetus_metric_t **metric)
+{
+    ESP_RETURN_ON_FALSE(telemetry->metric_count < AETUS_MAX_METRICS, ESP_ERR_INVALID_SIZE, TAG, "too many metrics");
+    if (telemetry->metric_count >= AETUS_TELEMETRY_INLINE_METRICS && telemetry->heap_metrics == NULL) {
+        uint32_t heap_slots = AETUS_MAX_METRICS - AETUS_TELEMETRY_INLINE_METRICS;
+        telemetry->heap_metrics = (aetus_metric_t *)pvPortMalloc(heap_slots * sizeof(aetus_metric_t));
+        ESP_RETURN_ON_FALSE(telemetry->heap_metrics != NULL, ESP_ERR_NO_MEM, TAG, "heap metrics allocation failed");
+        memset(telemetry->heap_metrics, 0, heap_slots * sizeof(aetus_metric_t));
+        telemetry->capacity = AETUS_MAX_METRICS;
+    }
+
+    if (telemetry->metric_count < AETUS_TELEMETRY_INLINE_METRICS) {
+        *metric = &telemetry->inline_metrics[telemetry->metric_count];
+    } else {
+        *metric = &telemetry->heap_metrics[telemetry->metric_count - AETUS_TELEMETRY_INLINE_METRICS];
+    }
+    telemetry->metric_count++;
+    return ESP_OK;
+}
+
+static esp_err_t telemetry_add_int64(aetus_telemetry_t *telemetry, const char *key, int64_t value, const char *unit)
+{
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(telemetry_next_metric(telemetry, &metric), TAG, "metric slot failed");
+    copy_limited_string(metric->key, sizeof(metric->key), key);
+    copy_limited_string(metric->unit, sizeof(metric->unit), unit);
+    metric->type = AETUS_METRIC_VALUE_INT64;
+    metric->value.int64_value = value;
+    return ESP_OK;
+}
+
+static esp_err_t telemetry_add_double(aetus_telemetry_t *telemetry, const char *key, double value, const char *unit)
+{
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(telemetry_next_metric(telemetry, &metric), TAG, "metric slot failed");
+    copy_limited_string(metric->key, sizeof(metric->key), key);
+    copy_limited_string(metric->unit, sizeof(metric->unit), unit);
+    metric->type = AETUS_METRIC_VALUE_DOUBLE;
+    metric->value.double_value = value;
+    return ESP_OK;
+}
+
+static esp_err_t telemetry_add_blob(
+    aetus_telemetry_t *telemetry,
+    const char *key,
+    const void *value,
+    uint32_t value_size,
+    const char *unit,
+    aetus_metric_value_type_t type
+)
+{
+    aetus_metric_t *metric = NULL;
+    ESP_RETURN_ON_ERROR(telemetry_next_metric(telemetry, &metric), TAG, "metric slot failed");
+    copy_limited_string(metric->key, sizeof(metric->key), key);
+    copy_limited_string(metric->unit, sizeof(metric->unit), unit);
+    metric->type = type;
+    metric->blob_size = value_size;
+
+    size_t alloc_size = value_size;
+    if (type == AETUS_METRIC_VALUE_STRING) {
+        alloc_size++;
+    }
+    metric->value.blob_data = pvPortMalloc(alloc_size);
+    ESP_RETURN_ON_FALSE(metric->value.blob_data != NULL, ESP_ERR_NO_MEM, TAG, "blob allocation failed");
+    memcpy(metric->value.blob_data, value, alloc_size);
+    return ESP_OK;
+}
+
 static esp_err_t build_dynamic_telemetry(aetus_telemetry_t *telemetry)
 {
     static const uint8_t inline_bytes[] = {0xde, 0xad, 0xbe, 0xef};
     static const uint8_t heap_bytes[] = {0xca, 0xfe, 0xba, 0xbe, 0x42};
 
-    aetus_telemetry_init(telemetry);
-    ESP_RETURN_ON_ERROR(aetus_telemetry_add_int64(telemetry, "m0", 100, "u"), TAG, "m0 failed");
-    ESP_RETURN_ON_ERROR(aetus_telemetry_add_double(telemetry, "m1", 22.5, "c"), TAG, "m1 failed");
-    ESP_RETURN_ON_ERROR(aetus_telemetry_add_string(telemetry, "m2", "inline-str", "s"), TAG, "m2 failed");
-    ESP_RETURN_ON_ERROR(aetus_telemetry_add_bytes(telemetry, "m3", inline_bytes, sizeof(inline_bytes), "b"), TAG, "m3 failed");
-    ESP_RETURN_ON_ERROR(aetus_telemetry_add_int64(telemetry, "m4", 500, "u"), TAG, "m4 failed");
-    ESP_RETURN_ON_ERROR(aetus_telemetry_add_string(telemetry, "m5", "heap-str", "s"), TAG, "m5 failed");
-    ESP_RETURN_ON_ERROR(aetus_telemetry_add_bytes(telemetry, "m6", heap_bytes, sizeof(heap_bytes), "b"), TAG, "m6 failed");
+    telemetry_init(telemetry);
+    ESP_RETURN_ON_ERROR(telemetry_add_int64(telemetry, "m0", 100, "u"), TAG, "m0 failed");
+    ESP_RETURN_ON_ERROR(telemetry_add_double(telemetry, "m1", 22.5, "c"), TAG, "m1 failed");
+    ESP_RETURN_ON_ERROR(
+        telemetry_add_blob(telemetry, "m2", "inline-str", strlen("inline-str"), "s", AETUS_METRIC_VALUE_STRING),
+        TAG,
+        "m2 failed"
+    );
+    ESP_RETURN_ON_ERROR(
+        telemetry_add_blob(telemetry, "m3", inline_bytes, sizeof(inline_bytes), "b", AETUS_METRIC_VALUE_BYTES),
+        TAG,
+        "m3 failed"
+    );
+    ESP_RETURN_ON_ERROR(telemetry_add_int64(telemetry, "m4", 500, "u"), TAG, "m4 failed");
+    ESP_RETURN_ON_ERROR(
+        telemetry_add_blob(telemetry, "m5", "heap-str", strlen("heap-str"), "s", AETUS_METRIC_VALUE_STRING),
+        TAG,
+        "m5 failed"
+    );
+    ESP_RETURN_ON_ERROR(
+        telemetry_add_blob(telemetry, "m6", heap_bytes, sizeof(heap_bytes), "b", AETUS_METRIC_VALUE_BYTES),
+        TAG,
+        "m6 failed"
+    );
     return ESP_OK;
 }
 
@@ -83,7 +216,7 @@ static esp_err_t run_once(void)
     ESP_RETURN_ON_ERROR(aetus_test_copy_telemetry_to_queue_item(&producer, &item), TAG, "copy failed");
     ESP_RETURN_ON_FALSE(queue_item_has_expected_copy(&producer, &item), ESP_FAIL, TAG, "copy contract failed");
 
-    aetus_telemetry_deinit(&producer);
+    telemetry_deinit(&producer);
 
     ESP_RETURN_ON_FALSE(
         item.body.telemetry.heap_metrics != NULL,
@@ -104,7 +237,6 @@ static esp_err_t run_once(void)
 
 void app_main(void)
 {
-    vTaskDelay(pdMS_TO_TICKS(3000));
     printf("AETUS_TELEMETRY_HEAP_APP_MAIN\n");
     fflush(stdout);
 
