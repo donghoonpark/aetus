@@ -128,13 +128,17 @@ void app_main(void)
 }
 ```
 
-## Static Signal Frame Budget
+## Telemetry And Signal Frame Budget
 
-Signal frame sample storage is intentionally a compile-time budget. `aetus_signal_frame_t` owns its sample buffer, and each queued frame is copied into a FreeRTOS queue slot so producer tasks can return immediately without lifetime hazards.
+Telemetry metric storage is hybrid: the first four metrics are stored inline in `aetus_telemetry_t`, and additional metrics are allocated from the FreeRTOS heap up to `CONFIG_AETUS_MAX_METRICS`. Signal frame sample storage is intentionally a compile-time budget. `aetus_signal_frame_t` owns its sample buffer, and each queued frame owns a copied sample buffer so producer tasks can return immediately without lifetime hazards.
 
 Default limits:
 
-- `CONFIG_AETUS_SIGNAL_SAMPLES_MAX=2048`: maximum raw sample bytes in one signal frame.
+- `CONFIG_AETUS_MAX_METRICS=32`: maximum metrics in one sparse telemetry event.
+- `AETUS_TELEMETRY_INLINE_METRICS=4`: metrics kept inline before heap expansion.
+- `AETUS_METRIC_KEY_MAX=20`: metric/channel key buffer bytes including the null terminator.
+- `AETUS_METRIC_UNIT_MAX=8`: metric/channel unit buffer bytes including the null terminator.
+- `CONFIG_AETUS_SIGNAL_SAMPLES_MAX=2400`: maximum raw sample bytes in one signal frame.
 - `CONFIG_AETUS_ENCODE_BUFFER_BYTES=4096`: uploader task stack buffer for one encoded protobuf request.
 - `CONFIG_AETUS_TASK_STACK_BYTES=12288`: uploader task stack.
 - `CONFIG_AETUS_QUEUE_ITEM_MAX_BYTES=4096`: compile-time queue slot size guard.
@@ -142,8 +146,11 @@ Default limits:
 For 2400 byte sample payloads, set `CONFIG_AETUS_SIGNAL_SAMPLES_MAX` to at least `2400` in `sdkconfig.defaults` or `menuconfig`. The component also has compile-time guards that fail the build if:
 
 - `CONFIG_AETUS_SIGNAL_SAMPLES_MAX` exceeds the supported static frame limit.
+- `CONFIG_AETUS_MAX_METRICS` exceeds the generated nanopb `MetricSet.metrics` array.
 - `CONFIG_AETUS_ENCODE_BUFFER_BYTES` is too small for max samples plus protobuf envelope overhead.
 - one `aetus_queue_item_t` exceeds `CONFIG_AETUS_QUEUE_ITEM_MAX_BYTES`.
+
+Metric/channel key and unit limits are shared by `aetus.h`, firmware nanopb `.options`, generated `ingest.pb.h` headers, mock-device nanopb `.options`, and the C++ wrapper literal overloads. Keep these values in sync when changing them. The C++ API catches overlong string literals at compile time; runtime strings still return `ESP_ERR_INVALID_ARG`.
 
 Dense signal producers should keep `queue_depth` conservative, for example `4` to `8`, because each queued signal frame reserves roughly one frame worth of RAM.
 

@@ -65,10 +65,16 @@
 #define AETUS_TIME_PATH "/v1/time"
 #define AETUS_HMAC_SCHEME "hmac-sha256-v1"
 #define AETUS_HMAC_PREFIX "AETUS-HMAC-SHA256-V1\nPOST\n/v1/ingest\n"
+#define AETUS_PROTO_METRICS_MAX \
+    (sizeof(((aetus_ingest_v1_MetricSet *)0)->metrics) / sizeof(aetus_ingest_v1_Metric))
 
 AETUS_STATIC_ASSERT(
     AETUS_ENCODE_BUFFER_BYTES >= (AETUS_SIGNAL_SAMPLES_MAX + AETUS_SIGNAL_FRAME_ENCODE_OVERHEAD_BYTES),
     "AETUS_ENCODE_BUFFER_BYTES must cover max signal samples plus protobuf envelope overhead"
+);
+AETUS_STATIC_ASSERT(
+    AETUS_MAX_METRICS <= AETUS_PROTO_METRICS_MAX,
+    "AETUS_MAX_METRICS exceeds the nanopb MetricSet.metrics array; regenerate ingest.pb.*"
 );
 
 #include "aetus_internal.h"

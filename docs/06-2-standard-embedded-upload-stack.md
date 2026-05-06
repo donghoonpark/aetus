@@ -113,13 +113,24 @@ esp_err_t aetus_get_config(aetus_config_t *config);
 esp_err_t aetus_start_provisioning(const aetus_provisioning_config_t *config);
 esp_err_t aetus_sync_rtc(TickType_t timeout);
 esp_err_t aetus_rtc_timestamp_ns(uint64_t *timestamp_ns);
+void aetus_telemetry_init(aetus_telemetry_t *telemetry);
+void aetus_telemetry_deinit(aetus_telemetry_t *telemetry);
 esp_err_t aetus_telemetry_set_timestamp_rtc(aetus_telemetry_t *telemetry);
 esp_err_t aetus_status_set_timestamp_rtc(aetus_status_t *status);
 esp_err_t aetus_enqueue_telemetry(const aetus_telemetry_t *telemetry, TickType_t timeout);
 esp_err_t aetus_enqueue_status(const aetus_status_t *status, TickType_t timeout);
+esp_err_t aetus_enqueue_signal_frame(const aetus_signal_frame_t *frame, TickType_t timeout);
+esp_err_t aetus_get_signal_sample_pool_stats(aetus_signal_sample_pool_stats_t *stats);
 esp_err_t aetus_flush(TickType_t timeout);
+
+// ISR-safe enqueue — CONFIG_AETUS_ISR_SAFE_ENQUEUE 활성화 시에만 사용 가능
 esp_err_t aetus_enqueue_telemetry_from_isr(const aetus_telemetry_t *telemetry, BaseType_t *pxHigherPriorityTaskWoken);
 esp_err_t aetus_enqueue_status_from_isr(const aetus_status_t *status, BaseType_t *pxHigherPriorityTaskWoken);
+
+// 문자열 / 바이트열 메트릭 — 명시적 길이 지정
+esp_err_t aetus_telemetry_add_string(aetus_telemetry_t *telemetry, const char *key, const char *value, const char *unit);
+esp_err_t aetus_telemetry_add_string_n(aetus_telemetry_t *telemetry, const char *key, const char *value, size_t value_size, const char *unit);
+esp_err_t aetus_telemetry_add_bytes(aetus_telemetry_t *telemetry, const char *key, const uint8_t *value, size_t value_size, const char *unit);
 ```
 
 Thread safety 규칙:
@@ -132,9 +143,9 @@ Thread safety 규칙:
 - `aetus_enqueue_status()`도 여러 FreeRTOS task에서 동시에 호출해도 된다.
 - enqueue API는 메시지를 내부 queue item으로 복사하므로 caller의 stack-local struct를 재사용해도 된다.
 - `aetus_enqueue_telemetry()`와 `aetus_enqueue_status()`는 task context 전용이다.
-- ISR context에서는 `aetus_enqueue_telemetry_from_isr()`와 `aetus_enqueue_status_from_isr()`를 사용한다 (내부적으로 `xQueueSendFromISR` 사용).
+- ISR context에서는 `aetus_enqueue_telemetry_from_isr()`와 `aetus_enqueue_status_from_isr()`를 사용한다 (내부적으로 `xQueueSendFromISR` 사용). 두 함수는 `CONFIG_AETUS_ISR_SAFE_ENQUEUE`(default y)가 활성화된 경우에만 사용할 수 있으며, 활성화 시 BSS에 `sizeof(aetus_queue_item_t)` 크기의 전역 버퍼를 예약해 ISR이 어떤 task를 인터럽트하더라도 스택 부담 없이 enqueue할 수 있다.
 - C++ wrapper에서는 같은 기능을 `Telemetry::enqueue_from_isr()`와 `Status::enqueue_from_isr()`로 노출한다.
-- 가능하면 telemetry/status 객체는 ISR 밖에서 미리 만들고, ISR 안에서는 이미 준비된 객체를 queue에 복사하는 동작만 수행한다.
+- ISR-safe enqueue는 inline scalar 메트릭만 지원한다 (최대 `AETUS_TELEMETRY_INLINE_METRICS`개, 기본 4개). heap_metrics 확장이나 string/bytes blob은 ISR에서 사용할 수 없다.
 - ISR-safe signal frame enqueue는 의도적으로 제공하지 않는다 (pool allocation이 task context를 요구함).
 - ISR-safe API는 `ESP_LOG`를 호출하지 않으며, queue full 시 반환값으로만 실패를 전달한다.
 
@@ -152,21 +163,24 @@ Telemetry는 `TelemetryPayload` 내부에서 상호 배타적인 두 경로를 �
 
 Status event는 재부팅, online, degraded, offline 같은 장치 상태를 보낼 때 사용한다.
 
-현재 펌웨어 C/C++ 공개 API는 scalar metric 중심이며, `SignalFrame` 전용 편의 API는 후속 구현 대상이다. 서버와 nanopb mock/e2e 경로는 이미 `SignalFrame`을 수신하고 PostgreSQL/TimescaleDB에 적재한다.
+현재 펌웨어 C/C++ 공개 API는 sparse scalar metric과 dense `SignalFrame`을 모두 지원한다. 서버와 nanopb mock/e2e 경로도 `MetricSet`과 `SignalFrame`을 수신하고 PostgreSQL/TimescaleDB에 적재한다.
 
 ```mermaid
 classDiagram
     class aetus_telemetry_t {
-      uint64_t timestamp_ns
-      uint32_t metric_count
-      aetus_metric_t metrics[8]
+          uint64_t timestamp_ns
+          uint32_t metric_count
+          uint32_t capacity
+          aetus_metric_t inline_metrics[4]
+          aetus_metric_t* heap_metrics
     }
 
     class aetus_metric_t {
-      char key[24]
-      value_type type
-      oneof value
-      char unit[16]
+          char key[20]
+          char unit[8]
+          value_type type
+          uint32_t blob_size
+          oneof value (int64 / double / bool / void* blob_data)
     }
 
     class aetus_status_t {
@@ -179,6 +193,26 @@ classDiagram
 
     aetus_telemetry_t --> aetus_metric_t
 ```
+
+- `inline_metrics[4]`는 ISR-safe scalar 메트릭 경로.
+- `heap_metrics`는 5~`AETUS_MAX_METRICS`(Kconfig, 기본 32, 범위 4~32) 구간의 메트릭을 `pvPortMalloc`으로 lazy-allocate.
+- string/bytes 메트릭 값도 `pvPortMalloc`으로 힙 할당. `blob_data` 포인터와 `blob_size`로 추적하며, `release_queue_item()` 또는 `aetus_telemetry_deinit()`에서 해제.
+- `AETUS_MAX_METRICS`는 `sdkconfig` 또는 Kconfig에서 조정할 수 있다.
+
+### 길이 상한 의존값
+
+임베디드 RAM 사용량을 예측 가능하게 유지하기 위해 metric/channel key와 unit은 짧은 alias를 표준으로 사용한다. 기본 상한은 key `20` bytes, unit `8` bytes이며, C 문자열 null terminator를 포함한다. 즉 실제 문자열 길이는 key 최대 `19`자, unit 최대 `7`자다.
+
+이 값은 다음 파일들이 함께 의존한다.
+
+- `firmware/esp32-aetus/components/aetus/include/aetus.h`: `AETUS_METRIC_KEY_MAX`, `AETUS_METRIC_UNIT_MAX`
+- `firmware/proto/ingest.options`: nanopb `Metric.key`, `Metric.unit`, `SignalChannel.key`, `SignalChannel.unit`
+- `firmware/esp32-aetus/components/aetus/ingest.pb.h`: generated nanopb struct 배열 크기
+- `firmware/esp32-aetus/components/aetus/include/ingest.pb.h`: public generated nanopb header mirror
+- `services/mock-device-nanopb/proto/ingest.options`: nanopb mock/HIL byte-stream generator
+- `firmware/esp32-aetus/components/aetus/include/aetus.hpp`: C++ literal overload의 `static_assert`
+
+C API는 runtime `ESP_ERR_INVALID_ARG`로 길이 초과를 반환한다. C++ wrapper는 문자열 리터럴로 key/unit을 넘기는 경우 컴파일 타임 `static_assert`로 초과를 잡고, `std::string_view`처럼 런타임 문자열을 넘기는 경우에는 C API와 동일하게 runtime error를 누적한다.
 
 ## 업로드 흐름
 
@@ -263,7 +297,7 @@ static void sensor_task(void *arg)
 }
 ```
 
-위 API는 현재 scalar metric 편의 계층이다. uploader task는 이를 protobuf `TelemetryPayload.metric_set`으로 인코딩해 서버로 전송한다. `SignalFrame` 전용 enqueue/helper API는 후속 구현 대상으로 남겨둔다.
+위 API는 sparse scalar metric 편의 계층이다. uploader task는 이를 protobuf `TelemetryPayload.metric_set`으로 인코딩해 서버로 전송한다. 고주파 샘플 블록은 `aetus_signal_frame_t` 또는 C++ `SignalFrame` helper로 구성해 `TelemetryPayload.signal_frame`으로 전송한다.
 
 ## 현재 구현 범위
 
@@ -281,13 +315,14 @@ static void sensor_task(void *arg)
 - WPA2-Enterprise PEAP Wi-Fi path
 - optional Wi-Fi connected LED
 - C++20 wrapper API
-- static 또는 FreeRTOS heap 기반 signal sample memory pool
-- telemetry event
+- heap 기반 signal sample memory pool
+- telemetry event (inline scalar + heap overflow metric)
 - status event
 - double, int64, bool, string, bytes metric value
+- signal frame value
 - upload success 후 sequence 증가
 - upload 실패 메시지 requeue
-- ISR-safe enqueue API (`aetus_enqueue_telemetry_from_isr`, `aetus_enqueue_status_from_isr`)
+- ISR-safe enqueue API (`aetus_enqueue_telemetry_from_isr`, `aetus_enqueue_status_from_isr`, `CONFIG_AETUS_ISR_SAFE_ENQUEUE`로 활성화)
 
 아직 구현하지 않음:
 
@@ -298,18 +333,19 @@ static void sensor_task(void *arg)
 - HTTPS client/certificate policy
 - server-side provisioning API client
 
-대형 payload용 signal sample memory pool은 1200B급 이상 센서 샘플처럼 고정 배열 복사가 부담스러운 데이터를 위한 기능이다. 현재 구현은 `aetus_signal_frame_t`가 sample byte를 직접 소유하지 않고 `const uint8_t *samples + size`만 잡는다. 사용자는 `aetus_signal_frame_set_samples()` 호출 후 enqueue가 끝날 때까지만 원본 버퍼를 유지하면 된다. enqueue 이후에는 AETUS가 정적 풀 또는 FreeRTOS heap에 sample bytes를 복사하고 queue item이 해당 pool block의 소유권을 가진다.
+대형 payload용 signal sample memory pool은 1200B급 이상 센서 샘플처럼 고정 배열 복사가 부담스러운 데이터를 위한 기능이다. 현재 구현은 `aetus_signal_frame_t`가 sample byte를 직접 소유하지 않고 `const uint8_t *samples + size`만 잡는다. 사용자는 `aetus_signal_frame_set_samples()` 호출 후 enqueue가 끝날 때까지만 원본 버퍼를 유지하면 된다. enqueue 이후에는 AETUS가 FreeRTOS heap에 필요한 크기만큼 동적 할당해 sample bytes를 복사하고 queue item이 해당 블록의 소유권을 가진다.
 
 현재 메모리풀 정책:
 
-- `AETUS_SIGNAL_SAMPLE_POOL_STATIC`: 고정 크기 static block pool. block 개수는 `CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS`, block 크기는 `CONFIG_AETUS_SIGNAL_SAMPLES_MAX`다.
-- `AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP`: enqueue 시 필요한 sample 크기만큼 `pvPortMalloc()`으로 할당하고 release 시 `vPortFree()`한다.
+- heap 전용: enqueue 시 필요한 sample 크기만큼 `pvPortMalloc()`으로 할당하고 release 시 `vPortFree()`한다.
 - pool block 획득/반납과 stats 갱신은 짧은 critical section으로 보호해 multi-producer enqueue에서 pool 상태가 꼬이지 않게 한다.
 - queue item에는 sample bytes를 직접 복사하지 않고 pool block descriptor만 저장한다.
 - upload success, validation failure, queue send failure, final drop에서는 반드시 pool block을 반환한다.
 - upload failure 후 `xQueueSendToFront()`로 재시도하는 경우에는 ownership을 유지한다.
 - `aetus_get_signal_sample_pool_stats()`로 allocated/released/peak/failure/drop 경로 카운터를 확인할 수 있다.
 - `firmware/test-apps/signal-frame-contract`는 2400B dense frame 계약과 frame 구조체 크기 계약을 고정한다.
+
+과거 정적 pool backend (`AETUS_SIGNAL_SAMPLE_POOL_STATIC`, `CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS`)는 제거되었다. heap-only로 단순화하면서 코드와 Kconfig 옵션을 통합했다.
 
 후속 TODO:
 

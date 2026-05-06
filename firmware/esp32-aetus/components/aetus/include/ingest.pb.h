@@ -48,7 +48,7 @@ typedef enum _aetus_ingest_v1_SignalSampleLayout {
 
 /* Struct definitions */
 typedef struct _aetus_ingest_v1_Metric {
-    char key[24];
+    char key[20];
     pb_size_t which_value;
     union {
         int64_t int_value;
@@ -57,12 +57,12 @@ typedef struct _aetus_ingest_v1_Metric {
         pb_callback_t string_value;
         pb_callback_t bytes_value;
     } value;
-    char unit[16];
+    char unit[8];
 } aetus_ingest_v1_Metric;
 
 typedef struct _aetus_ingest_v1_MetricSet {
     pb_size_t metrics_count;
-    aetus_ingest_v1_Metric metrics[8];
+    aetus_ingest_v1_Metric metrics[32];
 } aetus_ingest_v1_MetricSet;
 
 typedef struct _aetus_ingest_v1_StatusPayload {
@@ -114,8 +114,8 @@ typedef struct _aetus_ingest_v1_IngestEvent {
 } aetus_ingest_v1_IngestEvent;
 
 typedef struct _aetus_ingest_v1_SignalChannel {
-    char key[24];
-    char unit[16];
+    char key[20];
+    char unit[8];
     bool has_scale;
     float scale;
     bool has_offset;
@@ -165,7 +165,7 @@ extern "C" {
 /* Initializer values for message structs */
 #define aetus_ingest_v1_IngestEvent_init_default {0, "", 0, _aetus_ingest_v1_EventType_MIN, "", 0, 0, 0, 0, {aetus_ingest_v1_TelemetryPayload_init_default}}
 #define aetus_ingest_v1_TelemetryPayload_init_default {0, {aetus_ingest_v1_MetricSet_init_default}}
-#define aetus_ingest_v1_MetricSet_init_default   {0, {aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default}}
+#define aetus_ingest_v1_MetricSet_init_default   {0, {aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default, aetus_ingest_v1_Metric_init_default}}
 #define aetus_ingest_v1_Metric_init_default      {"", 0, {0}, ""}
 #define aetus_ingest_v1_StatusPayload_init_default {_aetus_ingest_v1_DeviceStatus_MIN, 0, 0, ""}
 #define aetus_ingest_v1_AlertPayload_init_default {"", _aetus_ingest_v1_Severity_MIN, ""}
@@ -173,7 +173,7 @@ extern "C" {
 #define aetus_ingest_v1_SignalChannel_init_default {"", "", false, 0, false, 0}
 #define aetus_ingest_v1_IngestEvent_init_zero    {0, "", 0, _aetus_ingest_v1_EventType_MIN, "", 0, 0, 0, 0, {aetus_ingest_v1_TelemetryPayload_init_zero}}
 #define aetus_ingest_v1_TelemetryPayload_init_zero {0, {aetus_ingest_v1_MetricSet_init_zero}}
-#define aetus_ingest_v1_MetricSet_init_zero      {0, {aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero}}
+#define aetus_ingest_v1_MetricSet_init_zero      {0, {aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero, aetus_ingest_v1_Metric_init_zero}}
 #define aetus_ingest_v1_Metric_init_zero         {"", 0, {0}, ""}
 #define aetus_ingest_v1_StatusPayload_init_zero  {_aetus_ingest_v1_DeviceStatus_MIN, 0, 0, ""}
 #define aetus_ingest_v1_AlertPayload_init_zero   {"", _aetus_ingest_v1_Severity_MIN, ""}

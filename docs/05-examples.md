@@ -388,14 +388,14 @@ if (build_telemetry_event(buf, sizeof(buf), &encoded_size)) {
 ```text
 IngestEvent.device_id max_size:32
 IngestEvent.boot_id max_size:32
-Metric.key max_size:24
-Metric.unit max_size:16
-MetricSet.metrics max_count:8
+Metric.key max_size:20
+Metric.unit max_size:8
+MetricSet.metrics max_count:32
 SignalFrame.stream_key max_size:32
 SignalFrame.channels type:FT_CALLBACK
 SignalFrame.samples type:FT_CALLBACK
-SignalChannel.key max_size:24
-SignalChannel.unit max_size:16
+SignalChannel.key max_size:20
+SignalChannel.unit max_size:8
 StatusPayload.reboot_reason max_size:24
 AlertPayload.code max_size:24
 AlertPayload.message max_size:80

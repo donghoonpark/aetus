@@ -57,7 +57,6 @@ For compile-only CI, these are supplied with dummy values.
 
 ```ini
 CONFIG_AETUS_SIGNAL_SAMPLES_MAX=4096
-CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS=4
 ```
 
-If this value becomes inconsistent with the protobuf encode buffer or static pool block budget, the component fails at compile time instead of producing a firmware image with surprising RAM usage. For variable-size runtime allocation, configure `.freertos_heap_signal_sample_pool()` in the C++ config wrapper or set `signal_sample_pool_backend = AETUS_SIGNAL_SAMPLE_POOL_FREERTOS_HEAP` in C.
+If this value becomes inconsistent with the protobuf encode buffer, the component fails at compile time instead of producing a firmware image with surprising RAM usage. The signal sample pool always uses `pvPortMalloc`/`vPortFree` for dynamic allocation — there is no static pool backend. Sample bytes are allocated at enqueue time and released after upload.

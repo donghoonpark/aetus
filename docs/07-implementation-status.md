@@ -593,18 +593,15 @@ uv run pytest tests/qemu_e2e -q -s
 
 현재 공개 API:
 
-- `aetus_start`
-- `aetus_update_config`
-- `aetus_get_config`
+- `aetus_start` / `aetus_update_config` / `aetus_get_config`
 - `aetus_start_provisioning`
-- `aetus_sync_rtc`
-- `aetus_rtc_timestamp_ns`
-- `aetus_telemetry_set_timestamp_rtc`
-- `aetus_status_set_timestamp_rtc`
-- `aetus_enqueue_telemetry`
-- `aetus_enqueue_status`
-- `aetus_enqueue_telemetry_from_isr`
-- `aetus_enqueue_status_from_isr`
+- `aetus_sync_rtc` / `aetus_rtc_timestamp_ns`
+- `aetus_telemetry_init` / `aetus_telemetry_deinit`
+- `aetus_telemetry_set_timestamp_rtc` / `aetus_status_set_timestamp_rtc`
+- `aetus_enqueue_telemetry` / `aetus_enqueue_status` / `aetus_enqueue_signal_frame`
+- `aetus_enqueue_telemetry_from_isr` / `aetus_enqueue_status_from_isr` (`CONFIG_AETUS_ISR_SAFE_ENQUEUE`)
+- `aetus_telemetry_add_int64` / `add_double` / `add_bool` / `add_string` / `add_string_n` / `add_bytes`
+- `aetus_get_signal_sample_pool_stats`
 - `aetus_flush`
 
 현재 구현된 runtime 동작:
@@ -623,8 +620,9 @@ uv run pytest tests/qemu_e2e -q -s
 - NimBLE GATT provisioning으로 Wi-Fi/API 설정 갱신
 - Wi-Fi connected LED 제어
 - C++20 wrapper API
-- static 또는 FreeRTOS heap 기반 signal sample memory pool
-- telemetry/status ISR-safe enqueue API (`CONFIG_AETUS_ISR_SAFE_ENQUEUE`)
+- heap 기반 signal sample memory pool (정적 pool backend 제거)
+- telemetry/status ISR-safe enqueue API (`CONFIG_AETUS_ISR_SAFE_ENQUEUE`, global BSS buffer)
+- `AETUS_MAX_METRICS` Kconfig 옵션 (기본 32, 범위 4~32, inline_metrics[4] + heap_metrics overflow)
 
 ISR-safe enqueue 구현 메모:
 

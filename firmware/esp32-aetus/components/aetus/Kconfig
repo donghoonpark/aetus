@@ -1,5 +1,16 @@
 menu "AETUS upload stack"
 
+config AETUS_MAX_METRICS
+    int "Maximum metrics per telemetry event"
+    default 32
+    range 4 32
+    help
+        Maximum number of Metric entries accepted in one telemetry event.
+        The first four entries are stored inline in aetus_telemetry_t; entries
+        after that are allocated on the FreeRTOS heap. The upper bound remains
+        compile-time limited because nanopb uses a fixed repeated-field array
+        while encoding.
+
 config AETUS_SIGNAL_SAMPLES_MAX
     int "Maximum signal frame sample bytes"
     default 2400

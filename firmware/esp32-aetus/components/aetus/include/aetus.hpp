@@ -25,6 +25,18 @@ static bool copy_string(char (&target)[N], std::string_view source)
     return true;
 }
 
+template <size_t N>
+constexpr void static_check_metric_key_literal()
+{
+    static_assert(N <= AETUS_METRIC_KEY_MAX, "AETUS metric key literal is too long");
+}
+
+template <size_t N>
+constexpr void static_check_metric_unit_literal()
+{
+    static_assert(N <= AETUS_METRIC_UNIT_MAX, "AETUS metric unit literal is too long");
+}
+
 } // namespace detail
 
 class Config {
@@ -183,6 +195,21 @@ public:
         return *this;
     }
 
+    template <size_t KeyN>
+    Telemetry &add_int64(const char (&key)[KeyN], int64_t value)
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        return add_int64(std::string_view(key, KeyN - 1), value, std::string_view{});
+    }
+
+    template <size_t KeyN, size_t UnitN>
+    Telemetry &add_int64(const char (&key)[KeyN], int64_t value, const char (&unit)[UnitN])
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_int64(std::string_view(key, KeyN - 1), value, std::string_view(unit, UnitN - 1));
+    }
+
     Telemetry &add_double(std::string_view key, double value, std::string_view unit = {})
     {
         char key_buffer[AETUS_METRIC_KEY_MAX] = {};
@@ -193,6 +220,21 @@ public:
         }
         remember(aetus_telemetry_add_double(&value_, key_buffer, value, unit_buffer));
         return *this;
+    }
+
+    template <size_t KeyN>
+    Telemetry &add_double(const char (&key)[KeyN], double value)
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        return add_double(std::string_view(key, KeyN - 1), value, std::string_view{});
+    }
+
+    template <size_t KeyN, size_t UnitN>
+    Telemetry &add_double(const char (&key)[KeyN], double value, const char (&unit)[UnitN])
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_double(std::string_view(key, KeyN - 1), value, std::string_view(unit, UnitN - 1));
     }
 
     Telemetry &add_bool(std::string_view key, bool value, std::string_view unit = {})
@@ -207,6 +249,21 @@ public:
         return *this;
     }
 
+    template <size_t KeyN>
+    Telemetry &add_bool(const char (&key)[KeyN], bool value)
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        return add_bool(std::string_view(key, KeyN - 1), value, std::string_view{});
+    }
+
+    template <size_t KeyN, size_t UnitN>
+    Telemetry &add_bool(const char (&key)[KeyN], bool value, const char (&unit)[UnitN])
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_bool(std::string_view(key, KeyN - 1), value, std::string_view(unit, UnitN - 1));
+    }
+
     Telemetry &add_string(std::string_view key, std::string_view value, std::string_view unit = {})
     {
         char key_buffer[AETUS_METRIC_KEY_MAX] = {};
@@ -217,6 +274,21 @@ public:
         }
         remember(aetus_telemetry_add_string_n(&value_, key_buffer, value.data(), value.size(), unit_buffer));
         return *this;
+    }
+
+    template <size_t KeyN>
+    Telemetry &add_string(const char (&key)[KeyN], std::string_view value)
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        return add_string(std::string_view(key, KeyN - 1), value, std::string_view{});
+    }
+
+    template <size_t KeyN, size_t UnitN>
+    Telemetry &add_string(const char (&key)[KeyN], std::string_view value, const char (&unit)[UnitN])
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_string(std::string_view(key, KeyN - 1), value, std::string_view(unit, UnitN - 1));
     }
 
     Telemetry &add_bytes(std::string_view key, std::span<const uint8_t> value, std::string_view unit = {})
@@ -230,6 +302,21 @@ public:
         remember(aetus_telemetry_add_bytes(
             &value_, key_buffer, value.data(), value.size(), unit_buffer));
         return *this;
+    }
+
+    template <size_t KeyN>
+    Telemetry &add_bytes(const char (&key)[KeyN], std::span<const uint8_t> value)
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        return add_bytes(std::string_view(key, KeyN - 1), value, std::string_view{});
+    }
+
+    template <size_t KeyN, size_t UnitN>
+    Telemetry &add_bytes(const char (&key)[KeyN], std::span<const uint8_t> value, const char (&unit)[UnitN])
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_bytes(std::string_view(key, KeyN - 1), value, std::string_view(unit, UnitN - 1));
     }
 
     [[nodiscard]] const aetus_telemetry_t &get() const
@@ -360,14 +447,45 @@ public:
         return add_channel_internal(key, unit, nullptr, nullptr);
     }
 
+    template <size_t KeyN>
+    SignalFrame &add_channel(const char (&key)[KeyN])
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        return add_channel(std::string_view(key, KeyN - 1), std::string_view{});
+    }
+
+    template <size_t KeyN, size_t UnitN>
+    SignalFrame &add_channel(const char (&key)[KeyN], const char (&unit)[UnitN])
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_channel(std::string_view(key, KeyN - 1), std::string_view(unit, UnitN - 1));
+    }
+
     SignalFrame &add_channel_with_scale(std::string_view key, std::string_view unit, float scale)
     {
         return add_channel_internal(key, unit, &scale, nullptr);
     }
 
+    template <size_t KeyN, size_t UnitN>
+    SignalFrame &add_channel_with_scale(const char (&key)[KeyN], const char (&unit)[UnitN], float scale)
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_channel_with_scale(std::string_view(key, KeyN - 1), std::string_view(unit, UnitN - 1), scale);
+    }
+
     SignalFrame &add_channel_with_affine(std::string_view key, std::string_view unit, float scale, float offset)
     {
         return add_channel_internal(key, unit, &scale, &offset);
+    }
+
+    template <size_t KeyN, size_t UnitN>
+    SignalFrame &add_channel_with_affine(const char (&key)[KeyN], const char (&unit)[UnitN], float scale, float offset)
+    {
+        detail::static_check_metric_key_literal<KeyN>();
+        detail::static_check_metric_unit_literal<UnitN>();
+        return add_channel_with_affine(std::string_view(key, KeyN - 1), std::string_view(unit, UnitN - 1), scale, offset);
     }
 
     SignalFrame &set_sample_bytes(std::span<const uint8_t> bytes)
