@@ -5,10 +5,20 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
+from aetus_query.auth import (
+    QueryPrincipal,
+    TokenRequest,
+    authenticate_query,
+    enforce_device_access,
+    enforce_query_limits,
+    enforce_stream_access,
+    issue_query_token,
+    verify_admin_token,
+)
 from aetus_query.cache import Cache, NullCache, RedisJsonCache
 from aetus_query.config import Settings
 from aetus_query.repository import PostgresQueryRepository, QueryRepository, StreamRef
@@ -37,8 +47,8 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-Aetus-Admin-Token"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=resolved_settings.compression_minimum_size)
 
@@ -50,10 +60,21 @@ def create_app(
     def readyz() -> dict[str, str]:
         return {"status": "ready"}
 
+    @app.post("/v1/auth/token")
+    def create_query_token(
+        request: TokenRequest,
+        x_aetus_admin_token: str | None = Header(default=None),
+    ) -> dict:
+        verify_admin_token(resolved_settings, x_aetus_admin_token)
+        return issue_query_token(resolved_settings, request)
+
     @app.get("/v1/query/devices/{device_id}/streams")
-    def list_streams(device_id: str) -> dict:
+    def list_streams(device_id: str, authorization: str | None = Header(default=None)) -> dict:
+        principal = _authenticate(resolved_settings, authorization, "streams:list")
+        enforce_device_access(principal, device_id)
         streams = app.state.repository.list_streams(device_id)
-        return {"device_id": device_id, "streams": [_stream_to_json(stream) for stream in streams]}
+        visible_streams = [stream for stream in streams if principal.can_read_stream(stream.key)]
+        return {"device_id": device_id, "streams": [_stream_to_json(stream) for stream in visible_streams]}
 
     @app.get("/v1/query/devices/{device_id}/streams/{key}/series")
     def get_series(
@@ -61,9 +82,16 @@ def create_app(
         key: str,
         from_: str = Query(..., alias="from"),
         to: str = Query(...),
-        max_points: int = Query(default=resolved_settings.max_points_default, ge=1, le=10000),
+        max_points: int = Query(default=resolved_settings.max_points_default, ge=1),
+        authorization: str | None = Header(default=None),
     ) -> dict:
+        principal = _authenticate(resolved_settings, authorization, "query:read")
+        enforce_device_access(principal, device_id)
+        enforce_stream_access(principal, key)
+        if max_points > resolved_settings.max_points_limit:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_points exceeds server limit")
         start, end = _parse_range(from_, to)
+        enforce_query_limits(principal, range_seconds=(end - start).total_seconds(), max_points=max_points)
         cache_key = _cache_key("series", device_id, key, start, end, max_points)
         cached = app.state.cache.get_json(cache_key)
         if cached is not None:
@@ -83,8 +111,13 @@ def create_app(
         key: str,
         from_: str = Query(..., alias="from"),
         to: str = Query(...),
+        authorization: str | None = Header(default=None),
     ) -> dict:
+        principal = _authenticate(resolved_settings, authorization, "query:read")
+        enforce_device_access(principal, device_id)
+        enforce_stream_access(principal, key)
         start, end = _parse_range(from_, to)
+        enforce_query_limits(principal, range_seconds=(end - start).total_seconds())
         cache_key = _cache_key("summary", device_id, key, start, end, 0)
         cached = app.state.cache.get_json(cache_key)
         if cached is not None:
@@ -112,8 +145,13 @@ def create_app(
         key: str,
         from_: str = Query(..., alias="from"),
         to: str = Query(...),
+        authorization: str | None = Header(default=None),
     ) -> dict:
+        principal = _authenticate(resolved_settings, authorization, "frames:read")
+        enforce_device_access(principal, device_id)
+        enforce_stream_access(principal, key)
         start, end = _parse_range(from_, to)
+        enforce_query_limits(principal, range_seconds=(end - start).total_seconds())
         if (end - start).total_seconds() > resolved_settings.max_raw_drilldown_seconds:
             raise HTTPException(status_code=400, detail="raw drill-down window too large")
         stream = _find_stream(app.state.repository, device_id, key)
@@ -122,6 +160,10 @@ def create_app(
         return app.state.repository.frames(device_id, key, start, end)
 
     return app
+
+
+def _authenticate(settings: Settings, authorization: str | None, required_scope: str) -> QueryPrincipal:
+    return authenticate_query(settings, authorization, required_scope=required_scope)
 
 
 def _parse_range(from_: str, to: str) -> tuple[datetime, datetime]:

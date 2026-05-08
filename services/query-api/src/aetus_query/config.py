@@ -17,6 +17,14 @@ class Settings:
     compression_minimum_size: int = 1024
     max_raw_drilldown_seconds: int = 60
     max_points_default: int = 1500
+    max_points_limit: int = 10000
+    query_auth_enabled: bool = True
+    query_jwt_secret: str = "change-me-query-jwt-secret-please-rotate"
+    query_jwt_issuer: str = "aetus-query-api"
+    query_jwt_audience: str = "aetus-stream-viewer"
+    query_jwt_ttl_seconds: int = 15 * 60
+    query_jwt_max_ttl_seconds: int = 60 * 60
+    query_admin_token: str = "change-me-query-admin-token"
     cors_origins: tuple[str, ...] = ("http://127.0.0.1:4173", "http://localhost:4173")
     host: str = "0.0.0.0"
     port: int = 8000
@@ -34,6 +42,15 @@ class Settings:
             compression_minimum_size=int(os.getenv("AETUS_QUERY_COMPRESSION_MIN_SIZE", "1024")),
             max_raw_drilldown_seconds=int(os.getenv("AETUS_QUERY_MAX_RAW_DRILLDOWN_SECONDS", "60")),
             max_points_default=int(os.getenv("AETUS_QUERY_MAX_POINTS_DEFAULT", "1500")),
+            max_points_limit=int(os.getenv("AETUS_QUERY_MAX_POINTS_LIMIT", "10000")),
+            query_auth_enabled=os.getenv("AETUS_QUERY_AUTH_ENABLED", "true").strip().lower()
+            not in {"0", "false", "no", "off"},
+            query_jwt_secret=os.getenv("AETUS_QUERY_JWT_SECRET", "change-me-query-jwt-secret-please-rotate"),
+            query_jwt_issuer=os.getenv("AETUS_QUERY_JWT_ISSUER", "aetus-query-api"),
+            query_jwt_audience=os.getenv("AETUS_QUERY_JWT_AUDIENCE", "aetus-stream-viewer"),
+            query_jwt_ttl_seconds=int(os.getenv("AETUS_QUERY_JWT_TTL_SECONDS", str(15 * 60))),
+            query_jwt_max_ttl_seconds=int(os.getenv("AETUS_QUERY_JWT_MAX_TTL_SECONDS", str(60 * 60))),
+            query_admin_token=os.getenv("AETUS_QUERY_ADMIN_TOKEN", "change-me-query-admin-token"),
             cors_origins=_parse_origin_list(
                 os.getenv("AETUS_CORS_ORIGINS", "http://127.0.0.1:4173,http://localhost:4173")
             ),

@@ -107,17 +107,64 @@ class MemoryCache:
 def client_and_repo() -> tuple[TestClient, FakeRepository]:
     repo = FakeRepository()
     app = create_app(
-        Settings(redis_url=None, cache_ttl_seconds=99, feature_ttl_seconds=123),
+        Settings(
+            redis_url=None,
+            cache_ttl_seconds=99,
+            feature_ttl_seconds=123,
+            query_jwt_secret="unit-query-secret-with-at-least-32-bytes",
+            query_admin_token="unit-admin-token",
+            max_points_limit=10000,
+        ),
         repository=repo,
         cache=MemoryCache(),
     )
     return TestClient(app), repo
 
 
-def test_lists_streams_with_unified_public_model(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+def _auth_headers(
+    client: TestClient,
+    *,
+    devices: list[str] | None = None,
+    streams: list[str] | None = None,
+    scopes: list[str] | None = None,
+    max_range_seconds: int | None = None,
+    max_points: int | None = None,
+) -> dict[str, str]:
+    payload: dict[str, Any] = {
+        "subject": "unit-operator",
+        "devices": devices or ["device-1"],
+        "streams": streams or ["*"],
+        "scopes": scopes or ["query:read", "streams:list", "frames:read"],
+    }
+    if max_range_seconds is not None:
+        payload["max_range_seconds"] = max_range_seconds
+    if max_points is not None:
+        payload["max_points"] = max_points
+    response = client.post("/v1/auth/token", json=payload, headers={"X-Aetus-Admin-Token": "unit-admin-token"})
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def test_token_endpoint_requires_admin_token(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+    client, _ = client_and_repo
+
+    response = client.post("/v1/auth/token", json={"subject": "bad"})
+
+    assert response.status_code == 401
+
+
+def test_query_endpoints_require_jwt(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
     client, _ = client_and_repo
 
     response = client.get("/v1/query/devices/device-1/streams")
+
+    assert response.status_code == 401
+
+
+def test_lists_streams_with_unified_public_model(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+    client, _ = client_and_repo
+
+    response = client.get("/v1/query/devices/device-1/streams", headers=_auth_headers(client))
 
     assert response.status_code == 200
     body = response.json()
@@ -126,12 +173,36 @@ def test_lists_streams_with_unified_public_model(client_and_repo: tuple[TestClie
     assert body["streams"][1]["nominal_rate_hz"] == 200.0
 
 
+def test_list_streams_filters_by_stream_claim(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+    client, _ = client_and_repo
+
+    response = client.get(
+        "/v1/query/devices/device-1/streams",
+        headers=_auth_headers(client, streams=["temperature"]),
+    )
+
+    assert response.status_code == 200
+    assert [stream["key"] for stream in response.json()["streams"]] == ["temperature"]
+
+
+def test_rejects_device_outside_token_claim(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+    client, _ = client_and_repo
+
+    response = client.get(
+        "/v1/query/devices/device-1/streams",
+        headers=_auth_headers(client, devices=["device-2"]),
+    )
+
+    assert response.status_code == 403
+
+
 def test_scalar_series_uses_scalar_repository_path(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
     client, repo = client_and_repo
 
     response = client.get(
         "/v1/query/devices/device-1/streams/temperature/series",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z", "max_points": 10},
+        headers=_auth_headers(client),
     )
 
     assert response.status_code == 200
@@ -144,8 +215,9 @@ def test_series_response_is_cached(client_and_repo: tuple[TestClient, FakeReposi
     client, repo = client_and_repo
     params = {"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"}
 
-    first = client.get("/v1/query/devices/device-1/streams/imu.accel/series", params=params)
-    second = client.get("/v1/query/devices/device-1/streams/imu.accel/series", params=params)
+    headers = _auth_headers(client)
+    first = client.get("/v1/query/devices/device-1/streams/imu.accel/series", params=params, headers=headers)
+    second = client.get("/v1/query/devices/device-1/streams/imu.accel/series", params=params, headers=headers)
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -159,6 +231,7 @@ def test_summary_uses_on_demand_feature_path(client_and_repo: tuple[TestClient, 
     response = client.get(
         "/v1/query/devices/device-1/streams/imu.accel/summary",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"},
+        headers=_auth_headers(client),
     )
 
     assert response.status_code == 200
@@ -172,6 +245,7 @@ def test_frames_are_only_available_for_sampled_streams(client_and_repo: tuple[Te
     response = client.get(
         "/v1/query/devices/device-1/streams/temperature/frames",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:00:10Z"},
+        headers=_auth_headers(client),
     )
 
     assert response.status_code == 404
@@ -183,6 +257,7 @@ def test_rejects_too_large_raw_drilldown_window(client_and_repo: tuple[TestClien
     response = client.get(
         "/v1/query/devices/device-1/streams/imu.accel/frames",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:02:00Z"},
+        headers=_auth_headers(client),
     )
 
     assert response.status_code == 400
@@ -194,6 +269,31 @@ def test_rejects_invalid_time_range(client_and_repo: tuple[TestClient, FakeRepos
     response = client.get(
         "/v1/query/devices/device-1/streams/imu.accel/series",
         params={"from": "2026-05-03T00:01:00Z", "to": "2026-05-03T00:00:00Z"},
+        headers=_auth_headers(client),
     )
 
     assert response.status_code == 400
+
+
+def test_rejects_stream_outside_token_claim(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+    client, _ = client_and_repo
+
+    response = client.get(
+        "/v1/query/devices/device-1/streams/imu.accel/series",
+        params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"},
+        headers=_auth_headers(client, streams=["temperature"]),
+    )
+
+    assert response.status_code == 403
+
+
+def test_rejects_query_over_token_limits(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+    client, _ = client_and_repo
+
+    response = client.get(
+        "/v1/query/devices/device-1/streams/temperature/series",
+        params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z", "max_points": 10},
+        headers=_auth_headers(client, max_range_seconds=30, max_points=5),
+    )
+
+    assert response.status_code == 403

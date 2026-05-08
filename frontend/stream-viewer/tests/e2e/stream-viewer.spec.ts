@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 const now = new Date("2026-05-03T01:00:00Z");
 
@@ -20,11 +21,70 @@ test.beforeEach(async ({ page }) => {
     Object.setPrototypeOf(MockDate, RealDate);
     window.Date = MockDate as DateConstructor;
   }, now.toISOString());
+});
 
-  await page.route("**/v1/query/devices/dense-device-1/streams", async (route) => {
+test("renders a hidden-control multi-device sampled panel with bounded dense fetches", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("2 devices")).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await expect(page.locator("[data-testid='stream-chart'] canvas")).toBeVisible();
+  await expect(page.getByText("dense.temperature")).toBeHidden();
+
+  const visibleRequests = seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:50:00.000Z");
+  expect(visibleRequests).toHaveLength(2);
+  for (const url of visibleRequests) {
+    expect(url.searchParams.get("max_points")).toBe("10000");
+  }
+});
+
+test("opens controls, switches stream, and keeps JWT on query requests", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  await expect(page.getByText("Panel controls")).toBeVisible();
+  await page.getByRole("button", { name: /dense.temperature/ }).click();
+
+  await expect(page.getByRole("heading", { name: "dense.temperature" })).toBeVisible();
+  await expect(page.getByText("20,000 plotted points")).toBeVisible();
+  expect(seriesRequests.some((url) => url.pathname.includes("dense.temperature"))).toBeTruthy();
+});
+
+test("refetches high density data when the visible zoom range changes", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-zoom", {
+        detail: {
+          from: "2026-05-03T00:55:00.000Z",
+          to: "2026-05-03T00:56:00.000Z",
+        },
+      }),
+    );
+  });
+
+  await expect.poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:55:00.000Z").length).toBe(2);
+  await expect(page.getByText("00:55:00 - 00:56:00")).toBeVisible();
+});
+
+async function mockQueryApi(page: Page, seriesRequests: URL[]) {
+  await page.route("**/v1/query/devices/*/streams", async (route) => {
+    expect(route.request().headers()["authorization"]).toBe("Bearer viewer-token");
+    const deviceId = route.request().url().match(/devices\/([^/]+)\/streams/)?.[1] ?? "unknown";
     await route.fulfill({
       json: {
-        device_id: "dense-device-1",
+        device_id: deviceId,
         streams: [
           {
             key: "dense.temperature",
@@ -50,66 +110,47 @@ test.beforeEach(async ({ page }) => {
     });
   });
 
-  await page.route(/\/v1\/query\/devices\/dense-device-1\/streams\/dense\.vibration\/series.*/, async (route) => {
-    await route.fulfill({
-      json: {
-        device_id: "dense-device-1",
-        key: "dense.vibration",
-        kind: "sampled",
-        resolution: "4s",
-        mode: "samples",
-        channels: [
-          {
-            name: "accel_x",
-            unit: "g",
-            points: [
-              { ts: "2026-05-03T00:00:00Z", value: 0.1 },
-              { ts: "2026-05-03T00:00:04Z", value: 0.2 },
-            ],
-          },
-          {
-            name: "accel_y",
-            unit: "g",
-            points: [
-              { ts: "2026-05-03T00:00:00Z", value: 0.3 },
-              { ts: "2026-05-03T00:00:04Z", value: 0.4 },
-            ],
-          },
-        ],
-      },
-    });
+  await page.route(/\/v1\/query\/devices\/[^/]+\/streams\/[^/]+\/series.*/, async (route) => {
+    expect(route.request().headers()["authorization"]).toBe("Bearer viewer-token");
+    const url = new URL(route.request().url());
+    seriesRequests.push(url);
+    const [, deviceId, streamKey] = url.pathname.match(/devices\/([^/]+)\/streams\/([^/]+)\/series/) ?? [];
+    const maxPoints = Number(url.searchParams.get("max_points") ?? "10000");
+    if (streamKey === "dense.temperature") {
+      await route.fulfill({ json: scalarSeries(deviceId, streamKey, maxPoints) });
+      return;
+    }
+    await route.fulfill({ json: sampledSeries(deviceId, streamKey, maxPoints) });
   });
+}
 
-  await page.route(/\/v1\/query\/devices\/dense-device-1\/streams\/dense\.temperature\/series.*/, async (route) => {
-    await route.fulfill({
-      json: {
-        device_id: "dense-device-1",
-        key: "dense.temperature",
-        kind: "scalar",
-        resolution: "raw",
-        points: [
-          { ts: "2026-05-03T00:00:00Z", value: 23.5 },
-          { ts: "2026-05-03T00:10:00Z", value: 23.7 },
-        ],
-      },
-    });
-  });
-});
+function scalarSeries(deviceId: string, key: string, count: number) {
+  return {
+    device_id: deviceId,
+    key,
+    kind: "scalar",
+    resolution: "raw",
+    points: Array.from({ length: count }, (_, index) => ({
+      ts: new Date(Date.UTC(2026, 4, 3, 0, 50, 0) + index * 60).toISOString(),
+      value: 23 + Math.sin(index / 80),
+    })),
+  };
+}
 
-test("renders sampled stream chart from query server URL", async ({ page }) => {
-  await page.goto("/");
-
-  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
-  await expect(page.locator("header").getByText("sampled")).toBeVisible();
-  await expect(page.getByText("4 plotted points")).toBeVisible();
-  await expect(page.locator("[data-testid='stream-chart'] canvas")).toBeVisible();
-});
-
-test("switches to scalar stream without changing component props", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: /dense.temperature/ }).click();
-
-  await expect(page.getByRole("heading", { name: "dense.temperature" })).toBeVisible();
-  await expect(page.locator("header").getByText("scalar")).toBeVisible();
-  await expect(page.getByText("2 plotted points")).toBeVisible();
-});
+function sampledSeries(deviceId: string, key: string, count: number) {
+  return {
+    device_id: deviceId,
+    key,
+    kind: "sampled",
+    resolution: "62.5ms",
+    mode: "samples",
+    channels: ["accel_x", "accel_y"].map((name, channelIndex) => ({
+      name,
+      unit: "g",
+      points: Array.from({ length: count }, (_, index) => ({
+        ts: new Date(Date.UTC(2026, 4, 3, 0, 50, 0) + index * 60).toISOString(),
+        value: Math.sin(index / 30 + channelIndex),
+      })),
+    })),
+  };
+}

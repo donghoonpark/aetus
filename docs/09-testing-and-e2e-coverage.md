@@ -206,7 +206,7 @@ HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같
 
 ### P1
 
-- `stream-viewer` frontend e2e가 `mode=envelope` sampled 응답을 별도 테스트하지 않는다. 지금은 `mode=samples`와 scalar 전환 중심이다.
+- `stream-viewer` frontend e2e가 `mode=envelope` sampled 응답을 별도 테스트하지 않는다. 지금은 dense `mode=samples`, multi-device overlay, scalar 전환, zoom refetch 중심이다.
 - query-api e2e에 `max_points=10000` dense scenario가 없다. unit으로는 sample-bucket을 검증하지만, DB/API/JSON 전체 경로의 고밀도 응답 검증은 아직 별도다.
 - rollup row가 존재할 때 query-api가 raw fallback 대신 rollup을 선택하는 DB-backed e2e가 없다.
 - multi-channel sampled stream에서 모든 channel이 동일 timestamp alignment와 point count를 유지하는지 unit/e2e 보강이 필요하다.

@@ -18,6 +18,7 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 COMPOSE_FILE = ROOT_DIR / "compose" / "e2e-compose.yml"
 QUERY_API_URL = "http://127.0.0.1:18001"
 POSTGRES_DSN = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
+QUERY_ADMIN_TOKEN = "e2e-query-admin-token"
 
 
 def _docker_compose(*args: str) -> subprocess.CompletedProcess[str]:
@@ -146,10 +147,35 @@ def _seed_query_data() -> None:
         conn.commit()
 
 
+def _query_auth_headers(
+    *,
+    devices: list[str] | None = None,
+    streams: list[str] | None = None,
+    scopes: list[str] | None = None,
+) -> dict[str, str]:
+    response = httpx.post(
+        f"{QUERY_API_URL}/v1/auth/token",
+        headers={"X-Aetus-Admin-Token": QUERY_ADMIN_TOKEN},
+        json={
+            "subject": "query-e2e",
+            "devices": devices or ["query-device-1"],
+            "streams": streams or ["*"],
+            "scopes": scopes or ["query:read", "streams:list", "frames:read"],
+        },
+        timeout=10.0,
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 def test_query_api_lists_scalar_and_sampled_streams(query_stack: None) -> None:
     del query_stack
 
-    response = httpx.get(f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams", timeout=10.0)
+    response = httpx.get(
+        f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams",
+        headers=_query_auth_headers(),
+        timeout=10.0,
+    )
 
     assert response.status_code == 200, response.text
     streams = {item["key"]: item for item in response.json()["streams"]}
@@ -164,6 +190,7 @@ def test_query_api_returns_scalar_series(query_stack: None) -> None:
     response = httpx.get(
         f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams/temperature/series",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"},
+        headers=_query_auth_headers(),
         timeout=10.0,
     )
 
@@ -178,6 +205,7 @@ def test_query_api_returns_sampled_series_from_raw_frame(query_stack: None) -> N
     response = httpx.get(
         f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams/imu.accel/series",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"},
+        headers=_query_auth_headers(),
         timeout=10.0,
     )
 
@@ -195,6 +223,7 @@ def test_query_api_materializes_summary_features(query_stack: None) -> None:
     response = httpx.get(
         f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams/imu.accel/summary",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"},
+        headers=_query_auth_headers(),
         timeout=10.0,
     )
 
@@ -216,6 +245,7 @@ def test_query_api_returns_decoded_raw_frames(query_stack: None) -> None:
     response = httpx.get(
         f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams/imu.accel/frames",
         params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:00:10Z"},
+        headers=_query_auth_headers(),
         timeout=10.0,
     )
 

@@ -459,7 +459,7 @@ TimescaleDB 설정:
 
 - raw binary format 해석은 PostgreSQL 내부 함수가 아니라 query-api 애플리케이션 코드에서 수행
 - PostgreSQL은 raw 저장, 범위 조회, feature/rollup upsert, retention을 담당
-- query-api 인증은 아직 구현 범위 밖이며 open decision으로 남아 있다
+- query-api는 `POST /v1/auth/token`으로 short-lived HS256 JWT를 발급하고, `/v1/query/*`에서 scope/device/stream/range/max_points claim을 검증한다
 
 고밀도 테스트 데이터:
 
@@ -480,7 +480,8 @@ TimescaleDB 설정:
 
 - `Vue 3 + Naive UI + ECharts`
 - 단일 컴포넌트 export: `AetusStreamViewer`
-- `queryServerUrl` prop 기반
+- `queryServerUrl` + `authToken`/`tokenProvider` prop 기반
+- multi-device overlay, hidden drawer controls, zoom-triggered high-density refetch 지원
 - 다른 운영 콘솔에 이식 가능한 구조
 
 현재 지원 기능:
@@ -694,8 +695,8 @@ uv run pytest -q
 
 - ingest unit: `39 passed`
 - ingest PostgreSQL/Kafka e2e: `23 passed`
-- query-api unit/e2e: `17 passed`
-- stream-viewer frontend e2e: `2 passed`
+- query-api unit/e2e: unit `18 passed`
+- stream-viewer frontend e2e: `3 passed`
 - QEMU e2e: 기본 실행에서는 skip, `AETUS_RUN_QEMU_E2E=1`일 때 별도 실행
 
 ### unit coverage
@@ -776,10 +777,12 @@ uv run pytest -q
 현재 frontend e2e는 다음을 커버한다.
 
 1. mocked query-api URL을 `queryServerUrl` prop으로 전달
-2. stream metadata 조회
-3. sampled stream의 raw sample value chart 렌더링
-4. scalar stream으로 전환
-5. scalar stream chart 렌더링
+2. JWT bearer header 포함 조회
+3. hidden drawer 기반 stream 전환
+4. 2개 device의 같은 sampled stream overlay
+5. device별 2 channel x 10,000 point 응답 렌더링
+6. scalar stream으로 전환
+7. zoom visible range 변경 시 high-density 재조회
 
 ### qemu_e2e coverage
 

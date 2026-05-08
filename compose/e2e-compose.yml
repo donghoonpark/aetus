@@ -153,6 +153,8 @@ services:
     environment:
       AETUS_POSTGRES_DSN: ${AETUS_POSTGRES_DSN:-postgresql://aetus:aetus@postgres:5432/aetus}
       AETUS_QUERY_REDIS_URL: ${AETUS_QUERY_REDIS_URL:-redis://redis:6379/0}
+      AETUS_QUERY_JWT_SECRET: ${AETUS_QUERY_JWT_SECRET:-e2e-query-jwt-secret-with-at-least-32-bytes}
+      AETUS_QUERY_ADMIN_TOKEN: ${AETUS_QUERY_ADMIN_TOKEN:-e2e-query-admin-token}
       AETUS_HOST: 0.0.0.0
       AETUS_PORT: 8000
     ports:

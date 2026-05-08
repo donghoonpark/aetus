@@ -188,7 +188,7 @@ read path는 저장된 데이터를 화면 해상도와 요청 범위에 맞춰 
 - raw frame drill-down
 - summary/feature materialization
 - Redis 기반 cache
-- ingest 인증과 분리된 query JWT 인증/인가 예정
+- ingest 인증과 분리된 query JWT 발급/검증/인가
 
 관련 상세 문서:
 
@@ -197,8 +197,11 @@ read path는 저장된 데이터를 화면 해상도와 요청 범위에 맞춰 
 ### Stream Viewer
 
 - `frontend/stream-viewer`의 portable Vue component
-- `queryServerUrl`과 device/stream 파라미터만으로 다른 운영 콘솔에 이식 가능
+- `queryServerUrl`, query JWT, device/stream 파라미터만으로 다른 운영 콘솔에 이식 가능
 - ECharts 기반 scalar/sampled chart 렌더링
+- 여러 device의 같은 stream key overlay
+- zoom/pan 시 query-api에 visible range를 재요청해 high-density 데이터를 fetch
+- 세부 설정은 drawer 안에 숨겨 기본 화면은 chart 중심으로 유지
 - 브라우저는 chart renderer 역할에 집중하고, downsampling은 query-api가 담당
 
 ## 데이터 흐름

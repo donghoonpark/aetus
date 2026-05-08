@@ -573,11 +573,15 @@ query frontend는 페이지가 아니라 재사용 가능한 컴포넌트로 둔
 | Prop | 설명 |
 | --- | --- |
 | `queryServerUrl` | query-api base URL |
-| `deviceId` | 초기 장치 ID. 컴포넌트 안에서 수정 가능 |
+| `authToken` | query-api용 bearer JWT |
+| `tokenProvider` | token 만료/교체 시 host app이 JWT를 공급하는 async callback |
+| `deviceId` | 단일 초기 장치 ID. `initialDeviceIds`가 없을 때 호환용으로 사용 |
+| `initialDeviceIds` | 초기 장치 ID 목록. 여러 device의 같은 stream key를 overlay 가능 |
 | `initialStreamKey` | 초기 stream key |
 | `initialRangePreset` | 초기 범위 preset. `10m`, `1h`, `6h`, `1d` |
-| `authToken` | query-api용 bearer JWT. 인증 구현 시 추가 |
-| `maxPointsPerRequest` | 기본 차트 해상도 상한. 기본값 `1500` |
+| `maxPointsPerRequest` | 요청당 차트 해상도 상한. 기본값 `10000` |
+| `autoOpenControls` | 최초 렌더링 시 drawer control을 열지 여부 |
+| `panelTitle` | 패널 상단 eyebrow 문구 |
 
 사용 예:
 
@@ -590,7 +594,8 @@ import "@aetus/stream-viewer/style.css";
 <template>
   <AetusStreamViewer
     query-server-url="http://127.0.0.1:18001"
-    device-id="dense-device-1"
+    :auth-token="queryJwt"
+    :initial-device-ids="['dense-device-1', 'dense-device-2']"
     initial-stream-key="dense.vibration"
     initial-range-preset="10m"
     :max-points-per-request="10000"
@@ -600,24 +605,36 @@ import "@aetus/stream-viewer/style.css";
 
 현재 컴포넌트 동작:
 
-- `GET /v1/query/devices/{device_id}/streams`로 stream metadata 조회
+- 평상시에는 chart surface와 작은 상태 정보만 노출하고, device/stream/channel/range 설정은 우측 drawer에 숨긴다
+- `GET /v1/query/devices/{device_id}/streams`로 device별 stream metadata 조회
+- 여러 device에서 같은 `stream.key`를 선택하면 같은 chart에 overlay한다
 - `GET /v1/query/devices/{device_id}/streams/{key}/series`로 chart series 조회
 - `scalar` stream은 단일 line series로 렌더링
 - `sampled` stream은 channel별 min/max envelope로 렌더링
 - `10m`, `1h`, `6h`, `1d` 범위 preset과 `max_points` 제어 제공
+- ECharts zoom 이벤트가 발생하면 현재 visible range를 query-api에 재요청해 high-density 데이터를 가져온다
+- query range, stream, device 변경 시 이전 요청은 `AbortController`로 취소한다
+- adjacent range prefetch는 opportunistic하게 수행하며 실패해도 현재 chart를 방해하지 않는다
 
-향후 host application 연동 시 추가할 수 있는 이벤트:
+host application 연동 이벤트:
 
 - `range-change`
+- `device-change`
 - `stream-change`
-- `point-click`
-- `request-error`
+- `query-start`
+- `query-success`
+- `query-error`
+- `auth-expired`
+- `density-change`
 
 현재 e2e 검증:
 
 - query-api base URL을 prop으로만 받아 mocked query-api와 통신
-- sampled stream 렌더링
+- JWT bearer header 포함 여부
+- 2개 device의 같은 sampled stream overlay
+- 10분 범위에서 device별 2 channel x 10,000 point 응답 렌더링
 - scalar stream 전환 렌더링
+- zoom/high-density visible range 재요청
 
 ## 인증/인가 방향
 
@@ -633,7 +650,8 @@ query-api 인증은 ingest 인증과 분리한다.
 ```mermaid
 flowchart TB
     Operator["Operator / dashboard shell"] --> Issuer["Auth issuer"]
-    Issuer --> JWT["Short-lived query JWT"]
+    Issuer --> QueryAuth["POST /v1/auth/token"]
+    QueryAuth --> JWT["Short-lived query JWT"]
     JWT --> Viewer["AetusStreamViewer"]
     Viewer --> Query["query-api"]
     Query --> Verify["JWT verify"]
@@ -643,8 +661,9 @@ flowchart TB
 
 권장 기본안:
 
-- query-api는 JWT 발급자가 아니라 JWT 검증자 역할만 맡는다
-- operator UI 또는 host shell은 별도 로그인/SSO/내부 admin service에서 JWT를 받아 stream-viewer에 전달한다
+- query-api가 `POST /v1/auth/token`으로 짧은 수명의 query JWT를 발급한다
+- token 발급 API는 `X-Aetus-Admin-Token`을 요구한다
+- operator UI 또는 host shell은 admin/service credential을 직접 브라우저에 노출하지 않고 backend에서 query JWT를 발급받아 stream-viewer에 전달한다
 - query JWT는 짧은 만료 시간을 갖는다
 - `/v1/healthz`, `/v1/readyz`는 인증 없이 허용한다
 - `/v1/query/*`는 `Authorization: Bearer <jwt>`를 요구한다
@@ -664,15 +683,17 @@ flowchart TB
 
 ```json
 {
-  "iss": "aetus-auth",
+  "iss": "aetus-query-api",
   "sub": "operator-123",
-  "aud": "aetus-query-api",
+  "aud": "aetus-stream-viewer",
   "iat": 1760000000,
   "exp": 1760003600,
-  "scope": ["query:read"],
-  "sites": ["demo-lab"],
-  "groups": ["line-1"],
-  "devices": []
+  "scope": ["query:read", "streams:list", "frames:read"],
+  "devices": ["dense-device-1", "dense-device-2"],
+  "device_groups": ["line-1"],
+  "streams": ["dense.vibration", "*"],
+  "max_range_seconds": 86400,
+  "max_points": 10000
 }
 ```
 
@@ -683,14 +704,16 @@ claim 의미:
 | `iss` | 발급자. query-api 설정과 일치해야 함 |
 | `aud` | 대상 audience. 기본값 예: `aetus-query-api` |
 | `sub` | 사용자 또는 service principal ID |
-| `scope` | 기능 권한. v1은 `query:read`만 필수 |
-| `sites` | site 단위 조회 권한 |
-| `groups` | device group 또는 production line 단위 조회 권한 |
+| `scope` | 기능 권한. `streams:list`, `query:read`, `frames:read` |
 | `devices` | 개별 device allowlist |
+| `device_groups` | production line 또는 group 단위 조회 권한. v1은 claim 보존 중심 |
+| `streams` | stream key allowlist |
+| `max_range_seconds` | token이 허용하는 최대 조회 기간 |
+| `max_points` | token이 허용하는 최대 chart point 요청 수 |
 
 와일드카드 정책:
 
-- `sites=["*"]` 또는 `devices=["*"]`는 내부 admin 전용으로만 사용한다
+- `devices=["*"]` 또는 `streams=["*"]`는 내부 admin 전용으로만 사용한다
 - 일반 operator token은 site/group 중심으로 제한한다
 - 개별 `devices` claim은 예외 공유나 디버깅용으로 둔다
 
@@ -705,7 +728,7 @@ device별 권한 자체는 구현 난도가 높지 않다.
 - 기본 운영 단위는 `site` 또는 `group`
 - `devices` claim은 optional allowlist로 지원한다
 - 별도 사용자/역할 관리 UI는 만들지 않는다
-- stream-level ACL은 v1 범위에서 제외한다
+- stream allowlist는 `streams` claim으로 지원하되, 별도 ACL DB/UI는 v1 범위에서 제외한다
 
 권한 판정 순서:
 
@@ -715,46 +738,30 @@ flowchart TD
     Auth -- "no" --> R401["401 Unauthorized"]
     Auth -- "yes" --> Scope{"scope includes query:read?"}
     Scope -- "no" --> R403["403 Forbidden"]
-    Scope -- "yes" --> All{"devices or sites includes *?"}
+    Scope -- "yes" --> All{"devices includes *?"}
     All -- "yes" --> Allow["allow"]
     All -- "no" --> Meta["load device metadata"]
     Meta --> Device{"device_id in devices?"}
     Device -- "yes" --> Allow
-    Device -- "no" --> Site{"device site/group in claims?"}
-    Site -- "yes" --> Allow
-    Site -- "no" --> R403
+    Device -- "no" --> R403
 ```
 
 ### 알고리즘과 key 관리
 
-권장 우선순위:
-
-1. 운영/공개망: `RS256` 또는 `ES256` + JWKS
-2. 내부망/개발 초기: `HS256` shared secret
-
-초기 구현은 두 경로를 모두 열 수 있다.
-
-- local/dev: `HS256`
-- production-ready: `JWKS_URL` 기반 `RS256`
+현재 구현은 `HS256` shared secret을 사용한다.
+분리망/내부망 기준으로는 배포와 운영이 단순하다는 장점이 있다.
+공개망 또는 외부 SSO 연동이 필요해지면 `RS256`/`ES256` + JWKS 검증 경로를 추가한다.
 
 환경변수 예:
 
 ```bash
 AETUS_QUERY_AUTH_ENABLED=true
-AETUS_QUERY_JWT_ALGORITHM=HS256
-AETUS_QUERY_JWT_SECRET=dev-query-secret
-AETUS_QUERY_JWT_ISSUER=aetus-auth
-AETUS_QUERY_JWT_AUDIENCE=aetus-query-api
-```
-
-JWKS 운영 예:
-
-```bash
-AETUS_QUERY_AUTH_ENABLED=true
-AETUS_QUERY_JWT_ALGORITHM=RS256
-AETUS_QUERY_JWKS_URL=https://auth.internal/.well-known/jwks.json
-AETUS_QUERY_JWT_ISSUER=aetus-auth
-AETUS_QUERY_JWT_AUDIENCE=aetus-query-api
+AETUS_QUERY_JWT_SECRET=dev-query-secret-with-at-least-32-bytes
+AETUS_QUERY_JWT_ISSUER=aetus-query-api
+AETUS_QUERY_JWT_AUDIENCE=aetus-stream-viewer
+AETUS_QUERY_JWT_TTL_SECONDS=900
+AETUS_QUERY_JWT_MAX_TTL_SECONDS=3600
+AETUS_QUERY_ADMIN_TOKEN=internal-admin-token
 ```
 
 ### query-api endpoint별 인증 정책
@@ -763,19 +770,22 @@ AETUS_QUERY_JWT_AUDIENCE=aetus-query-api
 | --- | --- | --- |
 | `GET /v1/healthz` | no | k8s liveness |
 | `GET /v1/readyz` | no | k8s readiness |
-| `GET /v1/query/devices/{device_id}/streams` | yes | device/site/group 권한 확인 |
-| `GET /v1/query/devices/{device_id}/streams/{key}/series` | yes | device/site/group 권한 확인 |
-| `GET /v1/query/devices/{device_id}/streams/{key}/summary` | yes | device/site/group 권한 확인 |
-| `GET /v1/query/devices/{device_id}/streams/{key}/frames` | yes | device/site/group 권한 확인, raw drilldown window 제한 유지 |
+| `POST /v1/auth/token` | admin token | query JWT 발급 |
+| `GET /v1/query/devices/{device_id}/streams` | yes | device/stream claim 확인 |
+| `GET /v1/query/devices/{device_id}/streams/{key}/series` | yes | device/stream/range/max_points claim 확인 |
+| `GET /v1/query/devices/{device_id}/streams/{key}/summary` | yes | device/stream/range claim 확인 |
+| `GET /v1/query/devices/{device_id}/streams/{key}/frames` | yes | `frames:read`, device/stream/range claim 확인, raw drilldown window 제한 유지 |
 
 ### frontend 연동
 
-`AetusStreamViewer`는 JWT를 직접 발급하거나 갱신하지 않는다.
+`AetusStreamViewer`는 admin token을 다루지 않는다.
+이미 발급된 JWT를 `authToken`으로 받거나, host application이 제공하는 `tokenProvider` callback을 호출한다.
 
 권장 역할:
 
 - host application: 로그인, refresh, token 보관, 만료 처리
-- stream-viewer: `authToken` prop을 받아 `Authorization` header 추가
+- host application backend: `POST /v1/auth/token` 호출
+- stream-viewer: `authToken` 또는 `tokenProvider` 결과를 받아 `Authorization` header 추가
 
 예:
 
@@ -783,7 +793,7 @@ AETUS_QUERY_JWT_AUDIENCE=aetus-query-api
 <AetusStreamViewer
   query-server-url="https://query.internal"
   :auth-token="queryJwt"
-  device-id="esp32c5-test-001"
+  :initial-device-ids="['esp32c5-test-001']"
 />
 ```
 
@@ -791,14 +801,13 @@ AETUS_QUERY_JWT_AUDIENCE=aetus-query-api
 
 - device token은 브라우저에 넘기지 않는다
 - query JWT는 read-only scope로 제한한다
-- token 만료 시 component는 `401`을 host application이 처리할 수 있게 error event를 내보내는 방향이 좋다
+- token 만료 시 component는 `auth-expired` event를 발생시킨다
 
 ### v1 비범위
 
 - query-api 내부 로그인 화면
 - refresh token 발급
 - 사용자/역할 관리 UI
-- stream key 단위 ACL
 - 권한 변경 즉시 revoke
 - device token을 query token으로 교환하는 API
 
