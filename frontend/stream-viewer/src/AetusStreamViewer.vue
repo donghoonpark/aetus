@@ -15,8 +15,7 @@
           <n-tag v-if="selectedKind" :type="selectedKind === 'sampled' ? 'info' : 'success'" round>
             {{ selectedKind }}
           </n-tag>
-          <n-tag v-if="loadingSeries" type="warning" round>fetching</n-tag>
-          <n-button secondary circle title="Refresh" :loading="loading" @click="refresh">
+          <n-button secondary circle title="Refresh" @click="refresh">
             <n-icon :component="RefreshCw" />
           </n-button>
           <n-button type="primary" secondary circle title="Open controls" @click="drawerOpen = true">
@@ -32,6 +31,10 @@
         </div>
         <div ref="chartEl" class="chart-surface" data-testid="stream-chart"></div>
         <div class="floating-status">
+          <span class="fetch-status" :class="{ active: loading }">
+            <i></i>
+            {{ loading ? "syncing" : "synced" }}
+          </span>
           <span>{{ seriesResolution }}</span>
           <span>{{ selectedChannels.length ? selectedChannels.join(", ") : "all channels" }}</span>
         </div>
@@ -250,6 +253,9 @@ let chart: echarts.ECharts | null = null;
 let activeRequest: AbortController | null = null;
 let zoomTimer: number | undefined;
 let renderingChart = false;
+let suppressDataZoomUntil = 0;
+
+const WHEEL_ZOOM_OUT_FACTOR = 1.8;
 
 const normalizedQueryUrl = computed(() => props.queryServerUrl.replace(/\/$/, ""));
 const drawerOpen = ref(props.autoOpenControls);
@@ -325,12 +331,14 @@ onMounted(async () => {
   window.addEventListener("resize", resizeChart);
   window.addEventListener("aetus-test-zoom", onExternalZoom as EventListener);
   window.addEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
+  window.addEventListener("aetus-test-wheel-zoomout", onExternalWheelZoomOut as EventListener);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resizeChart);
   window.removeEventListener("aetus-test-zoom", onExternalZoom as EventListener);
   window.removeEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
+  window.removeEventListener("aetus-test-wheel-zoomout", onExternalWheelZoomOut as EventListener);
   activeRequest?.abort();
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
   chart?.dispose();
@@ -459,7 +467,9 @@ function timeLabel(value: string) {
 function autoMaxPoints(reason: string) {
   const width = chartEl.value?.clientWidth ?? 900;
   const pixelBudget = Math.max(1500, Math.floor(width * 12));
-  const desired = reason === "zoom" ? Math.max(pixelBudget, maxPoints.value) : Math.max(pixelBudget, props.maxPointsPerRequest);
+  const desired = ["zoom", "zoom-out", "pan"].includes(reason)
+    ? Math.max(pixelBudget, maxPoints.value)
+    : Math.max(pixelBudget, props.maxPointsPerRequest);
   return Math.min(props.maxPointsPerRequest, desired);
 }
 
@@ -484,6 +494,8 @@ function renderChart() {
   chart ??= echarts.init(chartEl.value);
   chart.off("datazoom");
   chart.on("datazoom", handleChartZoom);
+  chart.getZr().off("mousewheel", handleWheelZoomOut);
+  chart.getZr().on("mousewheel", handleWheelZoomOut);
   const chartSeries = seriesResponses.value.flatMap((response) => responseToChartSeries(response));
   renderingChart = true;
   chart.setOption(
@@ -493,7 +505,26 @@ function renderChart() {
       tooltip: { trigger: "axis" },
       legend: { top: 10, type: "scroll" },
       grid: { left: 52, right: 28, top: 58, bottom: 58 },
-      dataZoom: [{ type: "inside", throttle: 250 }, { type: "slider", height: 24, bottom: 16 }],
+      dataZoom: [
+        {
+          type: "inside",
+          filterMode: "none",
+          throttle: 160,
+          zoomOnMouseWheel: true,
+          moveOnMouseWheel: true,
+          moveOnMouseMove: true,
+          preventDefaultMouseMove: true,
+        },
+        {
+          type: "slider",
+          filterMode: "none",
+          height: 24,
+          bottom: 16,
+          brushSelect: true,
+          realtime: true,
+          throttle: 160,
+        },
+      ],
       xAxis: { type: "time" },
       yAxis: { type: "value", scale: true },
       series: chartSeries,
@@ -557,13 +588,59 @@ function responseToChartSeries(response: SeriesResponse) {
 }
 
 function handleChartZoom(event: unknown) {
-  if (!autoRefetchOnZoom.value || renderingChart) return;
+  if (!autoRefetchOnZoom.value || renderingChart || Date.now() < suppressDataZoomUntil) return;
   const range = zoomRangeFromEvent(event);
   if (!range) return;
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
   zoomTimer = window.setTimeout(() => {
     void loadSeries(range, "zoom");
-  }, 300);
+  }, 450);
+}
+
+function handleWheelZoomOut(event: unknown) {
+  if (!autoRefetchOnZoom.value || renderingChart) return;
+  const wheel = event as {
+    offsetX?: number;
+    wheelDelta?: number;
+    event?: {
+      deltaY?: number;
+      preventDefault?: () => void;
+      stopPropagation?: () => void;
+    };
+  };
+  if (!isWheelZoomOut(wheel)) return;
+  wheel.event?.preventDefault?.();
+  wheel.event?.stopPropagation?.();
+  suppressDataZoomUntil = Date.now() + 700;
+  const range = expandedRangeFromWheel(wheel);
+  if (!range) return;
+  if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
+  zoomTimer = window.setTimeout(() => {
+    void loadSeries(range, "zoom-out");
+  }, 350);
+}
+
+function isWheelZoomOut(event: { wheelDelta?: number; event?: { deltaY?: number } }) {
+  if (typeof event.event?.deltaY === "number") return event.event.deltaY > 0;
+  if (typeof event.wheelDelta === "number") return event.wheelDelta < 0;
+  return false;
+}
+
+function expandedRangeFromWheel(event: { offsetX?: number }): { from: string; to: string } | null {
+  const fromMs = Date.parse(visibleRange.value.from);
+  const toMs = Date.parse(visibleRange.value.to);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return null;
+  const span = toMs - fromMs;
+  const anchorRatio = wheelAnchorRatio(event.offsetX);
+  const nextSpan = span * WHEEL_ZOOM_OUT_FACTOR;
+  const nextFrom = fromMs - (nextSpan - span) * anchorRatio;
+  return normalizedRange(nextFrom, nextFrom + nextSpan);
+}
+
+function wheelAnchorRatio(offsetX: number | undefined) {
+  if (!chartEl.value || typeof offsetX !== "number") return 0.5;
+  const ratio = offsetX / Math.max(1, chartEl.value.clientWidth);
+  return Math.min(0.95, Math.max(0.05, ratio));
 }
 
 function zoomRangeFromEvent(event: unknown): { from: string; to: string } | null {
@@ -622,6 +699,18 @@ function onExternalZoom(event: CustomEvent<{ from: string; to: string }>) {
 
 function onExternalDataZoom(event: CustomEvent<unknown>) {
   handleChartZoom(event.detail);
+}
+
+function onExternalWheelZoomOut(event: CustomEvent<{ anchorRatio?: number }>) {
+  if (!autoRefetchOnZoom.value) return;
+  const fromMs = Date.parse(visibleRange.value.from);
+  const toMs = Date.parse(visibleRange.value.to);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return;
+  const span = toMs - fromMs;
+  const anchorRatio = Math.min(0.95, Math.max(0.05, event.detail?.anchorRatio ?? 0.5));
+  const nextSpan = span * WHEEL_ZOOM_OUT_FACTOR;
+  const nextFrom = fromMs - (nextSpan - span) * anchorRatio;
+  void loadSeries(normalizedRange(nextFrom, nextFrom + nextSpan) ?? visibleRange.value, "zoom-out");
 }
 
 async function prefetchAdjacent(range: { from: string; to: string }, requestMaxPoints: number) {
@@ -725,6 +814,12 @@ function resizeChart() {
   width: 100%;
   height: calc(100vh - 150px);
   min-height: 520px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.chart-surface:active {
+  cursor: grabbing;
 }
 
 .empty-state {
@@ -754,6 +849,40 @@ function resizeChart() {
   background: rgba(255, 255, 255, 0.72);
   font-size: 12px;
   font-weight: 700;
+}
+
+.fetch-status {
+  min-width: 72px;
+}
+
+.fetch-status i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+  vertical-align: 1px;
+}
+
+.fetch-status.active i {
+  background: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16);
+  animation: aetus-fetch-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes aetus-fetch-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
 }
 
 .stream-row {

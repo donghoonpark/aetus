@@ -32,6 +32,8 @@ test("renders a hidden-control multi-device sampled panel with bounded dense fet
   await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
   await expect(page.getByText("2 devices")).toBeVisible();
   await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await expect(page.locator(".fetch-status")).toBeVisible();
+  await expect(page.getByText("fetching")).toBeHidden();
   await expect(page.locator("[data-testid='stream-chart'] canvas")).toBeVisible();
   await expect(page.getByText("dense.temperature")).toBeHidden();
 
@@ -99,6 +101,50 @@ test("converts ECharts dataZoom percent payload into a server-side range fetch",
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:55:00.000Z").length)
     .toBe(2);
   await expect(page.getByText("00:55:00 - 00:56:00")).toBeVisible();
+});
+
+test("treats ECharts pan payloads as dynamic server-side range fetches", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-datazoom", {
+        detail: {
+          batch: [{ start: 20, end: 30 }],
+        },
+      }),
+    );
+  });
+
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:52:00.000Z").length)
+    .toBe(2);
+  await expect(page.getByText("00:52:00 - 00:53:00")).toBeVisible();
+});
+
+test("implements wheel zoom-out by expanding beyond the loaded chart extent", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-wheel-zoomout", {
+        detail: { anchorRatio: 0.5 },
+      }),
+    );
+  });
+
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:46:00.000Z").length)
+    .toBe(2);
+  await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
 });
 
 async function mockQueryApi(page: Page, seriesRequests: URL[]) {
