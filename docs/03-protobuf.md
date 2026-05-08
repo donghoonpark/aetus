@@ -98,6 +98,63 @@ message SignalChannel {
 - 한 telemetry event는 `metric_set` 또는 `signal_frame` 중 하나만 가진다.
 - 서버는 telemetry payload kind에 따라 metric pipeline 또는 signal frame pipeline 중 하나로 publish한다.
 
+## 장기 확장 후보: ImageFrame / MediaFrame
+
+현재 `MetricSet`과 `SignalFrame`은 scalar telemetry와 dense numeric sample block을 목표로 한다. 이 구조는 이미지 또는 비디오 스트림에는 직접 적합하지 않다.
+
+`SignalFrame`이 전제하는 모델:
+
+- 고정 `sample_interval_ns`
+- numeric channel 배열
+- `interleaved` 또는 `planar` sample layout
+- `float32`, `int16`, `uint16`, `int32` 같은 numeric encoding
+- `sample_count` 기반 시간축
+
+이미지/비디오 payload가 별도로 요구하는 모델:
+
+- `width`, `height`
+- pixel format 또는 color space
+- compression/codec
+- frame index 또는 media sequence
+- exposure, gain, lens/camera metadata
+- 원본 blob 크기, hash, object storage reference
+- optional thumbnail, embedding, detected object metadata
+
+따라서 장기적으로 이미지 snapshot 또는 영상 frame을 지원하려면 `TelemetryPayload`에 별도 `oneof` branch를 추가하는 방향을 검토한다.
+
+개념 예시:
+
+```proto
+message TelemetryPayload {
+  oneof payload {
+    MetricSet metric_set = 1;
+    SignalFrame signal_frame = 2;
+    ImageFrame image_frame = 3; // future extension
+  }
+}
+
+message ImageFrame {
+  string stream_key = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  ImagePixelFormat pixel_format = 4;
+  ImageEncoding encoding = 5;
+  bytes data = 6;              // small snapshot only
+  string object_uri = 7;        // preferred for large images/video
+  string sha256_hex = 8;
+  uint64 frame_index = 9;
+  map<string, string> metadata = 10;
+}
+```
+
+초기 원칙:
+
+- 작은 JPEG snapshot은 protobuf `bytes data`로 보낼 수 있다.
+- 연속 이미지 스트림, 큰 frame, 비디오 chunk는 protobuf/Kafka/PostgreSQL에 blob을 직접 오래 싣지 않는다.
+- 권장 구조는 object storage에 원본 media를 저장하고 Kafka/PostgreSQL에는 metadata, `object_uri`, hash, 크기, capture time만 싣는 방식이다.
+- ML/이상감지는 object reference를 통해 필요 시 media를 로드하고, feature/embedding/anomaly 결과만 별도 이벤트와 테이블에 저장한다.
+- 이 확장은 현재 제품 freeze 범위 밖의 장기 후보이며, 현 proto 구현에는 반영하지 않는다.
+
 ## 중복 방지 키
 
 여기서 말하는 중복 방지 키는 "같은 이벤트가 재전송되어도 서버가 한 번만 반영하게 만드는 구분 기준"이다.

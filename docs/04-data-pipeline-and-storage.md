@@ -165,6 +165,35 @@ erDiagram
 - rollup 해상도는 `62.5ms -> 250ms -> 1s -> 4s -> 16s -> 64s ...` 고정 `x4` tier ladder를 기본안으로 둔다
 - `signal_frame_features`는 eager 적재하지 않고 query-triggered materialization으로 생성하며, 자체 retention 이후 자동 삭제한다
 
+## 장기 확장 후보: 이미지/비디오 데이터 경로
+
+현재 장기 저장 모델은 scalar metric과 dense numeric signal frame에 맞춰져 있다. 이미지 snapshot, 비디오 frame, camera stream은 `device_signal_frames.samples`에 넣는 방식보다 별도 media 경로가 적합하다.
+
+권장 장기 구조:
+
+```mermaid
+flowchart TB
+    Device["Edge camera / vision device"] --> Ingest["ingest-api"]
+    Ingest --> ObjectStore["Object storage\nS3 / MinIO / NAS"]
+    Ingest --> Kafka["Kafka metadata topic\ndevice.media_frame.v1"]
+    Kafka --> Connect["Kafka Connect / writer"]
+    Connect --> MediaTable["media_frames metadata table"]
+    ObjectStore --> Lake["Datalake / ML training"]
+    MediaTable --> Query["query-api"]
+    Query --> Viewer["dashboard / review UI"]
+```
+
+설계 원칙:
+
+- 작은 JPEG snapshot은 protobuf body에 직접 담을 수 있지만, 장기 구조의 기본값으로 삼지 않는다.
+- 큰 이미지, 연속 frame, 비디오 chunk는 object storage에 저장한다.
+- Kafka와 PostgreSQL에는 `device_id`, `boot_id`, `sequence`, `stream_key`, `width`, `height`, `encoding`, `object_uri`, `sha256`, `size_bytes`, `timestamp_ns` 같은 metadata만 적재한다.
+- object storage path는 재처리와 ML 학습이 가능하도록 device/time partition 형태를 고려한다.
+- PostgreSQL/TimescaleDB는 media 원본 저장소가 아니라 catalog, 검색, annotation, anomaly overlay를 담당한다.
+- ML feature, embedding, detection result는 원본 media와 분리해 별도 feature/anomaly 테이블 또는 lake table에 저장한다.
+
+이 확장은 현재 `embedded + ingest + numeric storage` 제품 범위 밖의 장기 후보로 둔다. 현재 proto와 DB schema에는 `ImageFrame` 또는 `MediaFrame`을 추가하지 않는다.
+
 TimescaleDB 설정:
 
 `services/postgres/initdb/00-base.sql`은 plain PostgreSQL에서도 실행 가능한 기본 schema와 trigger만 정의한다. `services/postgres/initdb/10-timescale.sql`은 TimescaleDB가 있는 환경에서만 적용하는 선택 레이어이며, 개발 compose 기본 이미지는 TimescaleDB를 포함한다.
