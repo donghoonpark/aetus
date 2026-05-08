@@ -78,6 +78,29 @@ test("refetches high density data when the visible zoom range changes", async ({
   await expect(page.getByText("00:55:00 - 00:56:00")).toBeVisible();
 });
 
+test("converts ECharts dataZoom percent payload into a server-side range fetch", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-datazoom", {
+        detail: {
+          batch: [{ start: 50, end: 60 }],
+        },
+      }),
+    );
+  });
+
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:55:00.000Z").length)
+    .toBe(2);
+  await expect(page.getByText("00:55:00 - 00:56:00")).toBeVisible();
+});
+
 async function mockQueryApi(page: Page, seriesRequests: URL[]) {
   await page.route("**/v1/query/devices/*/streams", async (route) => {
     expect(route.request().headers()["authorization"]).toBe("Bearer viewer-token");

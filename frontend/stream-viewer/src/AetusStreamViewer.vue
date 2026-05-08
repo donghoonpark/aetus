@@ -249,6 +249,7 @@ const chartEl = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
 let activeRequest: AbortController | null = null;
 let zoomTimer: number | undefined;
+let renderingChart = false;
 
 const normalizedQueryUrl = computed(() => props.queryServerUrl.replace(/\/$/, ""));
 const drawerOpen = ref(props.autoOpenControls);
@@ -323,11 +324,13 @@ onMounted(async () => {
   await loadStreams();
   window.addEventListener("resize", resizeChart);
   window.addEventListener("aetus-test-zoom", onExternalZoom as EventListener);
+  window.addEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resizeChart);
   window.removeEventListener("aetus-test-zoom", onExternalZoom as EventListener);
+  window.removeEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
   activeRequest?.abort();
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
   chart?.dispose();
@@ -482,6 +485,7 @@ function renderChart() {
   chart.off("datazoom");
   chart.on("datazoom", handleChartZoom);
   const chartSeries = seriesResponses.value.flatMap((response) => responseToChartSeries(response));
+  renderingChart = true;
   chart.setOption(
     {
       animation: false,
@@ -496,6 +500,9 @@ function renderChart() {
     },
     true,
   );
+  window.setTimeout(() => {
+    renderingChart = false;
+  }, 0);
 }
 
 function responseToChartSeries(response: SeriesResponse) {
@@ -550,7 +557,7 @@ function responseToChartSeries(response: SeriesResponse) {
 }
 
 function handleChartZoom(event: unknown) {
-  if (!autoRefetchOnZoom.value) return;
+  if (!autoRefetchOnZoom.value || renderingChart) return;
   const range = zoomRangeFromEvent(event);
   if (!range) return;
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
@@ -560,18 +567,61 @@ function handleChartZoom(event: unknown) {
 }
 
 function zoomRangeFromEvent(event: unknown): { from: string; to: string } | null {
-  const payload = event as { batch?: Array<{ startValue?: string | number; endValue?: string | number }>; startValue?: string | number; endValue?: string | number };
+  const payload = event as {
+    batch?: Array<{
+      start?: number;
+      end?: number;
+      startValue?: string | number;
+      endValue?: string | number;
+    }>;
+    start?: number;
+    end?: number;
+    startValue?: string | number;
+    endValue?: string | number;
+  };
   const item = payload.batch?.[0] ?? payload;
-  if (item.startValue === undefined || item.endValue === undefined) return null;
-  const from = new Date(item.startValue).toISOString();
-  const to = new Date(item.endValue).toISOString();
-  if (from >= to) return null;
-  return { from, to };
+  if (item.startValue !== undefined && item.endValue !== undefined) {
+    return normalizedRange(timeValueToMs(item.startValue), timeValueToMs(item.endValue));
+  }
+  if (typeof item.start === "number" && typeof item.end === "number") {
+    return rangeFromPercent(item.start, item.end);
+  }
+  return null;
+}
+
+function rangeFromPercent(startPercent: number, endPercent: number): { from: string; to: string } | null {
+  const baseStart = Date.parse(visibleRange.value.from);
+  const baseEnd = Date.parse(visibleRange.value.to);
+  if (!Number.isFinite(baseStart) || !Number.isFinite(baseEnd) || baseEnd <= baseStart) return null;
+  const start = clampPercent(startPercent);
+  const end = clampPercent(endPercent);
+  const lower = Math.min(start, end);
+  const upper = Math.max(start, end);
+  if (upper - lower < 0.001) return null;
+  const span = baseEnd - baseStart;
+  return normalizedRange(baseStart + (span * lower) / 100, baseStart + (span * upper) / 100);
+}
+
+function normalizedRange(fromMs: number, toMs: number): { from: string; to: string } | null {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return null;
+  return { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() };
+}
+
+function timeValueToMs(value: string | number) {
+  return typeof value === "number" ? value : Date.parse(value);
+}
+
+function clampPercent(value: number) {
+  return Math.min(100, Math.max(0, value));
 }
 
 function onExternalZoom(event: CustomEvent<{ from: string; to: string }>) {
   if (!event.detail?.from || !event.detail?.to) return;
   void loadSeries(event.detail, "zoom");
+}
+
+function onExternalDataZoom(event: CustomEvent<unknown>) {
+  handleChartZoom(event.detail);
 }
 
 async function prefetchAdjacent(range: { from: string; to: string }, requestMaxPoints: number) {
