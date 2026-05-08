@@ -41,6 +41,23 @@ with AetusIngestClient(
 
 The client sends `Content-Type: application/x-protobuf`, `X-Device-Id`, and bearer auth headers, then advances its local sequence only after a successful `2xx` response.
 
+## HMAC Authentication
+
+Set `auth_mode="hmac"` when the ingest server is configured with `AETUS_HMAC_AUTH_REQUIRED=true`.
+
+```python
+with AetusIngestClient(
+    base_url="http://127.0.0.1:18000",
+    device_id="python-device-001",
+    token="devtok_...",
+    boot_id="boot-python-0001",
+    auth_mode="hmac",
+) as client:
+    client.send_metrics([("temperature", 22.75, "celsius")])
+```
+
+HMAC mode sends `X-Aetus-Signature: hmac-sha256-v1=<hex>` instead of `Authorization: Bearer ...`. The `token` value is reused as the shared device secret.
+
 ## Upload Dense Signal Frames
 
 ```python

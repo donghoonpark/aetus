@@ -240,6 +240,61 @@ def test_client_posts_protobuf_headers_and_increments_sequence_on_success() -> N
     assert requests[0].headers["authorization"] == "Bearer tok"
 
 
+def test_client_can_sign_uploads_with_hmac_auth_mode() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        event = ingest_pb2.IngestEvent()
+        event.ParseFromString(request.content)
+        return httpx.Response(
+            202,
+            json={"request_id": "req-hmac", "status": "accepted", "device_id": event.device_id, "sequence": event.sequence},
+        )
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http_client:
+        client = AetusIngestClient(
+            base_url="http://ingest.local",
+            device_id=DEVICE_ID,
+            token="tok",
+            boot_id=BOOT_ID,
+            auth_mode="hmac",
+            http_client=http_client,
+        )
+        client.send_metrics([("temperature", 22.25, "celsius")])
+
+    assert "authorization" not in requests[0].headers
+    assert requests[0].headers["x-aetus-signature"].startswith("hmac-sha256-v1=")
+    assert len(requests[0].headers["x-aetus-signature"]) == len("hmac-sha256-v1=") + 64
+
+
+def test_hmac_signature_matches_known_vector() -> None:
+    client = AetusIngestClient(
+        base_url="http://ingest.local",
+        device_id=DEVICE_ID,
+        token="secret",
+        boot_id=BOOT_ID,
+        auth_mode="hmac",
+    )
+
+    assert (
+        client.hmac_signature(device_id="dev", body=b"\x01\x02test")
+        == "hmac-sha256-v1=5f289c9b28519726a0e78e73646e9355d2068ea0c5d696909eb384a97e324e5c"
+    )
+
+
+def test_client_rejects_unknown_auth_mode() -> None:
+    with pytest.raises(ValueError, match="auth_mode"):
+        AetusIngestClient(
+            base_url="http://ingest.local",
+            device_id=DEVICE_ID,
+            token="tok",
+            boot_id=BOOT_ID,
+            auth_mode="unknown",  # type: ignore[arg-type]
+        )
+
+
 def test_client_keeps_sequence_when_server_rejects_upload() -> None:
     transport = httpx.MockTransport(lambda request: httpx.Response(401, text="bad token"))
 

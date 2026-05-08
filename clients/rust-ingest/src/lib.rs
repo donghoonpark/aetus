@@ -1,6 +1,8 @@
+use hmac::{Hmac, Mac};
 use prost::Message;
 use reqwest::blocking::Client as HttpClient;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -16,6 +18,10 @@ use generated::{
     AlertPayload, DeviceStatus, EventType, IngestEvent, Metric, MetricSet, Severity, SignalChannel,
     SignalFrame, SignalSampleEncoding, SignalSampleLayout, StatusPayload, TelemetryPayload,
 };
+
+const HMAC_SIGNATURE_SCHEME: &str = "hmac-sha256-v1";
+const HMAC_SIGNATURE_PREFIX: &str = "AETUS-HMAC-SHA256-V1";
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug)]
 pub enum Error {
@@ -201,7 +207,14 @@ pub struct AetusIngestClient {
     boot_id: String,
     firmware_version: u32,
     sequence: u64,
+    auth_mode: AuthMode,
     http: HttpClient,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMode {
+    Bearer,
+    HmacSha256,
 }
 
 impl AetusIngestClient {
@@ -223,6 +236,26 @@ impl AetusIngestClient {
         firmware_version: u32,
         initial_sequence: u64,
     ) -> Result<Self, Error> {
+        Self::with_sequence_and_auth_mode(
+            base_url,
+            device_id,
+            token,
+            boot_id,
+            firmware_version,
+            initial_sequence,
+            AuthMode::Bearer,
+        )
+    }
+
+    pub fn with_sequence_and_auth_mode(
+        base_url: impl Into<String>,
+        device_id: impl Into<String>,
+        token: impl Into<String>,
+        boot_id: impl Into<String>,
+        firmware_version: u32,
+        initial_sequence: u64,
+        auth_mode: AuthMode,
+    ) -> Result<Self, Error> {
         let device_id = device_id.into();
         let token = token.into();
         let boot_id = boot_id.into();
@@ -243,8 +276,13 @@ impl AetusIngestClient {
             boot_id,
             firmware_version,
             sequence: initial_sequence,
+            auth_mode,
             http: HttpClient::new(),
         })
+    }
+
+    pub fn set_auth_mode(&mut self, auth_mode: AuthMode) {
+        self.auth_mode = auth_mode;
     }
 
     pub fn generated_boot_id(prefix: &str) -> String {
@@ -349,15 +387,27 @@ impl AetusIngestClient {
             .encode(&mut body)
             .map_err(|error| Error::InvalidInput(error.to_string()))?;
 
-        let response = self
+        let signature = if self.auth_mode == AuthMode::HmacSha256 {
+            Some(self.hmac_signature(&event.device_id, &body)?)
+        } else {
+            None
+        };
+
+        let mut request = self
             .http
             .post(format!("{}/v1/ingest", self.base_url))
             .header("Content-Type", "application/x-protobuf")
             .header("X-Device-Id", event.device_id.clone())
-            .bearer_auth(&self.token)
-            .body(body)
-            .send()
-            .map_err(Error::Http)?;
+            .body(body);
+
+        request = match self.auth_mode {
+            AuthMode::Bearer => request.bearer_auth(&self.token),
+            AuthMode::HmacSha256 => {
+                request.header("X-Aetus-Signature", signature.unwrap_or_default())
+            }
+        };
+
+        let response = request.send().map_err(Error::Http)?;
 
         let status = response.status();
         if !status.is_success() {
@@ -373,6 +423,17 @@ impl AetusIngestClient {
             self.sequence += 1;
         }
         Ok(parsed)
+    }
+
+    pub fn hmac_signature(&self, device_id: &str, body: &[u8]) -> Result<String, Error> {
+        let body_sha256_hex = hex::encode(Sha256::digest(body));
+        let signing_input =
+            format!("{HMAC_SIGNATURE_PREFIX}\nPOST\n/v1/ingest\n{device_id}\n{body_sha256_hex}");
+        let mut mac = HmacSha256::new_from_slice(self.token.as_bytes())
+            .map_err(|error| Error::InvalidInput(error.to_string()))?;
+        mac.update(signing_input.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        Ok(format!("{HMAC_SIGNATURE_SCHEME}={signature}"))
     }
 }
 

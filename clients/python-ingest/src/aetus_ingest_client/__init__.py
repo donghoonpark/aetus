@@ -2,6 +2,7 @@
 
 from aetus_ingest_client.client import (
     AetusIngestClient,
+    AuthMode,
     IngestClientError,
     IngestResponse,
     SignalChannelSpec,
@@ -16,6 +17,7 @@ from aetus_ingest_client.client import (
 
 __all__ = [
     "AetusIngestClient",
+    "AuthMode",
     "IngestClientError",
     "IngestResponse",
     "SignalChannelSpec",

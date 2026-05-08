@@ -30,6 +30,31 @@ client.send_metrics(
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+## HMAC Authentication
+
+Use `AuthMode::HmacSha256` when the ingest server is configured with `AETUS_HMAC_AUTH_REQUIRED=true`.
+
+```rust
+use aetus_ingest_client::{
+    metric, AetusIngestClient, AuthMode,
+};
+
+let mut client = AetusIngestClient::with_sequence_and_auth_mode(
+    "http://127.0.0.1:18000",
+    "rust-device-001",
+    "devtok_...",
+    "boot-rust-0001",
+    42,
+    0,
+    AuthMode::HmacSha256,
+)?;
+
+client.send_metrics(vec![metric("temperature", 22.75_f64, "celsius")?], None)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+HMAC mode sends `X-Aetus-Signature: hmac-sha256-v1=<hex>` instead of `Authorization: Bearer ...`. The token value is reused as the shared device secret.
+
 ## Dense Signal Frames
 
 ```rust

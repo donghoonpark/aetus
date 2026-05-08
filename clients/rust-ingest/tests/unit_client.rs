@@ -6,10 +6,11 @@ use aetus_ingest_client::generated::{
 };
 use aetus_ingest_client::{
     build_alert_event, build_metric_event, build_signal_frame_event, build_status_event, metric,
-    pack_signal_samples_f32, pack_signal_samples_i16, AetusIngestClient, Error, SignalChannelSpec,
-    SignalLayout,
+    pack_signal_samples_f32, pack_signal_samples_i16, AetusIngestClient, AuthMode, Error,
+    SignalChannelSpec, SignalLayout,
 };
 use httpmock::prelude::*;
+use httpmock::HttpMockRequest;
 use prost::Message;
 
 const DEVICE_ID: &str = "rust-test-device";
@@ -264,6 +265,69 @@ fn client_posts_protobuf_headers_and_increments_sequence_on_success() {
     assert_eq!(response.request_id, "req-unit");
     assert_eq!(response.sequence, 7);
     assert_eq!(client.sequence(), 8);
+}
+
+#[test]
+fn client_can_sign_uploads_with_hmac_auth_mode() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/ingest")
+            .header("content-type", "application/x-protobuf")
+            .header("x-device-id", DEVICE_ID)
+            .is_true(|request: &HttpMockRequest| {
+                let headers = request.headers();
+                headers.get("authorization").is_none()
+                    && headers.get("x-aetus-signature").is_some_and(|value| {
+                        value
+                            .to_str()
+                            .is_ok_and(|text| text.starts_with("hmac-sha256-v1=") && text.len() == "hmac-sha256-v1=".len() + 64)
+                    })
+            });
+        then.status(202)
+            .header("content-type", "application/json")
+            .body(r#"{"request_id":"req-hmac","status":"accepted","device_id":"rust-test-device","sequence":0}"#);
+    });
+
+    let mut client = AetusIngestClient::with_sequence_and_auth_mode(
+        server.base_url(),
+        DEVICE_ID,
+        "tok",
+        BOOT_ID,
+        42,
+        0,
+        AuthMode::HmacSha256,
+    )
+    .unwrap();
+    let response = client
+        .send_metrics(
+            vec![metric("temperature", 22.25_f64, "celsius").unwrap()],
+            None,
+        )
+        .unwrap();
+
+    mock.assert();
+    assert_eq!(response.request_id, "req-hmac");
+    assert_eq!(client.sequence(), 1);
+}
+
+#[test]
+fn hmac_signature_matches_known_vector() {
+    let client = AetusIngestClient::with_sequence_and_auth_mode(
+        "http://ingest.local",
+        DEVICE_ID,
+        "secret",
+        BOOT_ID,
+        42,
+        0,
+        AuthMode::HmacSha256,
+    )
+    .unwrap();
+
+    assert_eq!(
+        client.hmac_signature("dev", b"\x01\x02test").unwrap(),
+        "hmac-sha256-v1=5f289c9b28519726a0e78e73646e9355d2068ea0c5d696909eb384a97e324e5c"
+    );
 }
 
 #[test]

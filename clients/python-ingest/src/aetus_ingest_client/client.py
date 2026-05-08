@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+import hashlib
+import hmac
 import struct
 from time import time_ns
 from typing import Any, Literal
@@ -14,7 +16,10 @@ from aetus_ingest_client.generated import ingest_pb2
 
 SignalEncoding = Literal["float32_le", "int16_le", "uint16_le", "int32_le"]
 SignalLayout = Literal["interleaved", "planar"]
+AuthMode = Literal["bearer", "hmac"]
 MetricInput = ingest_pb2.Metric | tuple[str, Any] | tuple[str, Any, str]
+HMAC_SIGNATURE_SCHEME = "hmac-sha256-v1"
+HMAC_SIGNATURE_PREFIX = "AETUS-HMAC-SHA256-V1"
 
 
 ENCODING_TO_PROTO = {
@@ -353,17 +358,21 @@ class AetusIngestClient:
         boot_id: str | None = None,
         firmware_version: int = 0,
         initial_sequence: int = 0,
+        auth_mode: AuthMode = "bearer",
         timeout: float = 10.0,
         http_client: httpx.Client | None = None,
     ) -> None:
         if not token:
             raise ValueError("token is required")
+        if auth_mode not in {"bearer", "hmac"}:
+            raise ValueError("auth_mode must be 'bearer' or 'hmac'")
         self.base_url = base_url.rstrip("/")
         self.device_id = device_id
         self.token = token
         self.boot_id = boot_id or f"py-{time_ns()}-{uuid4().hex[:8]}"
         self.firmware_version = firmware_version
         self.sequence = initial_sequence
+        self.auth_mode = auth_mode
         self._client = http_client or httpx.Client(timeout=timeout)
         self._owns_client = http_client is None
 
@@ -379,14 +388,11 @@ class AetusIngestClient:
 
     def send_event(self, event: ingest_pb2.IngestEvent) -> IngestResponse:
         body = event.SerializeToString()
+        headers = self._headers(event.device_id, body)
         response = self._client.post(
             f"{self.base_url}/v1/ingest",
             content=body,
-            headers={
-                "Content-Type": "application/x-protobuf",
-                "X-Device-Id": event.device_id,
-                "Authorization": f"Bearer {self.token}",
-            },
+            headers=headers,
         )
         if response.status_code < 200 or response.status_code >= 300:
             raise IngestClientError(response.status_code, response.reason_phrase, response.text)
@@ -402,6 +408,25 @@ class AetusIngestClient:
             sequence=parsed.get("sequence"),
             body=parsed,
         )
+
+    def _headers(self, device_id: str, body: bytes) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": device_id,
+        }
+        if self.auth_mode == "hmac":
+            headers["X-Aetus-Signature"] = self.hmac_signature(device_id=device_id, body=body)
+        else:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
+    def hmac_signature(self, *, device_id: str, body: bytes) -> str:
+        body_sha256_hex = hashlib.sha256(body).hexdigest()
+        signing_input = f"{HMAC_SIGNATURE_PREFIX}\nPOST\n/v1/ingest\n{device_id}\n{body_sha256_hex}".encode(
+            "utf-8"
+        )
+        signature = hmac.new(self.token.encode("utf-8"), signing_input, hashlib.sha256).hexdigest()
+        return f"{HMAC_SIGNATURE_SCHEME}={signature}"
 
     def send_metrics(
         self,

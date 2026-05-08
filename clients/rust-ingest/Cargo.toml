@@ -4,11 +4,28 @@ version = "0.1.0"
 edition = "2021"
 description = "Rust client SDK for AETUS protobuf ingest"
 license = "MIT"
+repository = "https://github.com/donghoonpark/aetus"
+homepage = "https://github.com/donghoonpark/aetus"
+readme = "README.md"
+keywords = ["aetus", "protobuf", "telemetry", "iot", "ingest"]
+categories = ["api-bindings", "network-programming"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "LICENSE",
+    "README.md",
+    "build.rs",
+    "proto/ingest.proto",
+    "src/**/*.rs",
+]
 
 [dependencies]
+hex = "0.4"
+hmac = "0.12"
 prost = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]

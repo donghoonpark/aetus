@@ -161,6 +161,11 @@ jobs:
       - name: Run Python ingest client tests
         run: uv run pytest -q
 
+      - name: Check Python package build
+        run: |
+          uv build
+          uv tool run twine check dist/*
+
       - name: Tear down Python client e2e stack
         if: always()
         working-directory: ${{ github.workspace }}
@@ -188,10 +193,16 @@ jobs:
       - name: Show Docker Compose version
         run: docker compose version
 
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
       - name: Run Rust ingest client tests
         env:
           AETUS_RUST_E2E_BUILD: "1"
         run: cargo test -- --test-threads=1
+
+      - name: Check Rust package dry-run
+        run: cargo publish --dry-run
 
       - name: Tear down Rust client e2e stack
         if: always()
