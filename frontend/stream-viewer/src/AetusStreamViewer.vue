@@ -310,6 +310,8 @@ const WHEEL_ZOOM_DEBOUNCE_MS = 220;
 const CHART_GRID_LEFT_PX = 52;
 const CHART_GRID_RIGHT_PX = 28;
 const DEVICE_SEARCH_DEBOUNCE_MS = 250;
+const ENVELOPE_MIN_SUFFIX = "__envelope_min";
+const CHART_COLORS = ["#2563eb", "#06b6d4", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0f766e", "#be123c"];
 
 const normalizedQueryUrl = computed(() => props.queryServerUrl.replace(/\/$/, ""));
 const drawerOpen = ref(props.autoOpenControls);
@@ -639,13 +641,16 @@ function renderChart() {
   chart.getZr().on("mouseup", handlePanEnd);
   chart.getZr().on("globalout", handlePanEnd);
   const chartSeries = seriesResponses.value.flatMap((response) => responseToChartSeries(response));
+  const legendNames = chartSeries
+    .map((series) => series.name)
+    .filter((name): name is string => typeof name === "string" && !name.endsWith(ENVELOPE_MIN_SUFFIX));
   renderingChart = true;
   chart.setOption(
     {
       animation: false,
-      color: ["#2563eb", "#06b6d4", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0f766e", "#be123c"],
-      tooltip: { trigger: "axis" },
-      legend: { top: 10, type: "scroll" },
+      color: CHART_COLORS,
+      tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
+      legend: { top: 10, type: "scroll", data: legendNames },
       grid: { left: 52, right: 28, top: 58, bottom: 58 },
       dataZoom: [
         {
@@ -676,6 +681,33 @@ function renderChart() {
   window.setTimeout(() => {
     renderingChart = false;
   }, 0);
+}
+
+function chartTooltipFormatter(params: unknown) {
+  const items = Array.isArray(params) ? params : [params];
+  const visibleItems = items
+    .filter((item) => {
+      const seriesName = (item as { seriesName?: string }).seriesName;
+      return typeof seriesName === "string" && !seriesName.endsWith(ENVELOPE_MIN_SUFFIX);
+    })
+    .slice(0, 12);
+  if (visibleItems.length === 0) return "";
+  const firstValue = (visibleItems[0] as { value?: unknown }).value;
+  const timestamp = Array.isArray(firstValue) ? formatTimestampLabel(firstValue[0]) : "";
+  const rows = visibleItems.map((item) => {
+    const typed = item as { marker?: string; seriesName?: string; value?: unknown };
+    const value = typed.value;
+    let label = "";
+    if (Array.isArray(value) && value.length >= 4) {
+      label = `min ${formatNumber(value[2])} / max ${formatNumber(value[3])}`;
+    } else if (Array.isArray(value)) {
+      label = formatNumber(value[1]);
+    } else {
+      label = String(value ?? "");
+    }
+    return `${typed.marker ?? ""}${escapeHtml(typed.seriesName ?? "")}: ${escapeHtml(label)}`;
+  });
+  return [escapeHtml(timestamp), ...rows].join("<br/>");
 }
 
 function responseToChartSeries(response: SeriesResponse) {
@@ -728,25 +760,58 @@ function responseToChartSeries(response: SeriesResponse) {
           },
         ];
       }
+      const color = colorForName(name);
       return [
         {
-          name: `${name} min`,
+          name: `${name}${ENVELOPE_MIN_SUFFIX}`,
           type: "line",
           showSymbol: false,
+          silent: true,
           sampling: "lttb",
           large: true,
-          data: channel.points.map((point) => [point.ts, point.min]),
+          lineStyle: { color, width: 1, opacity: 0.5 },
+          emphasis: { disabled: true },
+          data: channel.points.map((point) => [point.ts, point.min ?? point.value]),
         },
         {
-          name: `${name} max`,
+          name,
           type: "line",
           showSymbol: false,
           sampling: "lttb",
           large: true,
-          data: channel.points.map((point) => [point.ts, point.max]),
+          lineStyle: { color, width: 1, opacity: 0.5 },
+          emphasis: { focus: "series" },
+          data: channel.points.map((point) => [point.ts, point.max ?? point.value, point.min, point.max]),
         },
       ];
     });
+}
+
+function colorForName(name: string) {
+  let hash = 0;
+  for (const character of name) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return CHART_COLORS[hash % CHART_COLORS.length];
+}
+
+function formatNumber(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return String(value ?? "-");
+  return Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatTimestampLabel(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  return String(value ?? "");
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function handleChartZoom(event: unknown) {

@@ -36,6 +36,8 @@ test("renders a hidden-control multi-device sampled panel with bounded dense fet
   await expect(page.getByText("fetching")).toBeHidden();
   await expect(page.locator("[data-testid='stream-chart'] canvas")).toBeVisible();
   await expect(page.getByText("env.temperature")).toBeHidden();
+  await expect(page.getByText(/dense-device-1 \/ ch0 min/)).toBeHidden();
+  await expect(page.getByText(/dense-device-1 \/ ch0 max/)).toBeHidden();
 
   const visibleRequests = seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:50:00.000Z");
   expect(visibleRequests).toHaveLength(2);
@@ -467,7 +469,8 @@ function sampledSeries(deviceId: string, key: string, count: number) {
       unit: "g",
       points: Array.from({ length: count }, (_, index) => ({
         ts: new Date(Date.UTC(2026, 4, 3, 0, 50, 0) + index * 60).toISOString(),
-        value: Math.sin(index / 30 + channelIndex),
+        min: Math.sin(index / 30 + channelIndex) - 0.08,
+        max: Math.sin(index / 30 + channelIndex) + 0.08,
       })),
     })),
   };
