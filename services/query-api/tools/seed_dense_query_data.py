@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import math
 import struct
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 
@@ -95,7 +95,7 @@ def seed_dense_query_data(
             )
             signal_pk = cur.fetchone()[0]
             if include_scalar_types:
-                _seed_scalar_type_examples(cur, device_pk, boot_pk, start)
+                _seed_scalar_type_examples(cur, device_pk, boot_pk, start, duration_seconds)
 
             inserted_points = 0
             for frame_index in range(frame_count):
@@ -166,15 +166,23 @@ def _build_frame_samples(*, frame_index: int, sample_count: int, channel_count: 
     return struct.pack("<" + ("f" * len(values)), *values)
 
 
-def _seed_scalar_type_examples(cur: psycopg.Cursor, device_pk: int, boot_pk: int, start: datetime) -> None:
+def _seed_scalar_type_examples(
+    cur: psycopg.Cursor,
+    device_pk: int,
+    boot_pk: int,
+    start: datetime,
+    duration_seconds: int,
+) -> None:
     metrics = [
-        ("env.temperature", "celsius", "double", "value_double", 23.75),
-        ("env.humidity", "percent", "float", "value_double", 48.5),
-        ("motor.rpm", "rpm", "int", "value_int", 1725),
-        ("pump.enabled", "unitless", "bool", "value_bool", True),
-        ("machine.state", "unitless", "string", "value_string", "warming"),
+        ("env.temperature", "celsius", "double", "value_double"),
+        ("env.humidity", "percent", "float", "value_double"),
+        ("motor.rpm", "rpm", "int", "value_int"),
+        ("pump.enabled", "unitless", "bool", "value_bool"),
+        ("machine.state", "unitless", "string", "value_string"),
     ]
-    for metric_index, (metric_key, metric_unit, value_type, value_column, value) in enumerate(metrics):
+    step_seconds = 10
+    sample_count = max(1, math.floor(duration_seconds / step_seconds) + 1)
+    for metric_index, (metric_key, metric_unit, value_type, value_column) in enumerate(metrics):
         cur.execute(
             """
             INSERT INTO metric_definitions(metric_key, metric_unit, value_type)
@@ -186,34 +194,57 @@ def _seed_scalar_type_examples(cur: psycopg.Cursor, device_pk: int, boot_pk: int
             (metric_key, metric_unit, value_type),
         )
         metric_pk = cur.fetchone()[0]
-        cur.execute(
-            f"""
-            INSERT INTO device_metric_points(
-                event_time,
-                received_at,
-                device_pk,
-                boot_pk,
-                metric_pk,
-                sequence,
-                metric_index,
-                schema_version,
-                {value_column},
-                request_id
+        for sample_index in range(sample_count):
+            offset_seconds = sample_index * step_seconds
+            event_time = start + timedelta(seconds=offset_seconds)
+            value = _scalar_example_value(metric_key, sample_index, offset_seconds, duration_seconds)
+            cur.execute(
+                f"""
+                INSERT INTO device_metric_points(
+                    event_time,
+                    received_at,
+                    device_pk,
+                    boot_pk,
+                    metric_pk,
+                    sequence,
+                    metric_index,
+                    schema_version,
+                    {value_column},
+                    request_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s, %s)
+                ON CONFLICT (event_time, request_id, metric_index) DO NOTHING
+                """,
+                (
+                    event_time,
+                    event_time,
+                    device_pk,
+                    boot_pk,
+                    metric_pk,
+                    sample_index,
+                    metric_index,
+                    value,
+                    f"dense-scalar-type-{device_pk}-{metric_key}-{sample_index}",
+                ),
             )
-            VALUES (%s, %s, %s, %s, %s, 0, %s, 1, %s, %s)
-            ON CONFLICT (event_time, request_id, metric_index) DO NOTHING
-            """,
-            (
-                start,
-                start,
-                device_pk,
-                boot_pk,
-                metric_pk,
-                metric_index,
-                value,
-                f"dense-scalar-type-{metric_key}",
-            ),
-        )
+
+
+def _scalar_example_value(metric_key: str, sample_index: int, offset_seconds: int, duration_seconds: int) -> float | int | bool | str:
+    if metric_key == "env.temperature":
+        return 23.5 + 1.5 * math.sin(offset_seconds / 300.0)
+    if metric_key == "env.humidity":
+        return 48.0 + 5.0 * math.sin(offset_seconds / 420.0)
+    if metric_key == "motor.rpm":
+        return 1725 + int(120 * math.sin(offset_seconds / 180.0))
+    if metric_key == "pump.enabled":
+        return (sample_index // 12) % 2 == 0
+    if metric_key == "machine.state":
+        if offset_seconds < duration_seconds * 0.1:
+            return "warming"
+        if offset_seconds > duration_seconds * 0.9:
+            return "cooldown"
+        return "running"
+    raise ValueError(f"Unsupported scalar metric key: {metric_key}")
 
 
 def parse_start_iso(value: str) -> datetime:
