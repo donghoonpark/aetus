@@ -596,7 +596,7 @@ function rangeToMs(value: string) {
 }
 
 function timeLabel(value: string) {
-  return new Date(value).toISOString().slice(11, 19);
+  return formatLocalTimestamp(value, { date: false, milliseconds: false });
 }
 
 function autoMaxPoints(reason: string) {
@@ -861,8 +861,37 @@ function formatNumber(value: unknown) {
 }
 
 function formatTimestampLabel(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `${formatLocalTimestamp(value, { date: true, milliseconds: true })} ${localTimezoneLabel()}`;
+  }
   return String(value ?? "");
+}
+
+function formatLocalTimestamp(value: string | number | Date, options: { date: boolean; milliseconds: boolean }) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const year = date.getFullYear();
+  const month = padDatePart(date.getMonth() + 1);
+  const day = padDatePart(date.getDate());
+  const hours = padDatePart(date.getHours());
+  const minutes = padDatePart(date.getMinutes());
+  const seconds = padDatePart(date.getSeconds());
+  const millis = String(date.getMilliseconds()).padStart(3, "0");
+  const time = `${hours}:${minutes}:${seconds}${options.milliseconds ? `.${millis}` : ""}`;
+  return options.date ? `${year}-${month}-${day} ${time}` : time;
+}
+
+function padDatePart(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function localTimezoneLabel() {
+  const offsetMinutes = -new Date().getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(offsetMinutes);
+  const hours = padDatePart(Math.floor(absolute / 60));
+  const minutes = padDatePart(absolute % 60);
+  return `UTC${sign}${hours}:${minutes}`;
 }
 
 function escapeHtml(value: string) {
