@@ -271,7 +271,8 @@ const maxPointsPerRequest = computed(() => props.maxPointsPerRequest);
 const rangePreset = ref(props.initialRangePreset);
 const loadingStreams = ref(false);
 const loadingSeries = ref(false);
-const loading = computed(() => loadingStreams.value || loadingSeries.value);
+const pendingRangeFetch = ref(false);
+const loading = computed(() => loadingStreams.value || loadingSeries.value || pendingRangeFetch.value);
 const autoRefetchOnZoom = ref(true);
 const enablePrefetch = ref(true);
 const selectedChannels = ref<string[]>([]);
@@ -394,6 +395,7 @@ async function loadSeries(range = visibleRange.value, reason = "manual") {
   if (selectedDeviceIds.value.length === 0 || !selectedKey.value) return;
   activeRequest?.abort();
   activeRequest = new AbortController();
+  pendingRangeFetch.value = false;
   loadingSeries.value = true;
   visibleRange.value = range;
   const requestMaxPoints = autoMaxPoints(reason);
@@ -426,6 +428,7 @@ async function loadSeries(range = visibleRange.value, reason = "manual") {
     handleError(error, "Failed to load series");
   } finally {
     loadingSeries.value = false;
+    pendingRangeFetch.value = false;
   }
 }
 
@@ -525,7 +528,7 @@ function renderChart() {
           throttle: 160,
         },
       ],
-      xAxis: { type: "time" },
+      xAxis: { type: "time", min: visibleRange.value.from, max: visibleRange.value.to },
       yAxis: { type: "value", scale: true },
       series: chartSeries,
     },
@@ -614,10 +617,32 @@ function handleWheelZoomOut(event: unknown) {
   suppressDataZoomUntil = Date.now() + 700;
   const range = expandedRangeFromWheel(wheel);
   if (!range) return;
+  applyOptimisticRange(range);
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
   zoomTimer = window.setTimeout(() => {
     void loadSeries(range, "zoom-out");
   }, 350);
+}
+
+function applyOptimisticRange(range: { from: string; to: string }) {
+  visibleRange.value = range;
+  pendingRangeFetch.value = true;
+  emit("range-change", range);
+  if (!chart) return;
+  renderingChart = true;
+  chart.setOption(
+    {
+      xAxis: { min: range.from, max: range.to },
+      dataZoom: [
+        { start: 0, end: 100 },
+        { start: 0, end: 100 },
+      ],
+    },
+    false,
+  );
+  window.setTimeout(() => {
+    renderingChart = false;
+  }, 0);
 }
 
 function isWheelZoomOut(event: { wheelDelta?: number; event?: { deltaY?: number } }) {
@@ -710,7 +735,13 @@ function onExternalWheelZoomOut(event: CustomEvent<{ anchorRatio?: number }>) {
   const anchorRatio = Math.min(0.95, Math.max(0.05, event.detail?.anchorRatio ?? 0.5));
   const nextSpan = span * WHEEL_ZOOM_OUT_FACTOR;
   const nextFrom = fromMs - (nextSpan - span) * anchorRatio;
-  void loadSeries(normalizedRange(nextFrom, nextFrom + nextSpan) ?? visibleRange.value, "zoom-out");
+  const range = normalizedRange(nextFrom, nextFrom + nextSpan);
+  if (!range) return;
+  applyOptimisticRange(range);
+  if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
+  zoomTimer = window.setTimeout(() => {
+    void loadSeries(range, "zoom-out");
+  }, 350);
 }
 
 async function prefetchAdjacent(range: { from: string; to: string }, requestMaxPoints: number) {

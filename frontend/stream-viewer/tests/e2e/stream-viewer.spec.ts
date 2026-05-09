@@ -147,7 +147,41 @@ test("implements wheel zoom-out by expanding beyond the loaded chart extent", as
   await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
 });
 
-async function mockQueryApi(page: Page, seriesRequests: URL[]) {
+test("shows the expanded wheel zoom-out range before the server response arrives", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  let releaseZoomOutResponse: (() => void) | undefined;
+  const zoomOutGate = new Promise<void>((resolve) => {
+    releaseZoomOutResponse = resolve;
+  });
+  await mockQueryApi(page, seriesRequests, {
+    holdZoomOutResponse: () => zoomOutGate,
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-wheel-zoomout", {
+        detail: { anchorRatio: 0.5 },
+      }),
+    );
+  });
+
+  await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
+  await expect(page.getByText("syncing")).toBeVisible();
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:46:00.000Z").length)
+    .toBe(2);
+  releaseZoomOutResponse?.();
+  await expect(page.getByText("synced")).toBeVisible();
+});
+
+async function mockQueryApi(
+  page: Page,
+  seriesRequests: URL[],
+  options: { holdZoomOutResponse?: () => Promise<void> } = {},
+) {
   await page.route("**/v1/query/devices/*/streams", async (route) => {
     expect(route.request().headers()["authorization"]).toBe("Bearer viewer-token");
     const deviceId = route.request().url().match(/devices\/([^/]+)\/streams/)?.[1] ?? "unknown";
@@ -185,6 +219,9 @@ async function mockQueryApi(page: Page, seriesRequests: URL[]) {
     seriesRequests.push(url);
     const [, deviceId, streamKey] = url.pathname.match(/devices\/([^/]+)\/streams\/([^/]+)\/series/) ?? [];
     const maxPoints = Number(url.searchParams.get("max_points") ?? "10000");
+    if (url.searchParams.get("from") === "2026-05-03T00:46:00.000Z") {
+      await options.holdZoomOutResponse?.();
+    }
     if (streamKey === "dense.temperature") {
       await route.fulfill({ json: scalarSeries(deviceId, streamKey, maxPoints) });
       return;
