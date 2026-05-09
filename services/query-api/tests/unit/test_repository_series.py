@@ -59,6 +59,34 @@ def test_raw_frames_to_series_buckets_samples_to_max_points() -> None:
     assert [(point["min"], point["max"]) for point in channel["points"]] == [(0.0, 3.0), (4.0, 7.0), (8.0, 11.0)]
 
 
+def test_raw_frames_to_series_keeps_samples_from_overlapping_left_frame() -> None:
+    response = _raw_frames_to_series(
+        "device-1",
+        "dense.vibration",
+        [
+            _frame(
+                samples=struct.pack("<" + "f" * 10, *[float(value) for value in range(10)]),
+                sample_count=10,
+                sample_interval_ns=1_000_000,
+            )
+        ],
+        max_points=10,
+        start=datetime(2026, 5, 3, 0, 0, 0, 3_000, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 3, 0, 0, 0, 6_000, tzinfo=timezone.utc),
+    )
+
+    channel = response["channels"][0]
+    assert response["mode"] == "samples"
+    assert response["source_sample_count"] == 4
+    assert [point["value"] for point in channel["points"]] == pytest.approx([3.0, 4.0, 5.0, 6.0])
+    assert [point["ts"] for point in channel["points"]] == [
+        "2026-05-03T00:00:00.003000Z",
+        "2026-05-03T00:00:00.004000Z",
+        "2026-05-03T00:00:00.005000Z",
+        "2026-05-03T00:00:00.006000Z",
+    ]
+
+
 def _frame(*, samples: bytes, sample_count: int, sample_interval_ns: int) -> dict[str, object]:
     return {
         "event_time": datetime(2026, 5, 3, 0, 0, 0, tzinfo=timezone.utc),

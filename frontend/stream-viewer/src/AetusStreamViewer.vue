@@ -739,6 +739,7 @@ function responseToChartSeries(response: SeriesResponse) {
         showSymbol: false,
         sampling: "lttb",
         large: true,
+        lineStyle: { color: colorForName(`${response.device_id} / ${response.key}`) },
         data: (response.points ?? []).map((point) => [point.ts, point.value]),
       },
     ];
@@ -749,6 +750,7 @@ function responseToChartSeries(response: SeriesResponse) {
       const name = `${response.device_id} / ${channel.name}`;
       const hasEnvelope = channel.points.some((point) => point.min !== undefined || point.max !== undefined);
       if (!hasEnvelope) {
+        const color = colorForName(name);
         return [
           {
             name,
@@ -756,6 +758,7 @@ function responseToChartSeries(response: SeriesResponse) {
             showSymbol: false,
             sampling: "lttb",
             large: true,
+            lineStyle: { color },
             data: channel.points.map((point) => [point.ts, point.value]),
           },
         ];

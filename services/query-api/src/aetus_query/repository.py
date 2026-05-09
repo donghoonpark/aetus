@@ -237,7 +237,7 @@ class PostgresQueryRepository(QueryRepository):
             "sampled_series device=%s key=%s source=raw frames=%d samples=%d elapsed=%.3fms",
             device_id, key, len(frames), total_samples, elapsed_ms,
         )
-        return _raw_frames_to_series(device_id, key, frames, max_points)
+        return _raw_frames_to_series(device_id, key, frames, max_points, start=start, end=end)
 
     def summary(
         self,
@@ -327,11 +327,19 @@ class PostgresQueryRepository(QueryRepository):
             JOIN signal_stream_definitions sd ON sd.signal_pk = f.signal_pk
             WHERE d.device_id = %s
               AND sd.stream_key = %s
-              AND f.event_time >= %s
               AND f.event_time <= %s
+              AND (
+                f.event_time >= %s
+                OR f.event_time + make_interval(
+                    secs => (
+                        f.sample_interval_ns::double precision
+                        * GREATEST(f.sample_count - 1, 0)::double precision
+                    ) / 1000000000.0
+                ) >= %s
+              )
             ORDER BY f.event_time ASC
             """,
-            (device_id, key, start, end),
+            (device_id, key, end, start, start),
         ).fetchall()
 
     def _read_feature_rows(
@@ -496,7 +504,15 @@ def _scalar_point(row: dict[str, Any]) -> dict[str, Any]:
     return point
 
 
-def _raw_frames_to_series(device_id: str, key: str, frames: list[dict[str, Any]], max_points: int) -> dict[str, Any]:
+def _raw_frames_to_series(
+    device_id: str,
+    key: str,
+    frames: list[dict[str, Any]],
+    max_points: int,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, Any]:
     channel_samples: dict[str, dict[str, Any]] = {}
     timestamps: list[datetime] = []
     for frame in frames:
@@ -513,10 +529,15 @@ def _raw_frames_to_series(device_id: str, key: str, frames: list[dict[str, Any]]
             frame["sample_interval_ns"],
             frame["sample_count"],
         )
-        timestamps.extend(frame_timestamps)
+        selected_indices = [
+            index
+            for index, timestamp in enumerate(frame_timestamps)
+            if (start is None or timestamp >= start) and (end is None or timestamp <= end)
+        ]
+        timestamps.extend(frame_timestamps[index] for index in selected_indices)
         for channel in channels:
             channel_samples.setdefault(channel.key, {"name": channel.key, "unit": channel.unit, "values": []})
-            channel_samples[channel.key]["values"].extend(values_by_channel[channel.key])
+            channel_samples[channel.key]["values"].extend(values_by_channel[channel.key][index] for index in selected_indices)
 
     if not channel_samples:
         channels = []
