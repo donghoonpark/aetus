@@ -95,14 +95,22 @@ test("applies an explicit time range from the control drawer", async ({ page }) 
   await page.goto("/");
   await page.getByTitle("Open controls").click();
   await expect(page.getByText("Time and density")).toBeVisible();
+  const expectedRange = await page.evaluate(() => {
+    const from = new Date("2026-05-03 00:40:00").toISOString();
+    const to = new Date("2026-05-03 00:45:00").toISOString();
+    return {
+      from,
+      label: `${from.slice(11, 19)} - ${to.slice(11, 19)}`,
+    };
+  });
   await page.getByPlaceholder("From").fill("2026-05-03 00:40:00");
   await page.getByPlaceholder("To").fill("2026-05-03 00:45:00");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Apply range" }).click();
 
-  await expect(page.getByText("15:40:00 - 15:45:00")).toBeVisible();
+  await expect(page.getByText(expectedRange.label)).toBeVisible();
   await expect
-    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-02T15:40:00.000Z").length)
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === expectedRange.from).length)
     .toBe(2);
 });
 
