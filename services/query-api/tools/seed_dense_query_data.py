@@ -17,6 +17,16 @@ def main() -> None:
     parser.add_argument("--duration-seconds", type=int, default=3600)
     parser.add_argument("--frame-samples", type=int, default=1000)
     parser.add_argument("--channels", type=int, default=1)
+    parser.add_argument(
+        "--start-iso",
+        default="2026-05-03T00:00:00Z",
+        help="UTC start time for generated samples. Use an ISO-8601 value such as 2026-05-03T00:00:00Z.",
+    )
+    parser.add_argument(
+        "--skip-scalar-types",
+        action="store_true",
+        help="Only seed the dense sampled stream; by default the dataset also includes double/int/bool/string scalar streams.",
+    )
     args = parser.parse_args()
 
     if args.points < 1_000_000:
@@ -32,6 +42,8 @@ def main() -> None:
         duration_seconds=args.duration_seconds,
         frame_samples=args.frame_samples,
         channel_count=args.channels,
+        include_scalar_types=not args.skip_scalar_types,
+        start=parse_start_iso(args.start_iso),
     )
 
 
@@ -44,10 +56,12 @@ def seed_dense_query_data(
     duration_seconds: int = 3600,
     frame_samples: int = 1000,
     channel_count: int = 1,
+    include_scalar_types: bool = True,
+    start: datetime | None = None,
 ) -> None:
     sample_interval_ns = max(1, int(duration_seconds * 1_000_000_000 / points))
     frame_count = math.ceil(points / frame_samples)
-    start = datetime(2026, 5, 3, 0, 0, 0, tzinfo=timezone.utc)
+    start = start or datetime(2026, 5, 3, 0, 0, 0, tzinfo=timezone.utc)
     channels_json = "[" + ",".join(
         f'{{"key":"ch{index}","unit":"g"}}' for index in range(channel_count)
     ) + "]"
@@ -80,6 +94,8 @@ def seed_dense_query_data(
                 (stream_key, channels_json),
             )
             signal_pk = cur.fetchone()[0]
+            if include_scalar_types:
+                _seed_scalar_type_examples(cur, device_pk, boot_pk, start)
 
             inserted_points = 0
             for frame_index in range(frame_count):
@@ -136,6 +152,8 @@ def seed_dense_query_data(
         f"Seeded {inserted_points} points across {frame_count} frames "
         f"for {device_id}/{stream_key} at interval {sample_interval_ns}ns"
     )
+    if include_scalar_types:
+        print("Seeded scalar type examples: env.temperature, env.humidity, motor.rpm, pump.enabled, machine.state")
 
 
 def _build_frame_samples(*, frame_index: int, sample_count: int, channel_count: int) -> bytes:
@@ -146,6 +164,64 @@ def _build_frame_samples(*, frame_index: int, sample_count: int, channel_count: 
         for channel_index in range(channel_count):
             values.append(math.sin(phase + channel_index) + 0.05 * math.sin(phase * 11.0))
     return struct.pack("<" + ("f" * len(values)), *values)
+
+
+def _seed_scalar_type_examples(cur: psycopg.Cursor, device_pk: int, boot_pk: int, start: datetime) -> None:
+    metrics = [
+        ("env.temperature", "celsius", "double", "value_double", 23.75),
+        ("env.humidity", "percent", "float", "value_double", 48.5),
+        ("motor.rpm", "rpm", "int", "value_int", 1725),
+        ("pump.enabled", "unitless", "bool", "value_bool", True),
+        ("machine.state", "unitless", "string", "value_string", "warming"),
+    ]
+    for metric_index, (metric_key, metric_unit, value_type, value_column, value) in enumerate(metrics):
+        cur.execute(
+            """
+            INSERT INTO metric_definitions(metric_key, metric_unit, value_type)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (metric_key, metric_unit, value_type)
+            DO UPDATE SET metric_key = EXCLUDED.metric_key
+            RETURNING metric_pk
+            """,
+            (metric_key, metric_unit, value_type),
+        )
+        metric_pk = cur.fetchone()[0]
+        cur.execute(
+            f"""
+            INSERT INTO device_metric_points(
+                event_time,
+                received_at,
+                device_pk,
+                boot_pk,
+                metric_pk,
+                sequence,
+                metric_index,
+                schema_version,
+                {value_column},
+                request_id
+            )
+            VALUES (%s, %s, %s, %s, %s, 0, %s, 1, %s, %s)
+            ON CONFLICT (event_time, request_id, metric_index) DO NOTHING
+            """,
+            (
+                start,
+                start,
+                device_pk,
+                boot_pk,
+                metric_pk,
+                metric_index,
+                value,
+                f"dense-scalar-type-{metric_key}",
+            ),
+        )
+
+
+def parse_start_iso(value: str) -> datetime:
+    normalized = value.strip().replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 if __name__ == "__main__":

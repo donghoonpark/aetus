@@ -25,6 +25,7 @@ class FakeRepository:
                 kind="scalar",
                 unit="celsius",
                 latest_event_time=datetime(2026, 5, 3, tzinfo=timezone.utc),
+                value_type="double",
             ),
             StreamRef(
                 key="imu.accel",
@@ -170,6 +171,7 @@ def test_lists_streams_with_unified_public_model(client_and_repo: tuple[TestClie
     body = response.json()
     assert [stream["key"] for stream in body["streams"]] == ["temperature", "imu.accel"]
     assert [stream["kind"] for stream in body["streams"]] == ["scalar", "sampled"]
+    assert body["streams"][0]["value_type"] == "double"
     assert body["streams"][1]["nominal_rate_hz"] == 200.0
 
 

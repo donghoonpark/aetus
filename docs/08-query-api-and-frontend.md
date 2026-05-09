@@ -286,6 +286,7 @@ flowchart TB
       "key": "temperature",
       "kind": "scalar",
       "unit": "celsius",
+      "value_type": "double",
       "latest_event_time": "2026-05-03T00:10:01Z"
     }
   ]
@@ -362,11 +363,30 @@ scalar stream 예시:
   "device_id": "esp32c5-test-001",
   "key": "temperature",
   "kind": "scalar",
+  "value_type": "double",
   "resolution": "1s",
   "points": [
     {
       "ts": "2026-05-03T00:00:00Z",
       "value": 23.75
+    }
+  ]
+}
+```
+
+string scalar stream 예시:
+
+```json
+{
+  "device_id": "esp32c5-test-001",
+  "key": "machine.state",
+  "kind": "scalar",
+  "value_type": "string",
+  "resolution": "raw",
+  "points": [
+    {
+      "ts": "2026-05-03T00:00:00Z",
+      "text": "warming"
     }
   ]
 }
@@ -609,9 +629,10 @@ import "@aetus/stream-viewer/style.css";
 - `GET /v1/query/devices/{device_id}/streams`로 device별 stream metadata 조회
 - 여러 device에서 같은 `stream.key`를 선택하면 같은 chart에 overlay한다
 - `GET /v1/query/devices/{device_id}/streams/{key}/series`로 chart series 조회
-- `scalar` stream은 단일 line series로 렌더링
+- numeric `scalar` stream은 단일 line series로 렌더링
+- string `scalar` stream은 해당 시점의 세로 점선 marker로 렌더링
 - `sampled` stream은 channel별 min/max envelope로 렌더링
-- `10m`, `1h`, `6h`, `1d` 범위 preset과 `max_points` 제어 제공
+- `10m`, `1h`, `6h`, `1d` 범위 preset, custom from/to range, `max_points` 제어 제공
 - ECharts zoom 이벤트가 발생하면 현재 visible range를 query-api에 재요청해 high-density 데이터를 가져온다
 - query range, stream, device 변경 시 이전 요청은 `AbortController`로 취소한다
 - adjacent range prefetch는 opportunistic하게 수행하며 실패해도 현재 chart를 방해하지 않는다
@@ -633,7 +654,7 @@ host application 연동 이벤트:
 - JWT bearer header 포함 여부
 - 2개 device의 같은 sampled stream overlay
 - 10분 범위에서 device별 2 channel x 10,000 point 응답 렌더링
-- scalar stream 전환 렌더링
+- scalar `double`, `float`, `int`, `bool`, `string` value type 전환 렌더링
 - zoom/high-density visible range 재요청
 
 ## 인증/인가 방향
@@ -879,7 +900,7 @@ flowchart TB
 
 대량 signal query와 frontend 렌더링을 확인하기 위해 `services/query-api/tools/seed_dense_query_data.py`를 둔다.
 
-기본값은 `1시간` 구간에 `1,002,000` sample point를 생성한다.
+기본값은 `1시간` 구간에 `1,002,000` sample point를 생성하고, 같은 device에 `double`, `float`, `int`, `bool`, `string` scalar 예제 stream도 함께 생성한다.
 
 ```bash
 cd services/query-api
@@ -888,13 +909,15 @@ uv run python tools/seed_dense_query_data.py \
   --device-id dense-device-1 \
   --stream-key dense.vibration \
   --points 1002000 \
-  --duration-seconds 3600
+  --duration-seconds 3600 \
+  --start-iso 2026-05-03T00:00:00Z
 ```
 
 생성 방식:
 
 - `devices`, `device_boot_sessions`, `signal_stream_definitions` dimension row 생성 또는 재사용
 - `device_signal_frames`에 `float32_le` / `interleaved` frame block 삽입
+- `metric_definitions`와 `device_metric_points`에 `env.temperature(double)`, `env.humidity(float)`, `motor.rpm(int)`, `pump.enabled(bool)`, `machine.state(string)` 삽입
 - 기본 `frame_samples=1000`이므로 100만 point는 약 1002개 frame row로 저장
 - frontend는 `dense-device-1`과 `dense.vibration`을 지정해 query-api 경유로 조회할 수 있다
 

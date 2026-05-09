@@ -4,6 +4,8 @@ Portable Vue 3 stream viewer for the AETUS query API.
 
 The component intentionally knows only the query-api base URL, a device ID, and an optional initial stream key. It treats scalar metrics and sampled signal frames as one logical stream model so host applications do not need to understand the PostgreSQL storage layout.
 
+Numeric scalar streams (`double`, `float`, `int`, `bool`) render as line series. String scalar streams render as vertical dashed event markers at their timestamps. Sampled signal streams render channel series or min/max envelopes depending on the query-api response density.
+
 ## Usage
 
 ```vue
@@ -30,7 +32,7 @@ import "@aetus/stream-viewer/style.css";
 | `queryServerUrl` | yes | Base URL for `services/query-api`. |
 | `deviceId` | no | Initial device ID. Operators can edit it in the component. |
 | `initialStreamKey` | no | Initial stream key to select after stream metadata loads. |
-| `initialRangePreset` | no | Initial range preset: `10m`, `1h`, `6h`, or `1d`; defaults to `1h`. |
+| `initialRangePreset` | no | Initial range preset: `10m`, `1h`, `6h`, `1d`, or `custom`; defaults to `1h`. |
 | `maxPointsPerRequest` | no | Chart point budget sent as `max_points`; defaults to `1500`. |
 
 ## Development
@@ -41,4 +43,4 @@ npm run build
 npm run test:e2e
 ```
 
-The Playwright e2e suite mocks query-api responses and verifies that the component can render both sampled and scalar streams using only the `queryServerUrl` contract.
+The Playwright e2e suite mocks query-api responses and verifies sampled streams plus scalar `double`, `float`, `int`, `bool`, and `string` streams using only the `queryServerUrl` contract.

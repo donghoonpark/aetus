@@ -188,6 +188,8 @@ def _stream_to_json(stream: StreamRef) -> dict:
         "unit": stream.unit,
         "latest_event_time": to_iso8601(stream.latest_event_time),
     }
+    if stream.kind == "scalar":
+        body["value_type"] = stream.value_type
     if stream.kind == "sampled":
         body.update(
             {

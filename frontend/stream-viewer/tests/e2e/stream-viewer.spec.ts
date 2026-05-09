@@ -35,7 +35,7 @@ test("renders a hidden-control multi-device sampled panel with bounded dense fet
   await expect(page.locator(".fetch-status")).toBeVisible();
   await expect(page.getByText("fetching")).toBeHidden();
   await expect(page.locator("[data-testid='stream-chart'] canvas")).toBeVisible();
-  await expect(page.getByText("dense.temperature")).toBeHidden();
+  await expect(page.getByText("env.temperature")).toBeHidden();
 
   const visibleRequests = seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:50:00.000Z");
   expect(visibleRequests).toHaveLength(2);
@@ -51,14 +51,41 @@ test("opens controls, switches stream, and keeps JWT on query requests", async (
   await page.goto("/");
   await page.getByTitle("Open controls").click();
   await expect(page.getByText("Panel controls")).toBeVisible();
-  await expect(page.getByRole("button", { name: /dense.temperature 2 device · celsius scalar/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /env.temperature 2 device · celsius scalar/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /env.humidity 2 device · percent scalar/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /motor.rpm 2 device · rpm scalar/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /pump.enabled 2 device · unitless scalar/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /machine.state 2 device · unitless scalar/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /dense.vibration 2 device · g sampled/ })).toBeVisible();
-  await page.getByRole("button", { name: /dense.temperature/ }).click();
+  await page.getByRole("button", { name: /env.temperature/ }).click();
 
-  await expect(page.getByRole("heading", { name: "dense.temperature" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "env.temperature" })).toBeVisible();
   await expect(page.getByText("20,000 plotted points")).toBeVisible();
   await expect(page.locator(".viewer-shell").getByText("scalar", { exact: true })).toBeVisible();
-  expect(seriesRequests.some((url) => url.pathname.includes("dense.temperature"))).toBeTruthy();
+  expect(seriesRequests.some((url) => url.pathname.includes("env.temperature"))).toBeTruthy();
+});
+
+test("renders scalar streams across numeric, boolean, and string value types", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  for (const [streamKey, expectedText] of [
+    ["motor.rpm", "20,000 plotted points"],
+    ["env.humidity", "20,000 plotted points"],
+    ["pump.enabled", "20,000 plotted points"],
+    ["machine.state", "20 plotted points"],
+  ] as const) {
+    await page.getByRole("button", { name: new RegExp(streamKey.replace(".", "\\.")) }).click();
+    await expect(page.getByRole("heading", { name: streamKey })).toBeVisible();
+    await expect(page.getByText(expectedText)).toBeVisible();
+  }
+
+  expect(seriesRequests.some((url) => url.pathname.includes("motor.rpm"))).toBeTruthy();
+  expect(seriesRequests.some((url) => url.pathname.includes("env.humidity"))).toBeTruthy();
+  expect(seriesRequests.some((url) => url.pathname.includes("pump.enabled"))).toBeTruthy();
+  expect(seriesRequests.some((url) => url.pathname.includes("machine.state"))).toBeTruthy();
 });
 
 test("applies an explicit time range from the control drawer", async ({ page }) => {
@@ -250,9 +277,38 @@ async function mockQueryApi(
         device_id: deviceId,
         streams: [
           {
-            key: "dense.temperature",
+            key: "env.temperature",
             kind: "scalar",
             unit: "celsius",
+            value_type: "double",
+            latest_event_time: "2026-05-03T01:00:00Z",
+          },
+          {
+            key: "motor.rpm",
+            kind: "scalar",
+            unit: "rpm",
+            value_type: "int",
+            latest_event_time: "2026-05-03T01:00:00Z",
+          },
+          {
+            key: "env.humidity",
+            kind: "scalar",
+            unit: "percent",
+            value_type: "float",
+            latest_event_time: "2026-05-03T01:00:00Z",
+          },
+          {
+            key: "pump.enabled",
+            kind: "scalar",
+            unit: "unitless",
+            value_type: "bool",
+            latest_event_time: "2026-05-03T01:00:00Z",
+          },
+          {
+            key: "machine.state",
+            kind: "scalar",
+            unit: "unitless",
+            value_type: "string",
             latest_event_time: "2026-05-03T01:00:00Z",
           },
           {
@@ -282,7 +338,7 @@ async function mockQueryApi(
     if (url.searchParams.get("from") === "2026-05-03T00:46:00.000Z") {
       await options.holdZoomOutResponse?.();
     }
-    if (streamKey === "dense.temperature") {
+    if (["env.temperature", "env.humidity", "motor.rpm", "pump.enabled", "machine.state"].includes(streamKey)) {
       await route.fulfill({ json: scalarSeries(deviceId, streamKey, maxPoints) });
       return;
     }
@@ -291,16 +347,39 @@ async function mockQueryApi(
 }
 
 function scalarSeries(deviceId: string, key: string, count: number) {
+  if (key === "machine.state") {
+    return {
+      device_id: deviceId,
+      key,
+      kind: "scalar",
+      value_type: "string",
+      resolution: "raw",
+      points: Array.from({ length: 10 }, (_, index) => ({
+        ts: new Date(Date.UTC(2026, 4, 3, 0, 50, 0) + index * 60_000).toISOString(),
+        text: index % 2 === 0 ? "warming" : "running",
+      })),
+    };
+  }
+  const valueType = key === "motor.rpm" ? "int" : key === "pump.enabled" ? "bool" : key === "env.humidity" ? "float" : "double";
   return {
     device_id: deviceId,
     key,
     kind: "scalar",
+    value_type: valueType,
     resolution: "raw",
     points: Array.from({ length: count }, (_, index) => ({
       ts: new Date(Date.UTC(2026, 4, 3, 0, 50, 0) + index * 60).toISOString(),
-      value: 23 + Math.sin(index / 80),
+      value: scalarValue(key, index),
+      text: key === "pump.enabled" ? (index % 120 === 0 ? "false" : "true") : undefined,
     })),
   };
+}
+
+function scalarValue(key: string, index: number) {
+  if (key === "motor.rpm") return 1700 + (index % 120);
+  if (key === "env.humidity") return 45 + Math.sin(index / 90) * 5;
+  if (key === "pump.enabled") return index % 120 === 0 ? 0 : 1;
+  return 23 + Math.sin(index / 80);
 }
 
 function sampledSeries(deviceId: string, key: string, count: number) {

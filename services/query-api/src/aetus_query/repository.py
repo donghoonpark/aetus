@@ -23,6 +23,7 @@ class StreamRef:
     kind: str
     unit: str | None
     latest_event_time: datetime
+    value_type: str | None = None
     encoding: str | None = None
     layout: str | None = None
     channels: list[dict[str, Any]] | None = None
@@ -100,6 +101,7 @@ class PostgresQueryRepository(QueryRepository):
                 kind="scalar",
                 unit=row["unit"] or None,
                 latest_event_time=row["latest_event_time"],
+                value_type=row["value_type"],
             )
             for row in scalar_rows
         ]
@@ -130,7 +132,11 @@ class PostgresQueryRepository(QueryRepository):
                 SELECT
                     p.event_time,
                     md.metric_unit,
-                    COALESCE(p.value_double, p.value_int::DOUBLE PRECISION, CASE WHEN p.value_bool THEN 1.0 ELSE 0.0 END) AS value
+                    md.value_type,
+                    p.value_double,
+                    p.value_int,
+                    p.value_bool,
+                    p.value_string
                 FROM device_metric_points p
                 JOIN devices d ON d.device_pk = p.device_pk
                 JOIN metric_definitions md ON md.metric_pk = p.metric_pk
@@ -142,6 +148,7 @@ class PostgresQueryRepository(QueryRepository):
                     p.value_double IS NOT NULL
                     OR p.value_int IS NOT NULL
                     OR p.value_bool IS NOT NULL
+                    OR p.value_string IS NOT NULL
                   )
                 ORDER BY p.event_time ASC
                 """,
@@ -158,8 +165,9 @@ class PostgresQueryRepository(QueryRepository):
             "device_id": device_id,
             "key": key,
             "kind": "scalar",
+            "value_type": rows[0]["value_type"] if rows else None,
             "resolution": "raw",
-            "points": [{"ts": to_iso8601(row["event_time"]), "value": row["value"]} for row in rows],
+            "points": [_scalar_point(row) for row in rows],
         }
 
     def sampled_series(self, device_id: str, key: str, start: datetime, end: datetime, max_points: int) -> dict[str, Any]:
@@ -435,6 +443,21 @@ def _limit_points(rows: list[dict[str, Any]], max_points: int) -> list[dict[str,
         return rows
     stride = max(1, len(rows) // max_points)
     return rows[::stride][:max_points]
+
+
+def _scalar_point(row: dict[str, Any]) -> dict[str, Any]:
+    point: dict[str, Any] = {"ts": to_iso8601(row["event_time"])}
+    value_type = row.get("value_type")
+    if value_type == "string":
+        point["text"] = row["value_string"]
+    elif value_type == "int":
+        point["value"] = row["value_int"]
+    elif value_type == "bool":
+        point["value"] = 1.0 if row["value_bool"] else 0.0
+        point["text"] = "true" if row["value_bool"] else "false"
+    else:
+        point["value"] = row["value_double"]
+    return point
 
 
 def _raw_frames_to_series(device_id: str, key: str, frames: list[dict[str, Any]], max_points: int) -> dict[str, Any]:

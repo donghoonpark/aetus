@@ -84,14 +84,23 @@ def _seed_query_data() -> None:
                 (device_pk, "boot-query-1"),
             )
             boot_pk = cur.fetchone()[0]
-            cur.execute(
-                """
-                INSERT INTO metric_definitions(metric_key, metric_unit, value_type)
-                VALUES ('temperature', 'celsius', 'double')
-                RETURNING metric_pk
-                """
-            )
-            metric_pk = cur.fetchone()[0]
+            metric_pks: dict[str, int] = {}
+            for metric_key, metric_unit, value_type in [
+                ("temperature", "celsius", "double"),
+                ("env.humidity", "percent", "float"),
+                ("motor.rpm", "rpm", "int"),
+                ("pump.enabled", "unitless", "bool"),
+                ("machine.state", "unitless", "string"),
+            ]:
+                cur.execute(
+                    """
+                    INSERT INTO metric_definitions(metric_key, metric_unit, value_type)
+                    VALUES (%s, %s, %s)
+                    RETURNING metric_pk
+                    """,
+                    (metric_key, metric_unit, value_type),
+                )
+                metric_pks[metric_key] = cur.fetchone()[0]
             cur.execute(
                 """
                 INSERT INTO signal_stream_definitions(stream_key, encoding, layout, channels_json)
@@ -122,7 +131,79 @@ def _seed_query_data() -> None:
                 )
                 VALUES (%s, %s, %s, %s, %s, 0, 0, 1, 23.75, 'query-metric-1')
                 """,
-                (event_time, event_time, device_pk, boot_pk, metric_pk),
+                (event_time, event_time, device_pk, boot_pk, metric_pks["temperature"]),
+            )
+            cur.execute(
+                """
+                INSERT INTO device_metric_points(
+                    event_time,
+                    received_at,
+                    device_pk,
+                    boot_pk,
+                    metric_pk,
+                    sequence,
+                    metric_index,
+                    schema_version,
+                    value_double,
+                    request_id
+                )
+                VALUES (%s, %s, %s, %s, %s, 0, 4, 1, 48.5, 'query-metric-float-1')
+                """,
+                (event_time, event_time, device_pk, boot_pk, metric_pks["env.humidity"]),
+            )
+            cur.execute(
+                """
+                INSERT INTO device_metric_points(
+                    event_time,
+                    received_at,
+                    device_pk,
+                    boot_pk,
+                    metric_pk,
+                    sequence,
+                    metric_index,
+                    schema_version,
+                    value_int,
+                    request_id
+                )
+                VALUES (%s, %s, %s, %s, %s, 0, 1, 1, 1725, 'query-metric-int-1')
+                """,
+                (event_time, event_time, device_pk, boot_pk, metric_pks["motor.rpm"]),
+            )
+            cur.execute(
+                """
+                INSERT INTO device_metric_points(
+                    event_time,
+                    received_at,
+                    device_pk,
+                    boot_pk,
+                    metric_pk,
+                    sequence,
+                    metric_index,
+                    schema_version,
+                    value_bool,
+                    request_id
+                )
+                VALUES (%s, %s, %s, %s, %s, 0, 2, 1, true, 'query-metric-bool-1')
+                """,
+                (event_time, event_time, device_pk, boot_pk, metric_pks["pump.enabled"]),
+            )
+            cur.execute(
+                """
+                INSERT INTO device_metric_points(
+                    event_time,
+                    received_at,
+                    device_pk,
+                    boot_pk,
+                    metric_pk,
+                    sequence,
+                    metric_index,
+                    schema_version,
+                    value_string,
+                    request_id
+                )
+                VALUES (%s, %s, %s, %s, %s, 0, 3, 1, 'warming', 'query-metric-string-1')
+                """,
+                (event_time, event_time, device_pk, boot_pk, metric_pks["machine.state"]),
             )
             cur.execute(
                 """
@@ -180,6 +261,11 @@ def test_query_api_lists_scalar_and_sampled_streams(query_stack: None) -> None:
     assert response.status_code == 200, response.text
     streams = {item["key"]: item for item in response.json()["streams"]}
     assert streams["temperature"]["kind"] == "scalar"
+    assert streams["temperature"]["value_type"] == "double"
+    assert streams["env.humidity"]["value_type"] == "float"
+    assert streams["motor.rpm"]["value_type"] == "int"
+    assert streams["pump.enabled"]["value_type"] == "bool"
+    assert streams["machine.state"]["value_type"] == "string"
     assert streams["imu.accel"]["kind"] == "sampled"
     assert streams["imu.accel"]["nominal_rate_hz"] == 200.0
 
@@ -196,7 +282,38 @@ def test_query_api_returns_scalar_series(query_stack: None) -> None:
 
     assert response.status_code == 200, response.text
     assert response.json()["kind"] == "scalar"
+    assert response.json()["value_type"] == "double"
     assert response.json()["points"] == [{"ts": "2026-05-03T00:00:00Z", "value": 23.75}]
+
+
+@pytest.mark.parametrize(
+    ("stream_key", "expected_value_type", "expected_points"),
+    [
+        ("motor.rpm", "int", [{"ts": "2026-05-03T00:00:00Z", "value": 1725}]),
+        ("env.humidity", "float", [{"ts": "2026-05-03T00:00:00Z", "value": 48.5}]),
+        ("pump.enabled", "bool", [{"ts": "2026-05-03T00:00:00Z", "value": 1.0, "text": "true"}]),
+        ("machine.state", "string", [{"ts": "2026-05-03T00:00:00Z", "text": "warming"}]),
+    ],
+)
+def test_query_api_returns_scalar_series_by_value_type(
+    query_stack: None,
+    stream_key: str,
+    expected_value_type: str,
+    expected_points: list[dict[str, object]],
+) -> None:
+    del query_stack
+
+    response = httpx.get(
+        f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams/{stream_key}/series",
+        params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"},
+        headers=_query_auth_headers(),
+        timeout=10.0,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["kind"] == "scalar"
+    assert response.json()["value_type"] == expected_value_type
+    assert response.json()["points"] == expected_points
 
 
 def test_query_api_returns_sampled_series_from_raw_frame(query_stack: None) -> None:

@@ -197,6 +197,7 @@ import {
 echarts.use([GridComponent, LegendComponent, TooltipComponent, DataZoomComponent, LineChart, CanvasRenderer]);
 
 type StreamKind = "scalar" | "sampled";
+type ScalarValueType = "double" | "float" | "int" | "bool" | "string";
 type TokenProvider = () => string | Promise<string>;
 
 interface StreamInfo {
@@ -204,6 +205,7 @@ interface StreamInfo {
   kind: StreamKind;
   unit: string | null;
   latest_event_time: string;
+  value_type?: ScalarValueType | null;
   channels?: Array<{ key: string; unit?: string | null }>;
   nominal_rate_hz?: number | null;
 }
@@ -211,6 +213,7 @@ interface StreamInfo {
 interface SeriesPoint {
   ts: string;
   value?: number;
+  text?: string;
   min?: number;
   max?: number;
   avg?: number | null;
@@ -220,6 +223,7 @@ interface SeriesResponse {
   device_id: string;
   key: string;
   kind: StreamKind;
+  value_type?: ScalarValueType | null;
   resolution: string;
   mode?: string;
   points?: SeriesPoint[];
@@ -230,6 +234,7 @@ interface StreamCatalogItem {
   key: string;
   kind: StreamKind;
   unit: string | null;
+  valueType: ScalarValueType | null;
   deviceCount: number;
   channels: string[];
 }
@@ -341,6 +346,7 @@ const streamCatalog = computed<StreamCatalogItem[]>(() => {
           key: stream.key,
           kind: stream.kind,
           unit: stream.unit,
+          valueType: stream.value_type ?? null,
           deviceCount: 1,
           channels,
         });
@@ -610,6 +616,26 @@ function renderChart() {
 
 function responseToChartSeries(response: SeriesResponse) {
   if (response.kind === "scalar") {
+    if (response.value_type === "string") {
+      return [
+        {
+          name: `${response.device_id} / ${response.key}`,
+          type: "line",
+          showSymbol: false,
+          data: [],
+          markLine: {
+            symbol: "none",
+            silent: true,
+            label: { formatter: "{b}", rotate: 90, color: "#475569" },
+            lineStyle: { type: "dashed", width: 1.5, color: "#7c3aed" },
+            data: (response.points ?? []).map((point) => ({
+              name: point.text ?? response.key,
+              xAxis: point.ts,
+            })),
+          },
+        },
+      ];
+    }
     return [
       {
         name: `${response.device_id} / ${response.key}`,
