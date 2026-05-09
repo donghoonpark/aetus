@@ -310,7 +310,6 @@ const WHEEL_ZOOM_DEBOUNCE_MS = 220;
 const CHART_GRID_LEFT_PX = 52;
 const CHART_GRID_RIGHT_PX = 28;
 const DEVICE_SEARCH_DEBOUNCE_MS = 250;
-const ENVELOPE_MIN_SUFFIX = "__envelope_min";
 const CHART_COLORS = ["#2563eb", "#06b6d4", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0f766e", "#be123c"];
 
 const normalizedQueryUrl = computed(() => props.queryServerUrl.replace(/\/$/, ""));
@@ -641,16 +640,14 @@ function renderChart() {
   chart.getZr().on("mouseup", handlePanEnd);
   chart.getZr().on("globalout", handlePanEnd);
   const chartSeries = seriesResponses.value.flatMap((response) => responseToChartSeries(response));
-  const legendNames = chartSeries
-    .map((series) => series.name)
-    .filter((name): name is string => typeof name === "string" && !name.endsWith(ENVELOPE_MIN_SUFFIX));
+  const legendNames = Array.from(new Set(chartSeries.map((series) => series.name).filter((name): name is string => typeof name === "string")));
   renderingChart = true;
   chart.setOption(
     {
       animation: false,
       color: CHART_COLORS,
       tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
-      legend: { top: 10, type: "scroll", data: legendNames },
+      legend: { top: 10, type: "scroll", data: legendNames.map((name) => ({ name, icon: "circle" })) },
       grid: { left: 52, right: 28, top: 58, bottom: 58 },
       dataZoom: [
         {
@@ -685,12 +682,7 @@ function renderChart() {
 
 function chartTooltipFormatter(params: unknown) {
   const items = Array.isArray(params) ? params : [params];
-  const visibleItems = items
-    .filter((item) => {
-      const seriesName = (item as { seriesName?: string }).seriesName;
-      return typeof seriesName === "string" && !seriesName.endsWith(ENVELOPE_MIN_SUFFIX);
-    })
-    .slice(0, 12);
+  const visibleItems = filterTooltipItems(items).slice(0, 12);
   if (visibleItems.length === 0) return "";
   const firstValue = (visibleItems[0] as { value?: unknown }).value;
   const timestamp = Array.isArray(firstValue) ? formatTimestampLabel(firstValue[0]) : "";
@@ -708,6 +700,24 @@ function chartTooltipFormatter(params: unknown) {
     return `${typed.marker ?? ""}${escapeHtml(typed.seriesName ?? "")}: ${escapeHtml(label)}`;
   });
   return [escapeHtml(timestamp), ...rows].join("<br/>");
+}
+
+function filterTooltipItems(items: unknown[]) {
+  const hasEnvelopeByName = new Set(
+    items
+      .filter((item) => {
+        const value = (item as { value?: unknown }).value;
+        return Array.isArray(value) && value.length >= 4;
+      })
+      .map((item) => (item as { seriesName?: string }).seriesName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+  return items.filter((item) => {
+    const typed = item as { seriesName?: string; value?: unknown };
+    if (!typed.seriesName) return false;
+    if (!hasEnvelopeByName.has(typed.seriesName)) return true;
+    return Array.isArray(typed.value) && typed.value.length >= 4;
+  });
 }
 
 function responseToChartSeries(response: SeriesResponse) {
@@ -766,12 +776,13 @@ function responseToChartSeries(response: SeriesResponse) {
       const color = colorForName(name);
       return [
         {
-          name: `${name}${ENVELOPE_MIN_SUFFIX}`,
+          name,
           type: "line",
           showSymbol: false,
           silent: true,
           sampling: "lttb",
           large: true,
+          legendHoverLink: false,
           lineStyle: { color, width: 1, opacity: 0.5 },
           emphasis: { disabled: true },
           data: channel.points.map((point) => [point.ts, point.min ?? point.value]),
