@@ -65,6 +65,25 @@ test("opens controls, switches stream, and keeps JWT on query requests", async (
   expect(seriesRequests.some((url) => url.pathname.includes("env.temperature"))).toBeTruthy();
 });
 
+test("searches devices remotely from the control drawer", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  const deviceSearchRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests, { deviceSearchRequests });
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  await page.getByTestId("device-search").click();
+  await page.getByLabel("Search devices").fill("device-3");
+
+  await expect
+    .poll(() => deviceSearchRequests.some((url) => url.searchParams.get("search") === "device-3"))
+    .toBe(true);
+  await page.getByText("dense-device-3").click();
+
+  await expect(page.getByText("3 devices")).toBeVisible();
+  await expect.poll(() => seriesRequests.some((url) => url.pathname.includes("dense-device-3"))).toBe(true);
+});
+
 test("renders scalar streams across numeric, boolean, and string value types", async ({ page }) => {
   const seriesRequests: URL[] = [];
   await mockQueryApi(page, seriesRequests);
@@ -309,8 +328,20 @@ test("debounces repeated wheel zoom-out events into a single range expansion", a
 async function mockQueryApi(
   page: Page,
   seriesRequests: URL[],
-  options: { holdZoomOutResponse?: () => Promise<void> } = {},
+  options: { holdZoomOutResponse?: () => Promise<void>; deviceSearchRequests?: URL[] } = {},
 ) {
+  await page.route(/\/v1\/query\/devices(?:\?.*)?$/, async (route) => {
+    expect(route.request().headers()["authorization"]).toBe("Bearer viewer-token");
+    const url = new URL(route.request().url());
+    options.deviceSearchRequests?.push(url);
+    const search = url.searchParams.get("search") ?? "";
+    const allDevices = ["dense-device-1", "dense-device-2", "dense-device-3", "query-device-9"];
+    const devices = allDevices
+      .filter((deviceId) => !search || deviceId.includes(search))
+      .map((deviceId) => ({ device_id: deviceId }));
+    await route.fulfill({ json: { devices } });
+  });
+
   await page.route("**/v1/query/devices/*/streams", async (route) => {
     expect(route.request().headers()["authorization"]).toBe("Bearer viewer-token");
     const deviceId = route.request().url().match(/devices\/([^/]+)\/streams/)?.[1] ?? "unknown";

@@ -38,6 +38,11 @@ class FakeRepository:
                 nominal_rate_hz=200.0,
             ),
         ]
+        self.devices = ["dense-device-1", "device-1", "device-2"]
+
+    def search_devices(self, query: str, limit: int) -> list[str]:
+        needle = query.lower()
+        return [device_id for device_id in self.devices if not needle or needle in device_id.lower()][:limit]
 
     def list_streams(self, device_id: str) -> list[StreamRef]:
         assert device_id == "device-1"
@@ -160,6 +165,34 @@ def test_query_endpoints_require_jwt(client_and_repo: tuple[TestClient, FakeRepo
     response = client.get("/v1/query/devices/device-1/streams")
 
     assert response.status_code == 401
+
+
+def test_searches_devices_for_wildcard_token(client_and_repo: tuple[TestClient, FakeRepository]) -> None:
+    client, _ = client_and_repo
+
+    response = client.get(
+        "/v1/query/devices",
+        params={"search": "device-", "limit": 2},
+        headers=_auth_headers(client, devices=["*"]),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["devices"] == [{"device_id": "dense-device-1"}, {"device_id": "device-1"}]
+
+
+def test_search_devices_filters_restricted_token_without_repository_scan(
+    client_and_repo: tuple[TestClient, FakeRepository],
+) -> None:
+    client, _ = client_and_repo
+
+    response = client.get(
+        "/v1/query/devices",
+        params={"search": "device", "limit": 5},
+        headers=_auth_headers(client, devices=["device-2", "hidden-device-9"]),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["devices"] == [{"device_id": "device-2"}, {"device_id": "hidden-device-9"}]
 
 
 def test_lists_streams_with_unified_public_model(client_and_repo: tuple[TestClient, FakeRepository]) -> None:

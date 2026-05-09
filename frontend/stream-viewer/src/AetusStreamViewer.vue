@@ -45,12 +45,21 @@
           <n-space vertical :size="18">
             <n-card embedded size="small" title="Devices">
               <n-space vertical :size="10">
-                <n-dynamic-tags v-model:value="selectedDeviceIds" />
-                <n-input
-                  v-model:value="deviceDraft"
-                  placeholder="Add device id"
+                <n-select
+                  v-model:value="selectedDeviceIds"
+                  data-testid="device-search"
+                  class="device-select"
+                  multiple
+                  filterable
+                  remote
                   clearable
-                  @keyup.enter="addDevice"
+                  :max-tag-count="1"
+                  :input-props="{ 'aria-label': 'Search devices' }"
+                  :options="deviceOptions"
+                  :loading="loadingDevices"
+                  placeholder="Search devices"
+                  @search="scheduleDeviceSearch"
+                  @update:value="onDeviceSelectionChange"
                 />
                 <n-button block type="primary" :loading="loadingStreams" @click="loadStreams">
                   Load streams
@@ -179,7 +188,6 @@ import {
   NDescriptionsItem,
   NDrawer,
   NDrawerContent,
-  NDynamicTags,
   NEmpty,
   NGrid,
   NGridItem,
@@ -193,6 +201,7 @@ import {
   NTag,
   createDiscreteApi,
 } from "naive-ui";
+import type { SelectOption } from "naive-ui";
 
 echarts.use([GridComponent, LegendComponent, TooltipComponent, DataZoomComponent, LineChart, CanvasRenderer]);
 
@@ -300,12 +309,13 @@ const WHEEL_ZOOM_FACTOR = 1.8;
 const WHEEL_ZOOM_DEBOUNCE_MS = 220;
 const CHART_GRID_LEFT_PX = 52;
 const CHART_GRID_RIGHT_PX = 28;
+const DEVICE_SEARCH_DEBOUNCE_MS = 250;
 
 const normalizedQueryUrl = computed(() => props.queryServerUrl.replace(/\/$/, ""));
 const drawerOpen = ref(props.autoOpenControls);
 const drawerWidth = computed(() => (window.innerWidth < 720 ? Math.max(window.innerWidth - 24, 320) : 420));
 const selectedDeviceIds = ref<string[]>(initialDevices());
-const deviceDraft = ref("");
+const deviceOptions = ref<SelectOption[]>(deviceIdsToOptions(selectedDeviceIds.value));
 const streamsByDevice = ref<Record<string, StreamInfo[]>>({});
 const selectedKey = ref(props.initialStreamKey);
 const streamFilter = ref("");
@@ -313,6 +323,7 @@ const seriesResponses = ref<SeriesResponse[]>([]);
 const maxPoints = ref(props.maxPointsPerRequest);
 const maxPointsPerRequest = computed(() => props.maxPointsPerRequest);
 const rangePreset = ref(props.initialRangePreset);
+const loadingDevices = ref(false);
 const loadingStreams = ref(false);
 const loadingSeries = ref(false);
 const pendingRangeFetch = ref(false);
@@ -376,6 +387,7 @@ const seriesResolution = computed(() => {
 const visibleRangeLabel = computed(() => `${timeLabel(visibleRange.value.from)} - ${timeLabel(visibleRange.value.to)}`);
 
 onMounted(async () => {
+  void searchDevices("");
   await loadStreams();
   window.addEventListener("resize", resizeChart);
   window.addEventListener("aetus-test-zoom", onExternalZoom as EventListener);
@@ -393,8 +405,10 @@ onBeforeUnmount(() => {
   window.removeEventListener("aetus-test-wheel-zoom", onExternalWheelZoom as EventListener);
   window.removeEventListener("aetus-test-pan", onExternalPan as EventListener);
   activeRequest?.abort();
+  deviceSearchRequest?.abort();
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
   if (wheelZoomTimer !== undefined) window.clearTimeout(wheelZoomTimer);
+  if (deviceSearchTimer !== undefined) window.clearTimeout(deviceSearchTimer);
   chart?.dispose();
   chart = null;
 });
@@ -406,7 +420,10 @@ watch(
   },
 );
 
-watch(selectedDeviceIds, (devices) => emit("device-change", [...devices]), { deep: true });
+watch(selectedDeviceIds, (devices) => {
+  mergeDeviceOptions(devices);
+  emit("device-change", [...devices]);
+}, { deep: true });
 
 watch(availableChannels, (channels) => {
   selectedChannels.value = [...channels];
@@ -442,6 +459,52 @@ async function loadStreams() {
   } finally {
     loadingStreams.value = false;
   }
+}
+
+let deviceSearchTimer: number | undefined;
+let deviceSearchRequest: AbortController | null = null;
+
+function scheduleDeviceSearch(query: string) {
+  if (deviceSearchTimer !== undefined) window.clearTimeout(deviceSearchTimer);
+  deviceSearchTimer = window.setTimeout(() => {
+    void searchDevices(query);
+  }, DEVICE_SEARCH_DEBOUNCE_MS);
+}
+
+async function searchDevices(query: string) {
+  deviceSearchRequest?.abort();
+  deviceSearchRequest = new AbortController();
+  loadingDevices.value = true;
+  try {
+    const headers = await authHeaders();
+    const params = new URLSearchParams({ search: query.trim(), limit: "30" });
+    const response = await fetch(`${normalizedQueryUrl.value}/v1/query/devices?${params}`, {
+      headers,
+      signal: deviceSearchRequest.signal,
+    });
+    await assertOk(response);
+    const body = (await response.json()) as { devices: Array<{ device_id: string }> };
+    mergeDeviceOptions(body.devices.map((device) => device.device_id));
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    handleError(error, "Failed to search devices");
+  } finally {
+    loadingDevices.value = false;
+  }
+}
+
+function mergeDeviceOptions(deviceIds: string[]) {
+  const map = new Map<string, SelectOption>();
+  for (const option of deviceOptions.value) {
+    if (typeof option.value === "string") map.set(option.value, option);
+  }
+  for (const deviceId of selectedDeviceIds.value) {
+    map.set(deviceId, { label: deviceId, value: deviceId });
+  }
+  for (const deviceId of deviceIds) {
+    map.set(deviceId, { label: deviceId, value: deviceId });
+  }
+  deviceOptions.value = Array.from(map.values()).sort((a, b) => String(a.value).localeCompare(String(b.value)));
 }
 
 async function loadSeries(range = visibleRange.value, reason = "manual") {
@@ -492,11 +555,7 @@ function selectStream(key: string) {
   void loadSeries();
 }
 
-function addDevice() {
-  const next = deviceDraft.value.trim();
-  if (!next || selectedDeviceIds.value.includes(next)) return;
-  selectedDeviceIds.value = [...selectedDeviceIds.value, next];
-  deviceDraft.value = "";
+function onDeviceSelectionChange() {
   void loadStreams();
 }
 
@@ -966,6 +1025,10 @@ function initialDevices() {
   return Array.from(new Set(devices));
 }
 
+function deviceIdsToOptions(deviceIds: string[]): SelectOption[] {
+  return deviceIds.map((deviceId) => ({ label: deviceId, value: deviceId }));
+}
+
 function resizeChart() {
   chart?.resize();
 }
@@ -1085,6 +1148,16 @@ function resizeChart() {
   background: #38bdf8;
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16);
   animation: aetus-fetch-pulse 1.4s ease-in-out infinite;
+}
+
+.device-select :deep(.n-base-selection-input-tag) {
+  display: inline-block;
+  flex: 1 1 140px;
+  min-width: 140px;
+}
+
+.device-select :deep(.n-base-selection-input-tag__input) {
+  min-width: 120px;
 }
 
 @keyframes aetus-fetch-pulse {

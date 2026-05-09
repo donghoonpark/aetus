@@ -68,6 +68,25 @@ def create_app(
         verify_admin_token(resolved_settings, x_aetus_admin_token)
         return issue_query_token(resolved_settings, request)
 
+    @app.get("/v1/query/devices")
+    def search_devices(
+        search: str = Query(default="", max_length=128),
+        limit: int = Query(default=20, ge=1, le=100),
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        principal = _authenticate(resolved_settings, authorization, "streams:list")
+        query = search.strip()
+        if "*" in principal.devices:
+            device_ids = app.state.repository.search_devices(query, limit)
+        else:
+            needle = query.lower()
+            device_ids = [
+                device_id
+                for device_id in sorted(principal.devices)
+                if not needle or needle in device_id.lower()
+            ][:limit]
+        return {"devices": [{"device_id": device_id} for device_id in device_ids]}
+
     @app.get("/v1/query/devices/{device_id}/streams")
     def list_streams(device_id: str, authorization: str | None = Header(default=None)) -> dict:
         principal = _authenticate(resolved_settings, authorization, "streams:list")

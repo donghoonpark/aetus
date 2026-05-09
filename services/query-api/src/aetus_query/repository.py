@@ -31,6 +31,8 @@ class StreamRef:
 
 
 class QueryRepository:
+    def search_devices(self, query: str, limit: int) -> list[str]: ...
+
     def list_streams(self, device_id: str) -> list[StreamRef]: ...
 
     def scalar_series(self, device_id: str, key: str, start: datetime, end: datetime, max_points: int) -> dict[str, Any]: ...
@@ -56,6 +58,40 @@ class PostgresQueryRepository(QueryRepository):
             self._pool = dsn
         else:
             self._pool = ConnectionPool(dsn, min_size=2, max_size=10, open=True, kwargs={"row_factory": dict_row})
+
+    def search_devices(self, query: str, limit: int) -> list[str]:
+        normalized = query.strip()
+        bounded_limit = max(1, min(limit, 100))
+        t0 = time.monotonic()
+        with self._connect() as conn:
+            if normalized:
+                rows = conn.execute(
+                    """
+                    SELECT device_id
+                    FROM devices
+                    WHERE device_id ILIKE %s
+                    ORDER BY device_id
+                    LIMIT %s
+                    """,
+                    (f"%{normalized}%", bounded_limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT device_id
+                    FROM devices
+                    ORDER BY device_id
+                    LIMIT %s
+                    """,
+                    (bounded_limit,),
+                ).fetchall()
+        logger.debug(
+            "search_devices query=%r count=%d elapsed=%.3fms",
+            normalized,
+            len(rows),
+            (time.monotonic() - t0) * 1000,
+        )
+        return [row["device_id"] for row in rows]
 
     def list_streams(self, device_id: str) -> list[StreamRef]:
         t0 = time.monotonic()

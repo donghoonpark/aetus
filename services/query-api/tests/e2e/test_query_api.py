@@ -79,6 +79,8 @@ def _seed_query_data() -> None:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO devices(device_id) VALUES (%s) RETURNING device_pk", ("query-device-1",))
             device_pk = cur.fetchone()[0]
+            cur.execute("INSERT INTO devices(device_id) VALUES (%s)", ("query-device-2",))
+            cur.execute("INSERT INTO devices(device_id) VALUES (%s)", ("other-device-1",))
             cur.execute(
                 "INSERT INTO device_boot_sessions(device_pk, boot_id) VALUES (%s, %s) RETURNING boot_pk",
                 (device_pk, "boot-query-1"),
@@ -268,6 +270,30 @@ def test_query_api_lists_scalar_and_sampled_streams(query_stack: None) -> None:
     assert streams["machine.state"]["value_type"] == "string"
     assert streams["imu.accel"]["kind"] == "sampled"
     assert streams["imu.accel"]["nominal_rate_hz"] == 200.0
+
+
+def test_query_api_searches_devices_with_claim_filtering(query_stack: None) -> None:
+    del query_stack
+
+    response = httpx.get(
+        f"{QUERY_API_URL}/v1/query/devices",
+        params={"search": "query-device", "limit": 10},
+        headers=_query_auth_headers(devices=["*"]),
+        timeout=10.0,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["devices"] == [{"device_id": "query-device-1"}, {"device_id": "query-device-2"}]
+
+    restricted_response = httpx.get(
+        f"{QUERY_API_URL}/v1/query/devices",
+        params={"search": "device", "limit": 10},
+        headers=_query_auth_headers(devices=["query-device-2"]),
+        timeout=10.0,
+    )
+
+    assert restricted_response.status_code == 200, restricted_response.text
+    assert restricted_response.json()["devices"] == [{"device_id": "query-device-2"}]
 
 
 def test_query_api_returns_scalar_series(query_stack: None) -> None:

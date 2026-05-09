@@ -257,10 +257,34 @@ flowchart TB
 
 권장 엔드포인트:
 
+- `GET /v1/query/devices`
 - `GET /v1/query/devices/{device_id}/streams`
 - `GET /v1/query/devices/{device_id}/streams/{key}/summary`
 - `GET /v1/query/devices/{device_id}/streams/{key}/series`
 - `GET /v1/query/devices/{device_id}/streams/{key}/frames`
+
+### device 검색
+
+`GET /v1/query/devices?search=esp32&limit=20`
+
+응답 예시:
+
+```json
+{
+  "devices": [
+    {
+      "device_id": "esp32c5-test-001"
+    }
+  ]
+}
+```
+
+규칙:
+
+- `streams:list` scope가 필요하다
+- `devices=["*"]` 토큰은 DB의 `devices` dimension table에서 부분 문자열 검색한다
+- 특정 device allowlist가 들어간 토큰은 allowlist 내부에서만 검색 결과를 만든다
+- 프론트는 검색어 입력을 디바운스해서 호출한다
 
 ### stream 목록
 
@@ -626,6 +650,7 @@ import "@aetus/stream-viewer/style.css";
 현재 컴포넌트 동작:
 
 - 평상시에는 chart surface와 작은 상태 정보만 노출하고, device/stream/channel/range 설정은 우측 drawer에 숨긴다
+- device 선택은 remote searchable combobox로 제공하며, 입력 중 `GET /v1/query/devices?search=...`를 서버사이드 호출한다
 - `GET /v1/query/devices/{device_id}/streams`로 device별 stream metadata 조회
 - 여러 device에서 같은 `stream.key`를 선택하면 같은 chart에 overlay한다
 - `GET /v1/query/devices/{device_id}/streams/{key}/series`로 chart series 조회
