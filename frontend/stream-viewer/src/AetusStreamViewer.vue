@@ -252,10 +252,13 @@ const chartEl = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
 let activeRequest: AbortController | null = null;
 let zoomTimer: number | undefined;
+let wheelZoomOutTimer: number | undefined;
+let pendingWheelZoomOutAnchorRatio = 0.5;
 let renderingChart = false;
 let suppressDataZoomUntil = 0;
 
 const WHEEL_ZOOM_OUT_FACTOR = 1.8;
+const WHEEL_ZOOM_OUT_DEBOUNCE_MS = 220;
 
 const normalizedQueryUrl = computed(() => props.queryServerUrl.replace(/\/$/, ""));
 const drawerOpen = ref(props.autoOpenControls);
@@ -342,6 +345,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("aetus-test-wheel-zoomout", onExternalWheelZoomOut as EventListener);
   activeRequest?.abort();
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
+  if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
   chart?.dispose();
   chart = null;
 });
@@ -615,7 +619,14 @@ function handleWheelZoomOut(event: unknown) {
   wheel.event?.preventDefault?.();
   wheel.event?.stopPropagation?.();
   suppressDataZoomUntil = Date.now() + 700;
-  const range = expandedRangeFromWheel(wheel);
+  pendingWheelZoomOutAnchorRatio = wheelAnchorRatio(wheel.offsetX);
+  if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
+  wheelZoomOutTimer = window.setTimeout(flushWheelZoomOut, WHEEL_ZOOM_OUT_DEBOUNCE_MS);
+}
+
+function flushWheelZoomOut() {
+  wheelZoomOutTimer = undefined;
+  const range = expandedRangeFromAnchorRatio(pendingWheelZoomOutAnchorRatio);
   if (!range) return;
   applyOptimisticRange(range);
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
@@ -651,12 +662,11 @@ function isWheelZoomOut(event: { wheelDelta?: number; event?: { deltaY?: number 
   return false;
 }
 
-function expandedRangeFromWheel(event: { offsetX?: number }): { from: string; to: string } | null {
+function expandedRangeFromAnchorRatio(anchorRatio: number): { from: string; to: string } | null {
   const fromMs = Date.parse(visibleRange.value.from);
   const toMs = Date.parse(visibleRange.value.to);
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return null;
   const span = toMs - fromMs;
-  const anchorRatio = wheelAnchorRatio(event.offsetX);
   const nextSpan = span * WHEEL_ZOOM_OUT_FACTOR;
   const nextFrom = fromMs - (nextSpan - span) * anchorRatio;
   return normalizedRange(nextFrom, nextFrom + nextSpan);
@@ -728,20 +738,9 @@ function onExternalDataZoom(event: CustomEvent<unknown>) {
 
 function onExternalWheelZoomOut(event: CustomEvent<{ anchorRatio?: number }>) {
   if (!autoRefetchOnZoom.value) return;
-  const fromMs = Date.parse(visibleRange.value.from);
-  const toMs = Date.parse(visibleRange.value.to);
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return;
-  const span = toMs - fromMs;
-  const anchorRatio = Math.min(0.95, Math.max(0.05, event.detail?.anchorRatio ?? 0.5));
-  const nextSpan = span * WHEEL_ZOOM_OUT_FACTOR;
-  const nextFrom = fromMs - (nextSpan - span) * anchorRatio;
-  const range = normalizedRange(nextFrom, nextFrom + nextSpan);
-  if (!range) return;
-  applyOptimisticRange(range);
-  if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
-  zoomTimer = window.setTimeout(() => {
-    void loadSeries(range, "zoom-out");
-  }, 350);
+  pendingWheelZoomOutAnchorRatio = Math.min(0.95, Math.max(0.05, event.detail?.anchorRatio ?? 0.5));
+  if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
+  wheelZoomOutTimer = window.setTimeout(flushWheelZoomOut, WHEEL_ZOOM_OUT_DEBOUNCE_MS);
 }
 
 async function prefetchAdjacent(range: { from: string; to: string }, requestMaxPoints: number) {

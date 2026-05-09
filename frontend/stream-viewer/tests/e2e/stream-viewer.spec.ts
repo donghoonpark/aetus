@@ -177,6 +177,26 @@ test("shows the expanded wheel zoom-out range before the server response arrives
   await expect(page.getByText("synced")).toBeVisible();
 });
 
+test("debounces repeated wheel zoom-out events into a single range expansion", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("aetus-test-wheel-zoomout", { detail: { anchorRatio: 0.5 } }));
+    window.dispatchEvent(new CustomEvent("aetus-test-wheel-zoomout", { detail: { anchorRatio: 0.5 } }));
+    window.dispatchEvent(new CustomEvent("aetus-test-wheel-zoomout", { detail: { anchorRatio: 0.5 } }));
+  });
+
+  await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:46:00.000Z").length)
+    .toBe(2);
+  expect(seriesRequests.some((url) => url.searchParams.get("from") === "2026-05-03T00:38:48.000Z")).toBe(false);
+});
+
 async function mockQueryApi(
   page: Page,
   seriesRequests: URL[],
