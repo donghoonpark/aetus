@@ -3,6 +3,15 @@ import type { Page } from "@playwright/test";
 
 const now = new Date("2026-05-03T01:00:00Z");
 
+function localRangeLabel(fromIso: string, toIso: string) {
+  return `${localTimeLabel(fromIso)} - ${localTimeLabel(toIso)}`;
+}
+
+function localTimeLabel(iso: string) {
+  const date = new Date(iso);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((fixedNow) => {
     const RealDate = Date;
@@ -46,7 +55,7 @@ test("renders a hidden-control multi-device sampled panel with bounded dense fet
   }
 });
 
-test("opens controls, switches stream, and keeps JWT on query requests", async ({ page }) => {
+test("opens controls, adds a second stream, and keeps JWT on query requests", async ({ page }) => {
   const seriesRequests: URL[] = [];
   await mockQueryApi(page, seriesRequests);
 
@@ -61,9 +70,9 @@ test("opens controls, switches stream, and keeps JWT on query requests", async (
   await expect(page.getByRole("button", { name: /dense.vibration 2 device · g sampled/ })).toBeVisible();
   await page.getByRole("button", { name: /env.temperature/ }).click();
 
-  await expect(page.getByRole("heading", { name: "env.temperature" })).toBeVisible();
-  await expect(page.getByText("20,000 plotted points")).toBeVisible();
-  await expect(page.locator(".viewer-shell").getByText("scalar", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2 streams" })).toBeVisible();
+  await expect(page.getByText("60,000 plotted points")).toBeVisible();
+  await expect(page.locator(".viewer-shell").getByText("mixed", { exact: true })).toBeVisible();
   expect(seriesRequests.some((url) => url.pathname.includes("env.temperature"))).toBeTruthy();
 });
 
@@ -92,15 +101,21 @@ test("renders scalar streams across numeric, boolean, and string value types", a
 
   await page.goto("/");
   await page.getByTitle("Open controls").click();
+  await page.getByRole("button", { name: /dense.vibration/ }).click();
+  let activeStream: string | null = null;
   for (const [streamKey, expectedText] of [
     ["motor.rpm", "20,000 plotted points"],
     ["env.humidity", "20,000 plotted points"],
     ["pump.enabled", "20,000 plotted points"],
     ["machine.state", "20 plotted points"],
   ] as const) {
+    if (activeStream) {
+      await page.getByRole("button", { name: new RegExp(activeStream.replace(".", "\\.")) }).click();
+    }
     await page.getByRole("button", { name: new RegExp(streamKey.replace(".", "\\.")) }).click();
     await expect(page.getByRole("heading", { name: streamKey })).toBeVisible();
     await expect(page.getByText(expectedText)).toBeVisible();
+    activeStream = streamKey;
   }
 
   expect(seriesRequests.some((url) => url.pathname.includes("motor.rpm"))).toBeTruthy();
@@ -121,7 +136,7 @@ test("applies an explicit time range from the control drawer", async ({ page }) 
     const to = new Date("2026-05-03 00:45:00").toISOString();
     return {
       from,
-      label: `${from.slice(11, 19)} - ${to.slice(11, 19)}`,
+      to,
     };
   });
   await page.getByPlaceholder("From").fill("2026-05-03 00:40:00");
@@ -129,7 +144,7 @@ test("applies an explicit time range from the control drawer", async ({ page }) 
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Apply range" }).click();
 
-  await expect(page.getByText(expectedRange.label)).toBeVisible();
+  await expect(page.getByText(localRangeLabel(expectedRange.from, expectedRange.to))).toBeVisible();
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === expectedRange.from).length)
     .toBe(2);
@@ -154,7 +169,7 @@ test("refetches high density data when the visible zoom range changes", async ({
   });
 
   await expect.poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:55:00.000Z").length).toBe(2);
-  await expect(page.getByText("00:55:00 - 00:56:00")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:55:00.000Z", "2026-05-03T00:56:00.000Z"))).toBeVisible();
 });
 
 test("converts ECharts dataZoom percent payload into a server-side range fetch", async ({ page }) => {
@@ -177,7 +192,7 @@ test("converts ECharts dataZoom percent payload into a server-side range fetch",
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:55:00.000Z").length)
     .toBe(2);
-  await expect(page.getByText("00:55:00 - 00:56:00")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:55:00.000Z", "2026-05-03T00:56:00.000Z"))).toBeVisible();
 });
 
 test("treats ECharts pan payloads as dynamic server-side range fetches", async ({ page }) => {
@@ -200,7 +215,7 @@ test("treats ECharts pan payloads as dynamic server-side range fetches", async (
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:52:00.000Z").length)
     .toBe(2);
-  await expect(page.getByText("00:52:00 - 00:53:00")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:52:00.000Z", "2026-05-03T00:53:00.000Z"))).toBeVisible();
 });
 
 test("pans the visible time range when the chart body is dragged", async ({ page }) => {
@@ -216,7 +231,7 @@ test("pans the visible time range when the chart body is dragged", async ({ page
     window.dispatchEvent(new CustomEvent("aetus-test-pan", { detail: { deltaX } }));
   });
 
-  await expect(page.getByText("00:52:00 - 01:02:00")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:52:00.000Z", "2026-05-03T01:02:00.000Z"))).toBeVisible();
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:52:00.000Z").length)
     .toBe(2);
@@ -240,7 +255,7 @@ test("implements wheel zoom-out by expanding beyond the loaded chart extent", as
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:46:00.000Z").length)
     .toBe(2);
-  await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:46:00.000Z", "2026-05-03T01:04:00.000Z"))).toBeVisible();
 });
 
 test("uses the mouse anchor position for wheel zoom in and out", async ({ page }) => {
@@ -258,7 +273,7 @@ test("uses the mouse anchor position for wheel zoom in and out", async ({ page }
     );
   });
 
-  await expect(page.getByText("00:51:06 - 00:56:40")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:51:06.666Z", "2026-05-03T00:56:40.000Z"))).toBeVisible();
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from")?.startsWith("2026-05-03T00:51:06.66")).length)
     .toBe(2);
@@ -271,7 +286,7 @@ test("uses the mouse anchor position for wheel zoom in and out", async ({ page }
     );
   });
 
-  await expect(page.getByText("00:47:46 - 00:57:46")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:47:46.666Z", "2026-05-03T00:57:46.666Z"))).toBeVisible();
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from")?.startsWith("2026-05-03T00:47:46.66")).length)
     .toBe(2);
@@ -298,7 +313,7 @@ test("shows the expanded wheel zoom-out range before the server response arrives
     );
   });
 
-  await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:46:00.000Z", "2026-05-03T01:04:00.000Z"))).toBeVisible();
   await expect(page.getByText("syncing")).toBeVisible();
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:46:00.000Z").length)
@@ -320,7 +335,7 @@ test("debounces repeated wheel zoom-out events into a single range expansion", a
     window.dispatchEvent(new CustomEvent("aetus-test-wheel-zoomout", { detail: { anchorRatio: 0.5 } }));
   });
 
-  await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:46:00.000Z", "2026-05-03T01:04:00.000Z"))).toBeVisible();
   await expect
     .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:46:00.000Z").length)
     .toBe(2);

@@ -4,7 +4,7 @@
       <header class="viewer-shell">
         <div class="title-block">
           <p class="eyebrow">{{ panelTitle }}</p>
-          <h1>{{ selectedKey || "Stream panel" }}</h1>
+          <h1>{{ selectedTitle }}</h1>
           <p class="subline" data-testid="visible-range">
             {{ selectedDeviceIds.length }} device{{ selectedDeviceIds.length === 1 ? "" : "s" }}
             · {{ plottedPointCount.toLocaleString() }} plotted points
@@ -12,7 +12,7 @@
           </p>
         </div>
         <n-space align="center" :size="10">
-          <n-tag v-if="selectedKind" :type="selectedKind === 'sampled' ? 'info' : 'success'" round>
+          <n-tag v-if="selectedKind" :type="selectedKind === 'sampled' ? 'info' : selectedKind === 'mixed' ? 'warning' : 'success'" round>
             {{ selectedKind }}
           </n-tag>
           <n-button secondary circle title="Refresh" @click="refresh">
@@ -25,7 +25,7 @@
       </header>
 
       <main class="chart-panel">
-        <div v-if="!selectedKey" class="empty-state">
+        <div v-if="selectedKeys.length === 0" class="empty-state">
           <n-empty description="Select a device and stream from the control drawer" />
           <n-button type="primary" @click="drawerOpen = true">Open controls</n-button>
         </div>
@@ -75,9 +75,9 @@
                     v-for="stream in filteredStreamCatalog"
                     :key="stream.key"
                     class="stream-row"
-                    :class="{ active: stream.key === selectedKey }"
+                    :class="{ active: selectedKeys.includes(stream.key) }"
                     type="button"
-                    @click="selectStream(stream.key)"
+                    @click="toggleStream(stream.key)"
                   >
                     <span>
                       <strong>{{ stream.key }}</strong>
@@ -174,7 +174,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { DataZoomComponent, GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
-import { LineChart } from "echarts/charts";
+import { LineChart, ScatterChart } from "echarts/charts";
 import { CanvasRenderer } from "echarts/renderers";
 import { RefreshCw, SlidersHorizontal } from "lucide-vue-next";
 import {
@@ -203,7 +203,7 @@ import {
 } from "naive-ui";
 import type { SelectOption } from "naive-ui";
 
-echarts.use([GridComponent, LegendComponent, TooltipComponent, DataZoomComponent, LineChart, CanvasRenderer]);
+echarts.use([GridComponent, LegendComponent, TooltipComponent, DataZoomComponent, LineChart, ScatterChart, CanvasRenderer]);
 
 type StreamKind = "scalar" | "sampled";
 type ScalarValueType = "double" | "float" | "int" | "bool" | "string";
@@ -318,7 +318,7 @@ const drawerWidth = computed(() => (window.innerWidth < 720 ? Math.max(window.in
 const selectedDeviceIds = ref<string[]>(initialDevices());
 const deviceOptions = ref<SelectOption[]>(deviceIdsToOptions(selectedDeviceIds.value));
 const streamsByDevice = ref<Record<string, StreamInfo[]>>({});
-const selectedKey = ref(props.initialStreamKey);
+const selectedKeys = ref<string[]>(props.initialStreamKey ? [props.initialStreamKey] : []);
 const streamFilter = ref("");
 const seriesResponses = ref<SeriesResponse[]>([]);
 const maxPoints = ref(props.maxPointsPerRequest);
@@ -377,9 +377,19 @@ const filteredStreamCatalog = computed(() => {
   return streamCatalog.value.filter((stream) => stream.key.toLowerCase().includes(query));
 });
 
-const selectedStreamCatalogItem = computed(() => streamCatalog.value.find((stream) => stream.key === selectedKey.value) ?? null);
-const selectedKind = computed(() => selectedStreamCatalogItem.value?.kind ?? seriesResponses.value[0]?.kind ?? null);
-const availableChannels = computed(() => selectedStreamCatalogItem.value?.channels ?? []);
+const selectedStreamCatalogItems = computed(() => selectedKeys.value.map((key) => streamCatalog.value.find((stream) => stream.key === key)).filter((stream): stream is StreamCatalogItem => Boolean(stream)));
+const selectedTitle = computed(() => {
+  if (selectedKeys.value.length === 0) return "Stream panel";
+  if (selectedKeys.value.length === 1) return selectedKeys.value[0];
+  return `${selectedKeys.value.length} streams`;
+});
+const selectedKind = computed(() => {
+  const kinds = new Set(selectedStreamCatalogItems.value.map((stream) => stream.kind));
+  if (kinds.size === 1) return selectedStreamCatalogItems.value[0]?.kind ?? null;
+  if (kinds.size > 1) return "mixed";
+  return seriesResponses.value[0]?.kind ?? null;
+});
+const availableChannels = computed(() => Array.from(new Set(selectedStreamCatalogItems.value.flatMap((stream) => stream.channels))).sort());
 const plottedPointCount = computed(() => seriesResponses.value.reduce((total, response) => total + countSeriesPoints(response), 0));
 const seriesResolution = computed(() => {
   const resolutions = Array.from(new Set(seriesResponses.value.map((response) => response.resolution)));
@@ -451,8 +461,10 @@ async function loadStreams() {
       }),
     );
     streamsByDevice.value = Object.fromEntries(entries);
-    if (!selectedKey.value || !streamCatalog.value.some((stream) => stream.key === selectedKey.value)) {
-      selectedKey.value = streamCatalog.value[0]?.key ?? "";
+    selectedKeys.value = selectedKeys.value.filter((key) => streamCatalog.value.some((stream) => stream.key === key));
+    if (selectedKeys.value.length === 0) {
+      const firstKey = streamCatalog.value[0]?.key;
+      selectedKeys.value = firstKey ? [firstKey] : [];
     }
     await loadSeries();
   } catch (error) {
@@ -509,7 +521,12 @@ function mergeDeviceOptions(deviceIds: string[]) {
 }
 
 async function loadSeries(range = visibleRange.value, reason = "manual") {
-  if (selectedDeviceIds.value.length === 0 || !selectedKey.value) return;
+  if (selectedDeviceIds.value.length === 0 || selectedKeys.value.length === 0) {
+    seriesResponses.value = [];
+    await nextTick();
+    renderChart();
+    return;
+  }
   activeRequest?.abort();
   activeRequest = new AbortController();
   pendingRangeFetch.value = false;
@@ -518,28 +535,32 @@ async function loadSeries(range = visibleRange.value, reason = "manual") {
   syncCustomRange(range);
   const requestMaxPoints = autoMaxPoints(reason);
   maxPoints.value = requestMaxPoints;
+  const requestKeys = [...selectedKeys.value];
+  const requestKeyLabel = requestKeys.join(", ");
   emit("density-change", { maxPoints: requestMaxPoints, reason });
   emit("range-change", range);
-  emit("query-start", { devices: [...selectedDeviceIds.value], key: selectedKey.value, ...range, maxPoints: requestMaxPoints });
+  emit("query-start", { devices: [...selectedDeviceIds.value], key: requestKeyLabel, ...range, maxPoints: requestMaxPoints });
   try {
     const headers = await authHeaders();
     const params = new URLSearchParams({ from: range.from, to: range.to, max_points: String(requestMaxPoints) });
     const responses = await Promise.all(
-      selectedDeviceIds.value.map(async (deviceId) => {
-        if (!deviceHasStream(deviceId, selectedKey.value)) return null;
-        const response = await fetch(
-          `${normalizedQueryUrl.value}/v1/query/devices/${encodeURIComponent(deviceId)}/streams/${encodeURIComponent(selectedKey.value)}/series?${params}`,
-          { headers, signal: activeRequest?.signal },
-        );
-        await assertOk(response);
-        return (await response.json()) as SeriesResponse;
-      }),
+      selectedDeviceIds.value.flatMap((deviceId) =>
+        requestKeys.map(async (key) => {
+          if (!deviceHasStream(deviceId, key)) return null;
+          const response = await fetch(
+            `${normalizedQueryUrl.value}/v1/query/devices/${encodeURIComponent(deviceId)}/streams/${encodeURIComponent(key)}/series?${params}`,
+            { headers, signal: activeRequest?.signal },
+          );
+          await assertOk(response);
+          return (await response.json()) as SeriesResponse;
+        }),
+      ),
     );
     seriesResponses.value = responses.filter((response): response is SeriesResponse => response !== null);
-    lastRequestLabel.value = `${seriesResponses.value.length} device response · ${requestMaxPoints.toLocaleString()} max points`;
+    lastRequestLabel.value = `${seriesResponses.value.length} response · ${requestKeys.length} stream · ${requestMaxPoints.toLocaleString()} max points`;
     await nextTick();
     renderChart();
-    emit("query-success", { devices: [...selectedDeviceIds.value], key: selectedKey.value, pointCount: plottedPointCount.value });
+    emit("query-success", { devices: [...selectedDeviceIds.value], key: requestKeyLabel, pointCount: plottedPointCount.value });
     if (enablePrefetch.value) void prefetchAdjacent(range, requestMaxPoints);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") return;
@@ -550,9 +571,11 @@ async function loadSeries(range = visibleRange.value, reason = "manual") {
   }
 }
 
-function selectStream(key: string) {
-  selectedKey.value = key;
-  emit("stream-change", key);
+function toggleStream(key: string) {
+  selectedKeys.value = selectedKeys.value.includes(key)
+    ? selectedKeys.value.filter((selectedKey) => selectedKey !== key)
+    : [...selectedKeys.value, key];
+  emit("stream-change", selectedKeys.value.join(", "));
   void loadSeries();
 }
 
@@ -671,7 +694,10 @@ function renderChart() {
         },
       ],
       xAxis: { type: "time", min: visibleRange.value.from, max: visibleRange.value.to },
-      yAxis: { type: "value", scale: true },
+      yAxis: [
+        { type: "value", scale: true },
+        { type: "value", min: 0, max: 1, show: false },
+      ],
       series: chartSeries,
     },
     true,
@@ -693,6 +719,8 @@ function chartTooltipFormatter(params: unknown) {
     let label = "";
     if (Array.isArray(value) && value.length >= 4) {
       label = `min ${formatNumber(value[2])} / max ${formatNumber(value[3])}`;
+    } else if (Array.isArray(value) && typeof value[2] === "string") {
+      label = value[2];
     } else if (Array.isArray(value)) {
       label = formatNumber(value[1]);
     } else {
@@ -721,25 +749,39 @@ function filterTooltipItems(items: unknown[]) {
   });
 }
 
+function stringStateMarkers(points: SeriesPoint[], fallbackText: string) {
+  const markers: SeriesPoint[] = [];
+  let previousText: string | undefined;
+  for (const point of points) {
+    const text = point.text ?? fallbackText;
+    if (markers.length === 0 || text !== previousText) {
+      markers.push({ ...point, text });
+    }
+    previousText = text;
+  }
+  return markers;
+}
+
 function responseToChartSeries(response: SeriesResponse, colorByName: Map<string, string>) {
   if (response.kind === "scalar") {
     const scalarName = `${response.device_id} / ${response.key}`;
     const scalarColor = colorForName(scalarName, colorByName);
     if (response.value_type === "string") {
+      const eventPoints = (response.points ?? []).map((point) => [point.ts, 0.5, point.text ?? ""]);
       return [
         {
           name: scalarName,
-          type: "line",
-          showSymbol: false,
+          type: "scatter",
+          yAxisIndex: 1,
+          symbolSize: 8,
           itemStyle: { color: scalarColor },
-          lineStyle: { color: scalarColor },
-          data: [],
+          data: eventPoints,
           markLine: {
             symbol: "none",
             silent: true,
             label: { formatter: "{b}", rotate: 90, color: "#475569" },
             lineStyle: { type: "dashed", width: 1.5, color: scalarColor },
-            data: (response.points ?? []).map((point) => ({
+            data: stringStateMarkers(response.points ?? [], response.key).map((point) => ({
               name: point.text ?? response.key,
               xAxis: point.ts,
             })),
@@ -1142,7 +1184,7 @@ function syncCustomRange(range: { from: string; to: string }) {
 }
 
 async function prefetchAdjacent(range: { from: string; to: string }, requestMaxPoints: number) {
-  if (!selectedKey.value || selectedDeviceIds.value.length === 0) return;
+  if (selectedKeys.value.length === 0 || selectedDeviceIds.value.length === 0) return;
   const fromMs = Date.parse(range.from);
   const toMs = Date.parse(range.to);
   const span = toMs - fromMs;
@@ -1152,13 +1194,15 @@ async function prefetchAdjacent(range: { from: string; to: string }, requestMaxP
     const headers = await authHeaders();
     const params = new URLSearchParams({ from: nextRange.from, to: nextRange.to, max_points: String(requestMaxPoints) });
     await Promise.all(
-      selectedDeviceIds.value.map((deviceId) => {
-        if (!deviceHasStream(deviceId, selectedKey.value)) return Promise.resolve();
-        return fetch(
-          `${normalizedQueryUrl.value}/v1/query/devices/${encodeURIComponent(deviceId)}/streams/${encodeURIComponent(selectedKey.value)}/series?${params}`,
-          { headers },
-        ).then(() => undefined);
-      }),
+      selectedDeviceIds.value.flatMap((deviceId) =>
+        selectedKeys.value.map((key) => {
+          if (!deviceHasStream(deviceId, key)) return Promise.resolve();
+          return fetch(
+            `${normalizedQueryUrl.value}/v1/query/devices/${encodeURIComponent(deviceId)}/streams/${encodeURIComponent(key)}/series?${params}`,
+            { headers },
+          ).then(() => undefined);
+        }),
+      ),
     );
   } catch {
     // Prefetch is opportunistic and should never disturb the visible chart.
