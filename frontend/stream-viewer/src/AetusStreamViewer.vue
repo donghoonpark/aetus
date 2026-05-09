@@ -281,8 +281,9 @@ const chartEl = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
 let activeRequest: AbortController | null = null;
 let zoomTimer: number | undefined;
-let wheelZoomOutTimer: number | undefined;
-let pendingWheelZoomOutAnchorRatio = 0.5;
+let wheelZoomTimer: number | undefined;
+let pendingWheelZoomAnchorRatio = 0.5;
+let pendingWheelZoomFactor = 1;
 let panState:
   | {
       startX: number;
@@ -295,8 +296,10 @@ let panState:
 let renderingChart = false;
 let suppressDataZoomUntil = 0;
 
-const WHEEL_ZOOM_OUT_FACTOR = 1.8;
-const WHEEL_ZOOM_OUT_DEBOUNCE_MS = 220;
+const WHEEL_ZOOM_FACTOR = 1.8;
+const WHEEL_ZOOM_DEBOUNCE_MS = 220;
+const CHART_GRID_LEFT_PX = 52;
+const CHART_GRID_RIGHT_PX = 28;
 
 const normalizedQueryUrl = computed(() => props.queryServerUrl.replace(/\/$/, ""));
 const drawerOpen = ref(props.autoOpenControls);
@@ -378,6 +381,7 @@ onMounted(async () => {
   window.addEventListener("aetus-test-zoom", onExternalZoom as EventListener);
   window.addEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
   window.addEventListener("aetus-test-wheel-zoomout", onExternalWheelZoomOut as EventListener);
+  window.addEventListener("aetus-test-wheel-zoom", onExternalWheelZoom as EventListener);
   window.addEventListener("aetus-test-pan", onExternalPan as EventListener);
 });
 
@@ -386,10 +390,11 @@ onBeforeUnmount(() => {
   window.removeEventListener("aetus-test-zoom", onExternalZoom as EventListener);
   window.removeEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
   window.removeEventListener("aetus-test-wheel-zoomout", onExternalWheelZoomOut as EventListener);
+  window.removeEventListener("aetus-test-wheel-zoom", onExternalWheelZoom as EventListener);
   window.removeEventListener("aetus-test-pan", onExternalPan as EventListener);
   activeRequest?.abort();
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
-  if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
+  if (wheelZoomTimer !== undefined) window.clearTimeout(wheelZoomTimer);
   chart?.dispose();
   chart = null;
 });
@@ -564,8 +569,8 @@ function renderChart() {
   chart ??= echarts.init(chartEl.value);
   chart.off("datazoom");
   chart.on("datazoom", handleChartZoom);
-  chart.getZr().off("mousewheel", handleWheelZoomOut);
-  chart.getZr().on("mousewheel", handleWheelZoomOut);
+  chart.getZr().off("mousewheel", handleWheelZoom);
+  chart.getZr().on("mousewheel", handleWheelZoom);
   chart.getZr().off("mousedown", handlePanStart);
   chart.getZr().off("mousemove", handlePanMove);
   chart.getZr().off("mouseup", handlePanEnd);
@@ -588,8 +593,8 @@ function renderChart() {
           type: "inside",
           filterMode: "none",
           throttle: 160,
-          zoomOnMouseWheel: true,
-          moveOnMouseWheel: true,
+          zoomOnMouseWheel: false,
+          moveOnMouseWheel: false,
           moveOnMouseMove: false,
           preventDefaultMouseMove: true,
         },
@@ -733,7 +738,7 @@ function handlePanEnd() {
   }, 300);
 }
 
-function handleWheelZoomOut(event: unknown) {
+function handleWheelZoom(event: unknown) {
   if (!autoRefetchOnZoom.value || renderingChart) return;
   const wheel = event as {
     offsetX?: number;
@@ -744,23 +749,25 @@ function handleWheelZoomOut(event: unknown) {
       stopPropagation?: () => void;
     };
   };
-  if (!isWheelZoomOut(wheel)) return;
+  const factor = wheelZoomFactor(wheel);
+  if (factor === null) return;
   wheel.event?.preventDefault?.();
   wheel.event?.stopPropagation?.();
   suppressDataZoomUntil = Date.now() + 700;
-  pendingWheelZoomOutAnchorRatio = wheelAnchorRatio(wheel.offsetX);
-  if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
-  wheelZoomOutTimer = window.setTimeout(flushWheelZoomOut, WHEEL_ZOOM_OUT_DEBOUNCE_MS);
+  pendingWheelZoomAnchorRatio = wheelAnchorRatio(wheel.offsetX);
+  pendingWheelZoomFactor = factor;
+  if (wheelZoomTimer !== undefined) window.clearTimeout(wheelZoomTimer);
+  wheelZoomTimer = window.setTimeout(flushWheelZoom, WHEEL_ZOOM_DEBOUNCE_MS);
 }
 
-function flushWheelZoomOut() {
-  wheelZoomOutTimer = undefined;
-  const range = expandedRangeFromAnchorRatio(pendingWheelZoomOutAnchorRatio);
+function flushWheelZoom() {
+  wheelZoomTimer = undefined;
+  const range = zoomedRangeFromAnchorRatio(pendingWheelZoomAnchorRatio, pendingWheelZoomFactor);
   if (!range) return;
   applyOptimisticRange(range);
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
   zoomTimer = window.setTimeout(() => {
-    void loadSeries(range, "zoom-out");
+    void loadSeries(range, pendingWheelZoomFactor > 1 ? "zoom-out" : "zoom");
   }, 350);
 }
 
@@ -786,19 +793,20 @@ function applyOptimisticRange(range: { from: string; to: string }) {
   }, 0);
 }
 
-function isWheelZoomOut(event: { wheelDelta?: number; event?: { deltaY?: number } }) {
-  if (typeof event.event?.deltaY === "number") return event.event.deltaY > 0;
-  if (typeof event.wheelDelta === "number") return event.wheelDelta < 0;
-  return false;
+function wheelZoomFactor(event: { wheelDelta?: number; event?: { deltaY?: number } }) {
+  if (typeof event.event?.deltaY === "number") return event.event.deltaY > 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR;
+  if (typeof event.wheelDelta === "number") return event.wheelDelta < 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR;
+  return null;
 }
 
-function expandedRangeFromAnchorRatio(anchorRatio: number): { from: string; to: string } | null {
+function zoomedRangeFromAnchorRatio(anchorRatio: number, factor: number): { from: string; to: string } | null {
   const fromMs = Date.parse(visibleRange.value.from);
   const toMs = Date.parse(visibleRange.value.to);
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return null;
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs || factor <= 0) return null;
   const span = toMs - fromMs;
-  const nextSpan = span * WHEEL_ZOOM_OUT_FACTOR;
-  const nextFrom = fromMs - (nextSpan - span) * anchorRatio;
+  const nextSpan = span * factor;
+  const anchorTime = fromMs + span * anchorRatio;
+  const nextFrom = anchorTime - nextSpan * anchorRatio;
   return normalizedRange(nextFrom, nextFrom + nextSpan);
 }
 
@@ -814,12 +822,14 @@ function pannedRangeFromDelta(deltaX: number, fromMs: number, toMs: number): { f
 function isInsidePlotArea(offsetX: number) {
   if (!chartEl.value) return false;
   const width = chartEl.value.clientWidth;
-  return offsetX >= 52 && offsetX <= Math.max(52, width - 28);
+  return offsetX >= CHART_GRID_LEFT_PX && offsetX <= Math.max(CHART_GRID_LEFT_PX, width - CHART_GRID_RIGHT_PX);
 }
 
 function wheelAnchorRatio(offsetX: number | undefined) {
   if (!chartEl.value || typeof offsetX !== "number") return 0.5;
-  const ratio = offsetX / Math.max(1, chartEl.value.clientWidth);
+  const plotLeft = CHART_GRID_LEFT_PX;
+  const plotWidth = Math.max(1, chartEl.value.clientWidth - CHART_GRID_LEFT_PX - CHART_GRID_RIGHT_PX);
+  const ratio = (offsetX - plotLeft) / plotWidth;
   return Math.min(0.95, Math.max(0.05, ratio));
 }
 
@@ -882,10 +892,20 @@ function onExternalDataZoom(event: CustomEvent<unknown>) {
 }
 
 function onExternalWheelZoomOut(event: CustomEvent<{ anchorRatio?: number }>) {
+  scheduleExternalWheelZoom(event.detail?.anchorRatio ?? 0.5, WHEEL_ZOOM_FACTOR);
+}
+
+function onExternalWheelZoom(event: CustomEvent<{ anchorRatio?: number; direction?: "in" | "out" }>) {
+  const factor = event.detail?.direction === "in" ? 1 / WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR;
+  scheduleExternalWheelZoom(event.detail?.anchorRatio ?? 0.5, factor);
+}
+
+function scheduleExternalWheelZoom(anchorRatio: number, factor: number) {
   if (!autoRefetchOnZoom.value) return;
-  pendingWheelZoomOutAnchorRatio = Math.min(0.95, Math.max(0.05, event.detail?.anchorRatio ?? 0.5));
-  if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
-  wheelZoomOutTimer = window.setTimeout(flushWheelZoomOut, WHEEL_ZOOM_OUT_DEBOUNCE_MS);
+  pendingWheelZoomAnchorRatio = Math.min(0.95, Math.max(0.05, anchorRatio));
+  pendingWheelZoomFactor = factor;
+  if (wheelZoomTimer !== undefined) window.clearTimeout(wheelZoomTimer);
+  wheelZoomTimer = window.setTimeout(flushWheelZoom, WHEEL_ZOOM_DEBOUNCE_MS);
 }
 
 function onExternalPan(event: CustomEvent<{ deltaX?: number }>) {

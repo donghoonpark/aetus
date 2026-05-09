@@ -214,6 +214,40 @@ test("implements wheel zoom-out by expanding beyond the loaded chart extent", as
   await expect(page.getByText("00:46:00 - 01:04:00")).toBeVisible();
 });
 
+test("uses the mouse anchor position for wheel zoom in and out", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-wheel-zoom", {
+        detail: { anchorRatio: 0.25, direction: "in" },
+      }),
+    );
+  });
+
+  await expect(page.getByText("00:51:06 - 00:56:40")).toBeVisible();
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from")?.startsWith("2026-05-03T00:51:06.66")).length)
+    .toBe(2);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-wheel-zoom", {
+        detail: { anchorRatio: 0.75, direction: "out" },
+      }),
+    );
+  });
+
+  await expect(page.getByText("00:47:46 - 00:57:46")).toBeVisible();
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from")?.startsWith("2026-05-03T00:47:46.66")).length)
+    .toBe(2);
+});
+
 test("shows the expanded wheel zoom-out range before the server response arrives", async ({ page }) => {
   const seriesRequests: URL[] = [];
   let releaseZoomOutResponse: (() => void) | undefined;
