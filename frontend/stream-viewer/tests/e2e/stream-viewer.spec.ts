@@ -124,6 +124,91 @@ test("renders scalar streams across numeric, boolean, and string value types", a
   expect(seriesRequests.some((url) => url.pathname.includes("machine.state"))).toBeTruthy();
 });
 
+function uniqueRequestPaths(urls: URL[]) {
+  return new Set(urls.map((url) => url.pathname));
+}
+
+test("renders multiple scalar streams together without switching back to sampled data", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  await page.getByRole("button", { name: /dense.vibration/ }).click();
+  await page.getByRole("button", { name: /env.temperature/ }).click();
+  await page.getByRole("button", { name: /motor.rpm/ }).click();
+
+  await expect(page.getByRole("heading", { name: "2 streams" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await expect(page.locator(".viewer-shell").getByText("scalar", { exact: true })).toBeVisible();
+
+  const visibleRequests = seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:50:00.000Z");
+  const uniquePaths = uniqueRequestPaths(visibleRequests);
+  expect([...uniquePaths].filter((path) => path.includes("env.temperature"))).toHaveLength(2);
+  expect([...uniquePaths].filter((path) => path.includes("motor.rpm"))).toHaveLength(2);
+  expect([...uniquePaths].filter((path) => path.includes("dense.vibration"))).toHaveLength(2);
+});
+
+test("keeps string state events visible when mixed with sampled data and channel filters", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  await page.getByRole("button", { name: /machine.state/ }).click();
+
+  await expect(page.getByRole("heading", { name: "2 streams" })).toBeVisible();
+  await expect(page.getByText("40,020 plotted points")).toBeVisible();
+  await page.getByRole("checkbox", { name: "accel_y" }).uncheck();
+
+  await expect(page.getByText("20,020 plotted points")).toBeVisible();
+  await expect(page.locator(".floating-status").getByText("accel_x", { exact: true })).toBeVisible();
+  expect(seriesRequests.some((url) => url.pathname.includes("machine.state"))).toBeTruthy();
+});
+
+test("refetches every selected stream when zooming a mixed stream panel", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  await page.getByRole("button", { name: /machine.state/ }).click();
+  await expect(page.getByRole("heading", { name: "2 streams" })).toBeVisible();
+
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("aetus-test-zoom", {
+        detail: {
+          from: "2026-05-03T00:55:00.000Z",
+          to: "2026-05-03T00:56:00.000Z",
+        },
+      }),
+    );
+  });
+
+  const zoomRequests = () => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:55:00.000Z");
+  await expect.poll(() => zoomRequests().length).toBe(4);
+  expect(zoomRequests().filter((url) => url.pathname.includes("dense.vibration"))).toHaveLength(2);
+  expect(zoomRequests().filter((url) => url.pathname.includes("machine.state"))).toHaveLength(2);
+  await expect(page.getByRole("heading", { name: "2 streams" })).toBeVisible();
+  await expect(page.getByText(localRangeLabel("2026-05-03T00:55:00.000Z", "2026-05-03T00:56:00.000Z"))).toBeVisible();
+});
+
+test("shows an empty stream state when every selected stream is toggled off", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  const requestCountBeforeClear = seriesRequests.length;
+  await page.getByRole("button", { name: /dense.vibration/ }).click();
+
+  await expect(page.getByRole("heading", { name: "Stream panel" })).toBeVisible();
+  await expect(page.getByText("0 plotted points")).toBeVisible();
+  await expect(page.getByText("Select a device and stream from the control drawer")).toBeVisible();
+  expect(seriesRequests.length).toBe(requestCountBeforeClear);
+});
+
 test("applies an explicit time range from the control drawer", async ({ page }) => {
   const seriesRequests: URL[] = [];
   await mockQueryApi(page, seriesRequests);

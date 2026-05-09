@@ -1215,7 +1215,10 @@ function deviceHasStream(deviceId: string, key: string) {
 
 function countSeriesPoints(response: SeriesResponse) {
   if (response.kind === "scalar") return response.points?.length ?? 0;
-  return response.channels?.reduce((total, channel) => total + channel.points.length, 0) ?? 0;
+  const channels = selectedChannels.value.length > 0
+    ? response.channels?.filter((channel) => selectedChannels.value.includes(channel.name))
+    : response.channels;
+  return channels?.reduce((total, channel) => total + channel.points.length, 0) ?? 0;
 }
 
 function initialDevices() {
