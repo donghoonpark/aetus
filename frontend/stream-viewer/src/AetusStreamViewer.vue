@@ -639,15 +639,16 @@ function renderChart() {
   chart.getZr().on("mousemove", handlePanMove);
   chart.getZr().on("mouseup", handlePanEnd);
   chart.getZr().on("globalout", handlePanEnd);
-  const chartSeries = seriesResponses.value.flatMap((response) => responseToChartSeries(response));
-  const legendNames = Array.from(new Set(chartSeries.map((series) => series.name).filter((name): name is string => typeof name === "string")));
+  const legendNames = logicalSeriesNames();
+  const colorByName = colorMapForNames(legendNames);
+  const chartSeries = seriesResponses.value.flatMap((response) => responseToChartSeries(response, colorByName));
   renderingChart = true;
   chart.setOption(
     {
       animation: false,
       color: CHART_COLORS,
       tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
-      legend: { top: 10, type: "scroll", data: legendNames.map((name) => ({ name, icon: "circle" })) },
+      legend: { top: 10, type: "scroll", data: legendNames.map((name) => legendItemForName(name, colorByName)) },
       grid: { left: 52, right: 28, top: 58, bottom: 58 },
       dataZoom: [
         {
@@ -720,20 +721,24 @@ function filterTooltipItems(items: unknown[]) {
   });
 }
 
-function responseToChartSeries(response: SeriesResponse) {
+function responseToChartSeries(response: SeriesResponse, colorByName: Map<string, string>) {
   if (response.kind === "scalar") {
+    const scalarName = `${response.device_id} / ${response.key}`;
+    const scalarColor = colorForName(scalarName, colorByName);
     if (response.value_type === "string") {
       return [
         {
-          name: `${response.device_id} / ${response.key}`,
+          name: scalarName,
           type: "line",
           showSymbol: false,
+          itemStyle: { color: scalarColor },
+          lineStyle: { color: scalarColor },
           data: [],
           markLine: {
             symbol: "none",
             silent: true,
             label: { formatter: "{b}", rotate: 90, color: "#475569" },
-            lineStyle: { type: "dashed", width: 1.5, color: "#7c3aed" },
+            lineStyle: { type: "dashed", width: 1.5, color: scalarColor },
             data: (response.points ?? []).map((point) => ({
               name: point.text ?? response.key,
               xAxis: point.ts,
@@ -744,12 +749,13 @@ function responseToChartSeries(response: SeriesResponse) {
     }
     return [
       {
-        name: `${response.device_id} / ${response.key}`,
+        name: scalarName,
         type: "line",
         showSymbol: false,
         sampling: "lttb",
         large: true,
-        lineStyle: { color: colorForName(`${response.device_id} / ${response.key}`) },
+        itemStyle: { color: scalarColor },
+        lineStyle: { color: scalarColor },
         data: (response.points ?? []).map((point) => [point.ts, point.value]),
       },
     ];
@@ -760,7 +766,7 @@ function responseToChartSeries(response: SeriesResponse) {
       const name = `${response.device_id} / ${channel.name}`;
       const hasEnvelope = channel.points.some((point) => point.min !== undefined || point.max !== undefined);
       if (!hasEnvelope) {
-        const color = colorForName(name);
+        const color = colorForName(name, colorByName);
         return [
           {
             name,
@@ -768,12 +774,13 @@ function responseToChartSeries(response: SeriesResponse) {
             showSymbol: false,
             sampling: "lttb",
             large: true,
+            itemStyle: { color },
             lineStyle: { color },
             data: channel.points.map((point) => [point.ts, point.value]),
           },
         ];
       }
-      const color = colorForName(name);
+      const color = colorForName(name, colorByName);
       return [
         {
           name,
@@ -783,6 +790,7 @@ function responseToChartSeries(response: SeriesResponse) {
           sampling: "lttb",
           large: true,
           legendHoverLink: false,
+          itemStyle: { color },
           lineStyle: { color, width: 1, opacity: 0.5 },
           emphasis: { disabled: true },
           data: channel.points.map((point) => [point.ts, point.min ?? point.value]),
@@ -793,6 +801,7 @@ function responseToChartSeries(response: SeriesResponse) {
           showSymbol: false,
           sampling: "lttb",
           large: true,
+          itemStyle: { color },
           lineStyle: { color, width: 1, opacity: 0.5 },
           emphasis: { focus: "series" },
           data: channel.points.map((point) => [point.ts, point.max ?? point.value, point.min, point.max]),
@@ -801,12 +810,49 @@ function responseToChartSeries(response: SeriesResponse) {
     });
 }
 
-function colorForName(name: string) {
-  let hash = 0;
-  for (const character of name) {
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+function logicalSeriesNames() {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const push = (name: string) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    names.push(name);
+  };
+  for (const response of seriesResponses.value) {
+    if (response.kind === "scalar") {
+      push(`${response.device_id} / ${response.key}`);
+      continue;
+    }
+    for (const channel of response.channels ?? []) {
+      if (selectedChannels.value.length > 0 && !selectedChannels.value.includes(channel.name)) continue;
+      push(`${response.device_id} / ${channel.name}`);
+    }
   }
-  return CHART_COLORS[hash % CHART_COLORS.length];
+  return names;
+}
+
+function colorMapForNames(names: string[]) {
+  return new Map(names.map((name, index) => [name, colorForIndex(index)]));
+}
+
+function legendItemForName(name: string, colorByName: Map<string, string>) {
+  const color = colorForName(name, colorByName);
+  return {
+    name,
+    icon: "circle",
+    itemStyle: { color, borderColor: color },
+    lineStyle: { color },
+  };
+}
+
+function colorForName(name: string, colorByName: Map<string, string>) {
+  return colorByName.get(name) ?? colorForIndex(0);
+}
+
+function colorForIndex(index: number) {
+  if (index < CHART_COLORS.length) return CHART_COLORS[index];
+  const hue = (index * 137.508) % 360;
+  return `hsl(${hue.toFixed(1)}, 72%, 46%)`;
 }
 
 function formatNumber(value: unknown) {
