@@ -99,6 +99,27 @@
                   :options="rangeOptions"
                   @update:value="applyRangePreset"
                 />
+                <p class="field-hint">Custom dates use your browser's local timezone.</p>
+                <n-grid cols="2" :x-gap="8">
+                  <n-grid-item>
+                    <n-date-picker
+                      v-model:value="customFromMs"
+                      type="datetime"
+                      placeholder="From"
+                      clearable
+                      style="width: 100%"
+                    />
+                  </n-grid-item>
+                  <n-grid-item>
+                    <n-date-picker
+                      v-model:value="customToMs"
+                      type="datetime"
+                      placeholder="To"
+                      clearable
+                      style="width: 100%"
+                    />
+                  </n-grid-item>
+                </n-grid>
                 <n-grid cols="2" :x-gap="8">
                   <n-grid-item>
                     <n-input-number
@@ -110,7 +131,9 @@
                     />
                   </n-grid-item>
                   <n-grid-item>
-                    <n-button block :loading="loadingSeries" @click="loadSeries">Fetch</n-button>
+                    <n-button block type="primary" secondary :loading="loadingSeries" @click="applyCustomRange">
+                      Apply range
+                    </n-button>
                   </n-grid-item>
                 </n-grid>
                 <n-switch v-model:value="autoRefetchOnZoom">
@@ -151,6 +174,7 @@ import {
   NCheckbox,
   NCheckboxGroup,
   NConfigProvider,
+  NDatePicker,
   NDescriptions,
   NDescriptionsItem,
   NDrawer,
@@ -289,6 +313,8 @@ const autoRefetchOnZoom = ref(true);
 const enablePrefetch = ref(true);
 const selectedChannels = ref<string[]>([]);
 const visibleRange = ref(currentRange());
+const customFromMs = ref<number | null>(Date.parse(visibleRange.value.from));
+const customToMs = ref<number | null>(Date.parse(visibleRange.value.to));
 const lastRequestLabel = ref("-");
 const authLabel = computed(() => (props.authToken || props.tokenProvider ? "JWT bearer" : "none"));
 const panelTitle = computed(() => props.panelTitle);
@@ -298,6 +324,7 @@ const rangeOptions = [
   { label: "1 hour", value: "1h" },
   { label: "6 hours", value: "6h" },
   { label: "1 day", value: "1d" },
+  { label: "Custom range", value: "custom" },
 ];
 
 const streamCatalog = computed<StreamCatalogItem[]>(() => {
@@ -413,6 +440,7 @@ async function loadSeries(range = visibleRange.value, reason = "manual") {
   pendingRangeFetch.value = false;
   loadingSeries.value = true;
   visibleRange.value = range;
+  syncCustomRange(range);
   const requestMaxPoints = autoMaxPoints(reason);
   maxPoints.value = requestMaxPoints;
   emit("density-change", { maxPoints: requestMaxPoints, reason });
@@ -462,7 +490,25 @@ function addDevice() {
 }
 
 function applyRangePreset() {
+  if (rangePreset.value === "custom") {
+    applyCustomRange();
+    return;
+  }
   void loadSeries(currentRange(), "preset");
+}
+
+function applyCustomRange() {
+  if (customFromMs.value === null || customToMs.value === null) {
+    message.error("Select both start and end time");
+    return;
+  }
+  const range = normalizedRange(customFromMs.value, customToMs.value);
+  if (!range) {
+    message.error("Select a valid time range");
+    return;
+  }
+  rangePreset.value = "custom";
+  void loadSeries(range, "custom");
 }
 
 function currentRange() {
@@ -694,6 +740,7 @@ function flushWheelZoomOut() {
 
 function applyOptimisticRange(range: { from: string; to: string }) {
   visibleRange.value = range;
+  syncCustomRange(range);
   pendingRangeFetch.value = true;
   emit("range-change", range);
   if (!chart) return;
@@ -826,6 +873,13 @@ function onExternalPan(event: CustomEvent<{ deltaX?: number }>) {
   zoomTimer = window.setTimeout(() => {
     void loadSeries(range, "pan");
   }, 300);
+}
+
+function syncCustomRange(range: { from: string; to: string }) {
+  const fromMs = Date.parse(range.from);
+  const toMs = Date.parse(range.to);
+  if (Number.isFinite(fromMs)) customFromMs.value = fromMs;
+  if (Number.isFinite(toMs)) customToMs.value = toMs;
 }
 
 async function prefetchAdjacent(range: { from: string; to: string }, requestMaxPoints: number) {

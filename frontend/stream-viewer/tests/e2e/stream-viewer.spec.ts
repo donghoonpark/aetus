@@ -51,11 +51,32 @@ test("opens controls, switches stream, and keeps JWT on query requests", async (
   await page.goto("/");
   await page.getByTitle("Open controls").click();
   await expect(page.getByText("Panel controls")).toBeVisible();
+  await expect(page.getByRole("button", { name: /dense.temperature 2 device · celsius scalar/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /dense.vibration 2 device · g sampled/ })).toBeVisible();
   await page.getByRole("button", { name: /dense.temperature/ }).click();
 
   await expect(page.getByRole("heading", { name: "dense.temperature" })).toBeVisible();
   await expect(page.getByText("20,000 plotted points")).toBeVisible();
+  await expect(page.locator(".viewer-shell").getByText("scalar", { exact: true })).toBeVisible();
   expect(seriesRequests.some((url) => url.pathname.includes("dense.temperature"))).toBeTruthy();
+});
+
+test("applies an explicit time range from the control drawer", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  await expect(page.getByText("Time and density")).toBeVisible();
+  await page.getByPlaceholder("From").fill("2026-05-03 00:40:00");
+  await page.getByPlaceholder("To").fill("2026-05-03 00:45:00");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Apply range" }).click();
+
+  await expect(page.getByText("15:40:00 - 15:45:00")).toBeVisible();
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-02T15:40:00.000Z").length)
+    .toBe(2);
 });
 
 test("refetches high density data when the visible zoom range changes", async ({ page }) => {
