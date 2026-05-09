@@ -126,6 +126,25 @@ test("treats ECharts pan payloads as dynamic server-side range fetches", async (
   await expect(page.getByText("00:52:00 - 00:53:00")).toBeVisible();
 });
 
+test("pans the visible time range when the chart body is dragged", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "dense.vibration" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await page.evaluate(() => {
+    const chart = document.querySelector<HTMLElement>("[data-testid='stream-chart']");
+    const deltaX = -(chart?.clientWidth ?? 1000) * 0.2;
+    window.dispatchEvent(new CustomEvent("aetus-test-pan", { detail: { deltaX } }));
+  });
+
+  await expect(page.getByText("00:52:00 - 01:02:00")).toBeVisible();
+  await expect
+    .poll(() => seriesRequests.filter((url) => url.searchParams.get("from") === "2026-05-03T00:52:00.000Z").length)
+    .toBe(2);
+});
+
 test("implements wheel zoom-out by expanding beyond the loaded chart extent", async ({ page }) => {
   const seriesRequests: URL[] = [];
   await mockQueryApi(page, seriesRequests);

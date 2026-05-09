@@ -254,6 +254,15 @@ let activeRequest: AbortController | null = null;
 let zoomTimer: number | undefined;
 let wheelZoomOutTimer: number | undefined;
 let pendingWheelZoomOutAnchorRatio = 0.5;
+let panState:
+  | {
+      startX: number;
+      startFromMs: number;
+      startToMs: number;
+      latestRange: { from: string; to: string } | null;
+      moved: boolean;
+    }
+  | undefined;
 let renderingChart = false;
 let suppressDataZoomUntil = 0;
 
@@ -336,6 +345,7 @@ onMounted(async () => {
   window.addEventListener("aetus-test-zoom", onExternalZoom as EventListener);
   window.addEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
   window.addEventListener("aetus-test-wheel-zoomout", onExternalWheelZoomOut as EventListener);
+  window.addEventListener("aetus-test-pan", onExternalPan as EventListener);
 });
 
 onBeforeUnmount(() => {
@@ -343,6 +353,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("aetus-test-zoom", onExternalZoom as EventListener);
   window.removeEventListener("aetus-test-datazoom", onExternalDataZoom as EventListener);
   window.removeEventListener("aetus-test-wheel-zoomout", onExternalWheelZoomOut as EventListener);
+  window.removeEventListener("aetus-test-pan", onExternalPan as EventListener);
   activeRequest?.abort();
   if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
   if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
@@ -503,6 +514,14 @@ function renderChart() {
   chart.on("datazoom", handleChartZoom);
   chart.getZr().off("mousewheel", handleWheelZoomOut);
   chart.getZr().on("mousewheel", handleWheelZoomOut);
+  chart.getZr().off("mousedown", handlePanStart);
+  chart.getZr().off("mousemove", handlePanMove);
+  chart.getZr().off("mouseup", handlePanEnd);
+  chart.getZr().off("globalout", handlePanEnd);
+  chart.getZr().on("mousedown", handlePanStart);
+  chart.getZr().on("mousemove", handlePanMove);
+  chart.getZr().on("mouseup", handlePanEnd);
+  chart.getZr().on("globalout", handlePanEnd);
   const chartSeries = seriesResponses.value.flatMap((response) => responseToChartSeries(response));
   renderingChart = true;
   chart.setOption(
@@ -519,7 +538,7 @@ function renderChart() {
           throttle: 160,
           zoomOnMouseWheel: true,
           moveOnMouseWheel: true,
-          moveOnMouseMove: true,
+          moveOnMouseMove: false,
           preventDefaultMouseMove: true,
         },
         {
@@ -604,6 +623,44 @@ function handleChartZoom(event: unknown) {
   }, 450);
 }
 
+function handlePanStart(event: unknown) {
+  if (!autoRefetchOnZoom.value || renderingChart) return;
+  const pointer = event as { offsetX?: number; event?: { preventDefault?: () => void } };
+  const startX = pointer.offsetX;
+  if (typeof startX !== "number" || !isInsidePlotArea(startX)) return;
+  const startFromMs = Date.parse(visibleRange.value.from);
+  const startToMs = Date.parse(visibleRange.value.to);
+  if (!Number.isFinite(startFromMs) || !Number.isFinite(startToMs) || startToMs <= startFromMs) return;
+  pointer.event?.preventDefault?.();
+  suppressDataZoomUntil = Date.now() + 700;
+  panState = { startX, startFromMs, startToMs, latestRange: null, moved: false };
+}
+
+function handlePanMove(event: unknown) {
+  if (!panState) return;
+  const pointer = event as { offsetX?: number; event?: { preventDefault?: () => void; stopPropagation?: () => void } };
+  if (typeof pointer.offsetX !== "number") return;
+  const range = pannedRangeFromDelta(pointer.offsetX - panState.startX, panState.startFromMs, panState.startToMs);
+  if (!range) return;
+  pointer.event?.preventDefault?.();
+  pointer.event?.stopPropagation?.();
+  suppressDataZoomUntil = Date.now() + 700;
+  panState.latestRange = range;
+  panState.moved = panState.moved || Math.abs(pointer.offsetX - panState.startX) > 2;
+  applyOptimisticRange(range);
+}
+
+function handlePanEnd() {
+  if (!panState) return;
+  const range = panState.moved ? panState.latestRange : null;
+  panState = undefined;
+  if (!range || !autoRefetchOnZoom.value) return;
+  if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
+  zoomTimer = window.setTimeout(() => {
+    void loadSeries(range, "pan");
+  }, 300);
+}
+
 function handleWheelZoomOut(event: unknown) {
   if (!autoRefetchOnZoom.value || renderingChart) return;
   const wheel = event as {
@@ -670,6 +727,21 @@ function expandedRangeFromAnchorRatio(anchorRatio: number): { from: string; to: 
   const nextSpan = span * WHEEL_ZOOM_OUT_FACTOR;
   const nextFrom = fromMs - (nextSpan - span) * anchorRatio;
   return normalizedRange(nextFrom, nextFrom + nextSpan);
+}
+
+function pannedRangeFromDelta(deltaX: number, fromMs: number, toMs: number): { from: string; to: string } | null {
+  const width = chartEl.value?.clientWidth ?? 900;
+  if (width <= 0) return null;
+  const span = toMs - fromMs;
+  if (!Number.isFinite(span) || span <= 0) return null;
+  const deltaMs = (-deltaX / width) * span;
+  return normalizedRange(fromMs + deltaMs, toMs + deltaMs);
+}
+
+function isInsidePlotArea(offsetX: number) {
+  if (!chartEl.value) return false;
+  const width = chartEl.value.clientWidth;
+  return offsetX >= 52 && offsetX <= Math.max(52, width - 28);
 }
 
 function wheelAnchorRatio(offsetX: number | undefined) {
@@ -741,6 +813,19 @@ function onExternalWheelZoomOut(event: CustomEvent<{ anchorRatio?: number }>) {
   pendingWheelZoomOutAnchorRatio = Math.min(0.95, Math.max(0.05, event.detail?.anchorRatio ?? 0.5));
   if (wheelZoomOutTimer !== undefined) window.clearTimeout(wheelZoomOutTimer);
   wheelZoomOutTimer = window.setTimeout(flushWheelZoomOut, WHEEL_ZOOM_OUT_DEBOUNCE_MS);
+}
+
+function onExternalPan(event: CustomEvent<{ deltaX?: number }>) {
+  if (!autoRefetchOnZoom.value) return;
+  const fromMs = Date.parse(visibleRange.value.from);
+  const toMs = Date.parse(visibleRange.value.to);
+  const range = pannedRangeFromDelta(event.detail?.deltaX ?? 0, fromMs, toMs);
+  if (!range) return;
+  applyOptimisticRange(range);
+  if (zoomTimer !== undefined) window.clearTimeout(zoomTimer);
+  zoomTimer = window.setTimeout(() => {
+    void loadSeries(range, "pan");
+  }, 300);
 }
 
 async function prefetchAdjacent(range: { from: string; to: string }, requestMaxPoints: number) {
