@@ -311,6 +311,12 @@ The Query API presents telemetry as streams:
 
 The stream viewer consumes that logical stream contract. Host applications pass a Query API URL and can embed the panel without knowing the underlying PostgreSQL, TimescaleDB, metric, or signal-frame table layout.
 
+## Anomaly Detection Plan
+
+AETUS plans to add anomaly detection as a DB-backed service, separate from ingest and query paths. The proposed `services/anomaly` boundary combines an anomaly API, window-based detector worker, and webhook dispatcher in one service codebase, while allowing separate runtime containers inside one initial Pod.
+
+See [docs/11-anomaly-detection-service.md](docs/11-anomaly-detection-service.md) for the implementation plan.
+
 ## Security Posture
 
 AETUS currently targets restricted device networks, not direct public-internet exposure. The ingest path is designed to be operationally simple for private network deployments while keeping a stronger optional authentication mode available.
