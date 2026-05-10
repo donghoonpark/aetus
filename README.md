@@ -5,7 +5,11 @@
 <h1 align="center">AETUS</h1>
 
 <p align="center">
-  Device telemetry ingestion stack with protobuf, FastAPI, Kafka, Kafka Connect, and PostgreSQL/TimescaleDB.
+  <strong>Advanced Edge Telemetry Uplink System</strong>
+</p>
+
+<p align="center">
+  Protobuf-first edge telemetry ingestion, storage, and visualization for embedded devices and software producers.
 </p>
 
 <p align="center">
@@ -18,6 +22,8 @@
   <a href="clients/rust-ingest">Rust Client</a>
   ·
   <a href="frontend/ingest-control-panel">Control Panel</a>
+  ·
+  <a href="frontend/stream-viewer">Stream Viewer</a>
 </p>
 
 <p align="center">
@@ -33,11 +39,11 @@
 
 ## What Is AETUS?
 
-AETUS is an end-to-end telemetry stack for devices and software clients that need to upload structured sensor data with small client-side overhead.
+AETUS stands for **Advanced Edge Telemetry Uplink System**. It is an end-to-end telemetry stack for embedded devices, gateways, simulators, and software clients that need to upload structured sensor data with small client-side overhead.
 
-Clients encode telemetry with protobuf, send it to a FastAPI ingest service, publish normalized records to Kafka, and persist raw events, normalized metric points, and dense signal frames into PostgreSQL. TimescaleDB is supported as an optional layer for hypertables, compression, and retention policies.
+Clients encode telemetry with protobuf, send it to a FastAPI ingest service, publish normalized records to Kafka, and persist raw events, normalized metric points, and dense signal frames into PostgreSQL. TimescaleDB is supported as an optional layer for hypertables, compression, and retention policies. Query API and Vue viewer components provide a higher-level stream interface so applications do not need to care whether data originally arrived as scalar metrics or dense signal frames.
 
-This repository is still early, but it already contains a working backend pipeline, ESP-IDF firmware components, hardware-in-the-loop firmware, QEMU-oriented firmware tests, and a portable Vue control panel. `ESP32-C5` is the current reference hardware target, not the intended boundary of the project.
+This repository is still early, but it already contains a working backend pipeline, ESP-IDF firmware components, hardware-in-the-loop firmware, QEMU-oriented firmware tests, Python/Rust ingest clients, and portable Vue UI components. `ESP32-C5` is the current reference hardware target, not the intended boundary of the project.
 
 ## Why This Exists
 
@@ -52,6 +58,7 @@ AETUS tries to keep those seams clean:
 - Kafka Connect JDBC Sink performs DB writes with minimal custom consumer code.
 - PostgreSQL stores short-lived raw events and long-lived normalized metric points / signal frames separately.
 - Telemetry payloads stay explicit: one telemetry event is either a scalar `metric_set` or a dense `signal_frame`.
+- Query and visualization treat those storage shapes as logical streams, with server-side downsampling for dense data.
 
 ## Architecture
 
@@ -60,8 +67,9 @@ flowchart TB
     Device["Devices & SDK clients<br/>ESP-IDF / Python / Rust"] -->|"HTTP + protobuf"| Ingest["FastAPI ingest<br/>auth, parse, normalize"]
     Ingest -->|"raw, metric, signal events"| Kafka["Kafka topics"]
     Kafka -->|"JDBC Sink"| Storage["PostgreSQL / TimescaleDB<br/>raw short-retention + normalized time-series"]
-    Storage --> Query["Query API<br/>downsample, cache, drill-down"]
-    Query --> UI["Vue dashboards<br/>control panel / stream viewer"]
+    Storage --> Query["Query API<br/>logical streams, downsample, drill-down"]
+    Query --> Viewer["Vue stream viewer<br/>multi-stream time navigation"]
+    Ingest --> Control["Vue control panel<br/>provisioning + health"]
 
     Admin["Admin / provisioning"] --> Ingest
     Admin -.-> Storage
@@ -85,7 +93,9 @@ Detailed Kafka topic, staging table, trigger, and retention design lives in `doc
 - Plain PostgreSQL base schema plus optional TimescaleDB layer
 - Normalized metric storage with dimension tables for devices, boot sessions, and metric definitions
 - Normalized signal frame storage with stream definition dimension tables
+- Query API for scalar and sampled stream discovery, server-side downsampling, and drill-down
 - Vue 3 + Naive UI control panel component
+- Vue 3 + Naive UI + ECharts stream viewer component
 - ESP-IDF 6.0 portable firmware component for ESP32-class devices
 - FreeRTOS queue based uploader task
 - nanopb protobuf encoding
@@ -93,6 +103,8 @@ Detailed Kafka topic, staging table, trigger, and retention design lives in `doc
 - NimBLE GATT provisioning path
 - WPA2-Enterprise PEAP Wi-Fi path
 - ESP32-C5 hardware-in-the-loop upload firmware
+- Python ingest client with optional NumPy ndarray signal frame packing and dtype inference
+- Rust ingest client with protobuf event builders and signal frame packing
 
 ## Current Reference Clients
 
@@ -100,7 +112,7 @@ Detailed Kafka topic, staging table, trigger, and retention design lives in `doc
 - ESP32-C5 hardware-in-the-loop firmware used for real-device validation
 - RISC-V ESP32 QEMU firmware stream generator for heavier E2E validation
 - nanopb + pybind11 mock device used by Python tests
-- Python ingest client SDK for gateways, simulators, and non-ESP producers
+- Python ingest client SDK for gateways, simulators, notebooks, and non-ESP producers
 - Rust ingest client SDK for native gateways and high-throughput edge agents
 
 ## Repository Layout
@@ -119,8 +131,10 @@ firmware/
     qemu-telemetry/         # QEMU-oriented firmware telemetry generator
 frontend/
   ingest-control-panel/     # Portable Vue/Naive UI control panel
+  stream-viewer/            # Portable Vue/Naive UI/ECharts stream viewer
 services/
   ingest-api/               # FastAPI ingest/provisioning/control service
+  query-api/                # FastAPI logical stream query and downsampling service
   kafka/                    # Self-managed Kafka image
   kafka-connect/            # JDBC sink image and connector configs
   mock-device-nanopb/       # nanopb + pybind11 mock device for tests
@@ -138,6 +152,7 @@ docker compose -f compose/e2e-compose.yml up --build
 Useful local endpoints:
 
 - Ingest API: `http://127.0.0.1:18000`
+- Query API: `http://127.0.0.1:18001`
 - Kafka Connect: `http://127.0.0.1:18083`
 - PostgreSQL: `127.0.0.1:15432`
 
@@ -169,7 +184,17 @@ npm run dev
 
 The control panel is a portable Vue component. It can point at an ingest API through its `serverUrl` prop and displays API, Kafka, Kafka Connect, DB, and device provisioning status.
 
-### 4. Build firmware examples
+### 4. Run the stream viewer
+
+```bash
+cd frontend/stream-viewer
+npm install
+npm run dev
+```
+
+The stream viewer is a portable Vue component. It points at the Query API through `queryServerUrl`, supports remote device search, multi-stream selection, local-time tooltips, wheel zoom, drag panning, zoom-out fetch, and server-side density changes for large ranges.
+
+### 5. Build firmware examples
 
 ```bash
 source /path/to/esp-idf/export.sh
@@ -218,6 +243,33 @@ ESP_ERROR_CHECK(telemetry.enqueue(pdMS_TO_TICKS(1000)));
 
 See [firmware/esp32-aetus](firmware/esp32-aetus/README.md) for the full embedded API.
 
+## Client SDKs
+
+Python:
+
+```python
+import numpy as np
+from aetus_ingest_client import AetusIngestClient, channel
+
+samples = np.array([[120, -12], [121, -10]], dtype=np.int16)
+
+with AetusIngestClient(
+    base_url="http://127.0.0.1:18000",
+    device_id="python-device-001",
+    token="devtok_...",
+) as client:
+    client.send_signal_frame(
+        stream_key="adc.raw",
+        sample_interval_ns=1_000_000,
+        channels=[channel("adc_a", "count"), channel("adc_b", "count")],
+        samples=samples,
+    )
+```
+
+Python ndarray uploads infer encoding from dtype when `encoding` is omitted. Supported mappings are `float32 -> float32_le`, `int16 -> int16_le`, `uint16 -> uint16_le`, and `int32 -> int32_le`. `float64` arrays are accepted with a warning and downcast to `float32_le` to keep signal frames compact.
+
+Rust provides the same event-building model for metric sets, status/alert events, and dense signal frames. See [clients/rust-ingest](clients/rust-ingest/README.md).
+
 ## Data Model
 
 AETUS stores three shapes of data:
@@ -238,6 +290,17 @@ Metric points and signal frames use integer surrogate keys for repeated strings 
 The base schema in `services/postgres/initdb/00-base.sql` runs on plain PostgreSQL. The optional TimescaleDB layer in `services/postgres/initdb/10-timescale.sql` adds hypertable, compression, and retention policies.
 
 Provisioning/control metadata is deliberately separate from telemetry storage. Small deployments can use SQLite with periodic backups; larger deployments can switch the same FastAPI API surface to PostgreSQL by setting `AETUS_CONTROL_DB_BACKEND=postgres`, `AETUS_CONTROL_DATABASE_URL`, and `AETUS_CONTROL_DB_SCHEMA`.
+
+## Query And Visualization
+
+The Query API presents telemetry as streams:
+
+- Scalar streams come from normalized metric points.
+- Sampled streams come from dense signal frames.
+- String scalar streams are exposed as timestamped state/event markers.
+- Numeric sampled streams can be returned as raw samples or min/max envelopes depending on requested range and point budget.
+
+The stream viewer consumes that logical stream contract. Host applications pass a Query API URL and can embed the panel without knowing the underlying PostgreSQL, TimescaleDB, metric, or signal-frame table layout.
 
 ## Security Posture
 
@@ -262,6 +325,7 @@ Known gaps:
 - Public-internet security hardening is intentionally out of current scope.
 - SQLite control DB is suitable for early deployments, but high-throughput multi-pod deployments should move to a shared DB backend.
 - QEMU and HIL tests are intentionally not part of the default quick test loop.
+- Query authorization and richer dashboard composition are still evolving.
 
 ## Documentation
 
@@ -278,4 +342,4 @@ Start here:
 
 ## License
 
-No open-source license has been selected yet. Add a license before distributing or accepting external contributions.
+AETUS is distributed under the [MIT License](LICENSE).
