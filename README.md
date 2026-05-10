@@ -39,26 +39,18 @@
 
 ## What Is AETUS?
 
-AETUS stands for **Advanced Edge Telemetry Uplink System**. It is an end-to-end telemetry stack for embedded devices, gateways, simulators, and software clients that need to upload structured sensor data with small client-side overhead.
-
-Clients encode telemetry with protobuf, send it to a FastAPI ingest service, publish normalized records to Kafka, and persist raw events, normalized metric points, and dense signal frames into PostgreSQL. TimescaleDB is supported as an optional layer for hypertables, compression, and retention policies. Query API and Vue viewer components provide a higher-level stream interface so applications do not need to care whether data originally arrived as scalar metrics or dense signal frames.
-
-This repository is still early, but it already contains a working backend pipeline, ESP-IDF firmware components, hardware-in-the-loop firmware, QEMU-oriented firmware tests, Python/Rust ingest clients, and portable Vue UI components. `ESP32-C5` is the current reference hardware target, not the intended boundary of the project.
+AETUS stands for **Advanced Edge Telemetry Uplink System**. It is a protobuf-first stack for moving telemetry from embedded devices, gateways, simulators, and software clients into Kafka, PostgreSQL/TimescaleDB, and stream-oriented visualization tools.
 
 ## Why This Exists
 
-Telemetry stacks often start simple and then become tangled: business logic starts doing HTTP, upload retries block sensor work, JSON gets expensive on constrained clients, and backend consumers slowly become bespoke glue code.
+Telemetry stacks get messy when device business logic owns HTTP, retries, JSON parsing, and storage-specific details. AETUS keeps that path narrow: producers enqueue telemetry, ingest normalizes it, Kafka decouples writes, and query/viewer layers expose scalar metrics and dense signal frames as logical streams.
 
-AETUS tries to keep those seams clean:
+Core ideas:
 
-- Device firmware or client SDKs can expose simple enqueue/write APIs and let a dedicated uploader handle transport.
-- Protobuf keeps payloads compact and schema-aware without forcing JSON handling onto constrained devices.
-- FastAPI only authenticates, parses, normalizes, and publishes.
-- Kafka absorbs bursts and decouples ingest from storage.
-- Kafka Connect JDBC Sink performs DB writes with minimal custom consumer code.
-- PostgreSQL stores short-lived raw events and long-lived normalized metric points / signal frames separately.
-- Telemetry payloads stay explicit: one telemetry event is either a scalar `metric_set` or a dense `signal_frame`.
-- Query and visualization treat those storage shapes as logical streams, with server-side downsampling for dense data.
+- Keep embedded/client APIs simple and upload work isolated.
+- Use protobuf for compact, schema-aware payloads.
+- Store short-lived raw events separately from long-lived normalized time-series data.
+- Treat metrics and dense signal frames as one stream model for query and visualization.
 
 ## Architecture
 
