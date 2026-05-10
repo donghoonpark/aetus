@@ -46,6 +46,18 @@ pub struct DetectorConfig {
     pub min_count: Option<usize>,
     #[serde(default)]
     pub max_count: Option<usize>,
+    #[serde(default)]
+    pub alpha: Option<f64>,
+    #[serde(default)]
+    pub expected_value: Option<f64>,
+    #[serde(default)]
+    pub tolerance: Option<f64>,
+    #[serde(default)]
+    pub target_frequency_hz: Option<f64>,
+    #[serde(default)]
+    pub frequency_tolerance_hz: Option<f64>,
+    #[serde(default = "default_fft_sample_limit")]
+    pub fft_sample_limit: usize,
     #[serde(default = "default_operator")]
     pub operator: String,
     #[serde(default = "default_max_points")]
@@ -63,6 +75,12 @@ impl Default for DetectorConfig {
             baseline: None,
             min_count: None,
             max_count: None,
+            alpha: None,
+            expected_value: None,
+            tolerance: None,
+            target_frequency_hz: None,
+            frequency_tolerance_hz: None,
+            fft_sample_limit: default_fft_sample_limit(),
             operator: default_operator(),
             max_points: default_max_points(),
             anchor: None,
@@ -95,6 +113,10 @@ fn default_operator() -> String {
 
 pub fn default_max_points() -> usize {
     50_000
+}
+
+fn default_fft_sample_limit() -> usize {
+    2048
 }
 
 fn default_anchor_pre_seconds() -> i32 {

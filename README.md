@@ -323,7 +323,7 @@ The stream viewer consumes that logical stream contract. Host applications pass 
 
 ## Anomaly Detection Plan
 
-AETUS includes an initial DB-backed Rust anomaly service, separate from ingest and query paths. The `services/anomaly` boundary combines an anomaly API, window-based detector worker, and webhook dispatcher in one Rust codebase with one multi-command binary. The current PoC detects scalar metric threshold crossings, stores score/event rows, and can enqueue signed webhook deliveries.
+AETUS includes an initial DB-backed Rust anomaly service, separate from ingest and query paths. The `services/anomaly` boundary combines an anomaly API, window-based detector worker, and webhook dispatcher in one Rust codebase with one multi-command binary. The current PoC detects scalar metric and signal-frame channel anomalies with rule-based detectors including threshold/range/RMS/peak/stddev/rate/z-score/EWMA/duty-cycle/FFT checks, stores score/event rows, and can enqueue signed webhook deliveries.
 
 The portable `frontend/anomaly-panel` component can be embedded into operator UIs by passing an anomaly API URL and admin token.
 

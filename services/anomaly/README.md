@@ -82,8 +82,15 @@ Implemented detector types:
 - `peak_abs_threshold`
 - `stddev_threshold`
 - `delta_threshold`
+- `rate_of_change`
+- `zscore_threshold`
+- `ewma_deviation`
 - `missing_data`
 - `flatline`
+- `stuck_at`
+- `duty_cycle`
+- `event_sequence`
+- `fft_threshold`
 
 Signal frames are decoded from `device_signal_frames.samples` into channel-specific numeric windows. Use `stream_selector.channels` to limit channels and `detector_config.max_points` to cap samples loaded per channel.
 
@@ -107,3 +114,13 @@ Event-anchored windows are supported through `detector_config.anchor`. The ancho
 ```
 
 Worker leases, event acknowledgement/resolution APIs, Prometheus metrics, and cached signal-frame feature reuse remain follow-up work.
+
+Detector selection guide:
+
+- Use `threshold` or `range` for simple scalar operating bounds.
+- Use `mean_threshold` for sustained high/low load.
+- Use `rms_threshold`, `peak_abs_threshold`, `stddev_threshold`, or `fft_threshold` for vibration/current waveform inspection.
+- Use `rate_of_change`, `delta_threshold`, or `ewma_deviation` for fast transitions or drift.
+- Use `zscore_threshold` when each device has its own baseline and sigma.
+- Use `missing_data`, `flatline`, or `stuck_at` for sensor health and stuck-value checks.
+- Use `duty_cycle` for ON/OFF streams and `event_sequence` for event-count expectations around an anchor window.

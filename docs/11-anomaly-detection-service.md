@@ -367,17 +367,30 @@ CREATE TABLE webhook_deliveries (
 
 초기 detector는 rule-based로 시작한다.
 
-구현된 detector:
+구현된 detector와 대표 use-case:
 
-- `threshold`: scalar 또는 channel value가 threshold 초과
-- `range`: 값이 min/max 범위를 벗어남
-- `mean_threshold`: window 평균값이 threshold 초과/미만
-- `rms_threshold`: RMS 초과/미만
-- `peak_abs_threshold`: 절대 peak 초과/미만
-- `stddev_threshold`: window 변동성 초과/미만
-- `delta_threshold`: window 첫 값과 마지막 값의 변화량 초과/미만
-- `missing_data`: 특정 stream의 데이터 공백 감지
-- `flatline`: 충분한 sample이 있는데 값 범위가 너무 작음
+| Detector | Score | 주요 설정 | 적합한 use-case |
+| --- | --- | --- | --- |
+| `threshold` | max 또는 min value | `threshold`, `operator` | 온도, 전압, 압력, 전류 같은 단일 값 상/하한 감지 |
+| `range` | 허용 범위 초과 거리 | `min`, `max` | 센서가 정상 운전 범위를 벗어나는지 감지 |
+| `mean_threshold` | window 평균 | `threshold`, `operator` | 순간 spike보다 평균 부하/온도/전류가 높은지 감지 |
+| `rms_threshold` | RMS | `threshold`, `operator` | 진동/가속도/전류 waveform의 에너지 증가 감지 |
+| `peak_abs_threshold` | max absolute value | `threshold`, `operator` | 충격, 과도 진동, 급격한 spike 감지 |
+| `stddev_threshold` | 표준편차 | `threshold`, `operator` | 값의 불안정성, 노이즈 증가, 공정 흔들림 감지 |
+| `delta_threshold` | window 첫 값과 마지막 값의 절대 차이 | `threshold`, `operator` | 짧은 구간에서 절대 변화량이 큰지 감지 |
+| `rate_of_change` | 초당 변화량 | `threshold`, `operator` | sampling interval 차이를 보정한 급상승/급하락 감지 |
+| `zscore_threshold` | baseline 대비 sigma 거리 | `baseline`, `tolerance`, `threshold` | 장비별 정상 기준이 다른 값의 outlier 감지 |
+| `ewma_deviation` | EWMA 대비 최대 편차 | `baseline`, `alpha`, `threshold` | 천천히 변하는 drift와 갑작스러운 이탈 감지 |
+| `missing_data` | sample count | `min_count` | 특정 stream이 window 안에 들어오지 않는 상태 감지 |
+| `flatline` | max-min range | `threshold`, `min_count` | 센서값이 거의 움직이지 않는 고착/단선 의심 상태 감지 |
+| `stuck_at` | 특정 값 근처 sample count | `expected_value`, `tolerance`, `min_count` | ADC max/min 포화, 고정 오류 코드, 릴레이 상태 고착 감지 |
+| `duty_cycle` | ON sample 비율 | `baseline`, `threshold`, `operator` | 모터/펌프/밸브 ON 비율이 비정상적으로 높거나 낮은지 감지 |
+| `event_sequence` | event count | `min_count`, `max_count` | anchor window 안에서 필수 event 누락 또는 과도 발생 감지 |
+| `fft_threshold` | target 또는 dominant frequency magnitude | `threshold`, `target_frequency_hz`, `fft_sample_limit` | 회전 장비, 모터, 팬, 펌프의 특정 진동 주파수 대역 에너지 증가 감지 |
+
+`operator`는 기본 `gt`이며 `gte`, `lt`, `lte`를 지원한다.
+
+FFT detector는 PoC 단계에서 외부 FFT crate 없이 naive DFT를 사용한다. `target_frequency_hz`가 있으면 해당 bin magnitude를 score로 쓰고, 없으면 DC를 제외한 dominant bin magnitude를 score로 쓴다. 큰 window는 `fft_sample_limit`까지 균등 샘플링한다. 운영 규모에서 frequency detector를 적극 사용하려면 이후 `rustfft` 기반 구현, window function, band energy, feature cache를 추가하는 것이 좋다.
 
 Detector interface:
 
@@ -476,6 +489,23 @@ event-anchored window는 별도 anchor stream의 event timestamp를 기준으로
 ```
 
 anchor filter는 `value_string`, `value_bool`, `value_int`, `value_double`를 지원한다. filter를 생략하면 해당 anchor stream의 최신 event timestamp를 사용한다.
+
+### config 필드 요약
+
+| Field | 사용 detector | 의미 |
+| --- | --- | --- |
+| `threshold` | 대부분의 threshold 계열, `flatline`, `fft_threshold` | crossing 기준값 |
+| `operator` | threshold 계열 | `gt`, `gte`, `lt`, `lte` |
+| `min`, `max` | `range` | 허용 정상 범위 |
+| `baseline` | `zscore_threshold`, `ewma_deviation`, `duty_cycle` | 기준값 또는 ON 판정 기준 |
+| `tolerance` | `zscore_threshold`, `stuck_at` | sigma 또는 허용 오차 |
+| `alpha` | `ewma_deviation` | EWMA smoothing factor |
+| `expected_value` | `stuck_at` | 고착 여부를 볼 특정 값 |
+| `min_count`, `max_count` | `missing_data`, `flatline`, `stuck_at`, `event_sequence` | 필요한 최소/최대 sample 또는 event 개수 |
+| `target_frequency_hz` | `fft_threshold` | 검사할 목표 주파수 |
+| `fft_sample_limit` | `fft_threshold` | DFT에 사용할 최대 sample 수 |
+| `max_points` | 모든 detector loader | window/channel별 로드할 최대 point 수 |
+| `anchor` | 모든 detector | event 기반 window anchor |
 
 ## Worker 알고리즘
 
