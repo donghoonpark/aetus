@@ -26,6 +26,7 @@ services/
   kafka/
   kafka-connect/
   postgres/
+tests/
   mock-device-nanopb/
 ```
 
@@ -41,8 +42,8 @@ services/
   - JDBC Sink 기반 PostgreSQL 적재
 - `services/postgres`
   - raw event, metric staging, normalized metric point 저장용 TimescaleDB/PostgreSQL schema
-- `services/mock-device-nanopb`
-  - CMake + FetchContent + nanopb + pybind11 기반 mock device
+- `tests/mock-device-nanopb`
+  - CMake + FetchContent + nanopb + pybind11 기반 mock device fixture
 - `firmware/test-apps/qemu-telemetry`
   - ESP-IDF 6.0 + nanopb 기반 QEMU E2E 전용 firmware stream generator
 - `firmware/esp32-aetus`
@@ -509,9 +510,9 @@ npm run test:e2e
 
 구현 위치:
 
-- [[../services/mock-device-nanopb/CMakeLists.txt]]
-- [[../services/mock-device-nanopb/src/mock_device_core.c]]
-- [[../services/mock-device-nanopb/src/mock_device_pybind.cpp]]
+- [[../tests/mock-device-nanopb/CMakeLists.txt]]
+- [[../tests/mock-device-nanopb/src/mock_device_core.c]]
+- [[../tests/mock-device-nanopb/src/mock_device_pybind.cpp]]
 - [[../services/ingest-api/tests/helpers/nanopb_mock_device.py]]
 
 ### 구현 특징
@@ -918,7 +919,7 @@ uv run pytest -q
 - [[../services/ingest-api/tests/e2e/test_postgres_pipeline.py]]
 - [[../services/ingest-api/tests/qemu_e2e/test_esp32_qemu_nanopb_pipeline.py]]
 - [[../services/ingest-api/tests/helpers/nanopb_mock_device.py]]
-- [[../services/mock-device-nanopb/src/mock_device_core.c]]
+- [[../tests/mock-device-nanopb/src/mock_device_core.c]]
 - [[../firmware/test-apps/qemu-telemetry/main/main.c]]
 - [[../firmware/esp32-aetus/components/aetus/include/aetus.h]]
 - [[../firmware/esp32-aetus/components/aetus/aetus.c]]

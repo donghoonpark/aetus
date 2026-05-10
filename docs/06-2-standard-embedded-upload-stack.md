@@ -209,7 +209,7 @@ classDiagram
 - `firmware/proto/ingest.options`: nanopb `Metric.key`, `Metric.unit`, `SignalChannel.key`, `SignalChannel.unit`
 - `firmware/esp32-aetus/components/aetus/ingest.pb.h`: generated nanopb struct 배열 크기
 - `firmware/esp32-aetus/components/aetus/include/ingest.pb.h`: public generated nanopb header mirror
-- `services/mock-device-nanopb/proto/ingest.options`: nanopb mock/HIL byte-stream generator
+- `tests/mock-device-nanopb/proto/ingest.options`: nanopb mock/HIL byte-stream generator
 - `firmware/esp32-aetus/components/aetus/include/aetus.hpp`: C++ literal overload의 `static_assert`
 
 C API는 runtime `ESP_ERR_INVALID_ARG`로 길이 초과를 반환한다. C++ wrapper는 문자열 리터럴로 key/unit을 넘기는 경우 컴파일 타임 `static_assert`로 초과를 잡고, `std::string_view`처럼 런타임 문자열을 넘기는 경우에는 C API와 동일하게 runtime error를 누적한다.

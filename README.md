@@ -133,8 +133,9 @@ services/
   query-api/                # FastAPI logical stream query and downsampling service
   kafka/                    # Self-managed Kafka image
   kafka-connect/            # JDBC sink image and connector configs
-  mock-device-nanopb/       # nanopb + pybind11 mock device for tests
   postgres/                 # PostgreSQL/TimescaleDB schema
+tests/
+  mock-device-nanopb/       # nanopb + pybind11 mock device fixture
 ```
 
 ## Quick Start

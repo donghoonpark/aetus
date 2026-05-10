@@ -13,7 +13,7 @@ from aetus_ingest.auth import HMAC_SIGNATURE_PREFIX, HMAC_SIGNATURE_SCHEME
 
 
 ROOT_DIR = Path(__file__).resolve().parents[4]
-MOCK_DEVICE_DIR = ROOT_DIR / "services" / "mock-device-nanopb"
+MOCK_DEVICE_DIR = ROOT_DIR / "tests" / "mock-device-nanopb"
 MOCK_BUILD_DIR = MOCK_DEVICE_DIR / "build"
 INGEST_PROTO = ROOT_DIR / "services" / "ingest-api" / "proto" / "ingest.proto"
 PYTHON_MODULE_DIR = MOCK_BUILD_DIR / "python"
