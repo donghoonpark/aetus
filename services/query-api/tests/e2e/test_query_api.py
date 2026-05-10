@@ -75,6 +75,38 @@ def _seed_query_data() -> None:
         0.23,
         0.33,
     )
+    integer_signal_fixtures = [
+        (
+            "adc.current",
+            "int16_le",
+            "interleaved",
+            '[{"key":"current_a","unit":"count"},{"key":"current_b","unit":"count"}]',
+            struct.pack("<hhhh", -10, 100, -20, 200),
+            2,
+            1_000_000,
+            "query-frame-int16",
+        ),
+        (
+            "adc.voltage",
+            "uint16_le",
+            "planar",
+            '[{"key":"voltage_a","unit":"count"},{"key":"voltage_b","unit":"count"}]',
+            struct.pack("<HHHH", 1000, 2000, 3000, 4000),
+            2,
+            1_000_000,
+            "query-frame-uint16-planar",
+        ),
+        (
+            "encoder.count",
+            "int32_le",
+            "interleaved",
+            '[{"key":"count","unit":"tick"}]',
+            struct.pack("<ii", 100_000, 100_100),
+            2,
+            1_000_000,
+            "query-frame-int32",
+        ),
+    ]
     with psycopg.connect(POSTGRES_DSN) as conn:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO devices(device_id) VALUES (%s) RETURNING device_pk", ("query-device-1",))
@@ -227,6 +259,47 @@ def _seed_query_data() -> None:
                 """,
                 (event_time, event_time, device_pk, boot_pk, signal_pk, psycopg.Binary(samples), len(samples)),
             )
+            for stream_key, encoding, layout, channels_json, frame_samples, sample_count, interval_ns, request_id in integer_signal_fixtures:
+                cur.execute(
+                    """
+                    INSERT INTO signal_stream_definitions(stream_key, encoding, layout, channels_json)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING signal_pk
+                    """,
+                    (stream_key, encoding, layout, channels_json),
+                )
+                integer_signal_pk = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    INSERT INTO device_signal_frames(
+                        event_time,
+                        received_at,
+                        device_pk,
+                        boot_pk,
+                        signal_pk,
+                        sequence,
+                        schema_version,
+                        sample_interval_ns,
+                        sample_count,
+                        samples,
+                        samples_size,
+                        request_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, 2, 1, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        event_time,
+                        event_time,
+                        device_pk,
+                        boot_pk,
+                        integer_signal_pk,
+                        interval_ns,
+                        sample_count,
+                        psycopg.Binary(frame_samples),
+                        len(frame_samples),
+                        request_id,
+                    ),
+                )
         conn.commit()
 
 
@@ -270,6 +343,10 @@ def test_query_api_lists_scalar_and_sampled_streams(query_stack: None) -> None:
     assert streams["machine.state"]["value_type"] == "string"
     assert streams["imu.accel"]["kind"] == "sampled"
     assert streams["imu.accel"]["nominal_rate_hz"] == 200.0
+    assert streams["adc.current"]["kind"] == "sampled"
+    assert streams["adc.current"]["nominal_rate_hz"] == 1000.0
+    assert streams["adc.voltage"]["kind"] == "sampled"
+    assert streams["encoder.count"]["kind"] == "sampled"
 
 
 def test_query_api_searches_devices_with_claim_filtering(query_stack: None) -> None:
@@ -358,6 +435,37 @@ def test_query_api_returns_sampled_series_from_raw_frame(query_stack: None) -> N
     assert body["mode"] == "samples"
     channels = {channel["name"]: channel for channel in body["channels"]}
     assert [point["value"] for point in channels["accel_x"]["points"]] == pytest.approx([0.10, 0.11, 0.12, 0.13])
+
+
+@pytest.mark.parametrize(
+    ("stream_key", "channel_key", "expected_values"),
+    [
+        ("adc.current", "current_a", [-10.0, -20.0]),
+        ("adc.voltage", "voltage_b", [3000.0, 4000.0]),
+        ("encoder.count", "count", [100_000.0, 100_100.0]),
+    ],
+)
+def test_query_api_decodes_integer_signal_frame_encodings(
+    query_stack: None,
+    stream_key: str,
+    channel_key: str,
+    expected_values: list[float],
+) -> None:
+    del query_stack
+
+    response = httpx.get(
+        f"{QUERY_API_URL}/v1/query/devices/query-device-1/streams/{stream_key}/series",
+        params={"from": "2026-05-03T00:00:00Z", "to": "2026-05-03T00:01:00Z"},
+        headers=_query_auth_headers(),
+        timeout=10.0,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["kind"] == "sampled"
+    assert body["mode"] == "samples"
+    channels = {channel["name"]: channel for channel in body["channels"]}
+    assert [point["value"] for point in channels[channel_key]["points"]] == pytest.approx(expected_values)
 
 
 def test_query_api_materializes_summary_features(query_stack: None) -> None:

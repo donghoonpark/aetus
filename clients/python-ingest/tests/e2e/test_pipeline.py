@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 import httpx
+import numpy as np
 import psycopg
 import pytest
 
@@ -211,35 +212,55 @@ def uploaded_client_data(provisioned_device: dict[str, Any]) -> dict[str, Any]:
             ],
             timestamp_ns=1_812_345_680_000_000_000,
         )
+        int16_signal_response = client.send_signal_frame(
+            stream_key="python.adc.raw",
+            sample_interval_ns=1_000_000,
+            channels=[
+                channel("adc_a", "count"),
+                channel("adc_b", "count"),
+            ],
+            samples=np.array(
+                [
+                    [120, -12],
+                    [121, -10],
+                    [119, -11],
+                ],
+                dtype=np.int16,
+            ),
+            timestamp_ns=1_812_345_681_000_000_000,
+        )
 
     return {
         "device_id": provisioned_device["device_id"],
         "boot_id": boot_id,
-        "responses": [metric_response, status_response, signal_response],
+        "responses": [metric_response, status_response, signal_response, int16_signal_response],
     }
 
 
 def test_python_client_uploads_are_accepted(uploaded_client_data: dict[str, Any]) -> None:
-    assert [response.status_code for response in uploaded_client_data["responses"]] == [202, 202, 202]
-    assert [response.sequence for response in uploaded_client_data["responses"]] == [0, 1, 2]
+    assert [response.status_code for response in uploaded_client_data["responses"]] == [202, 202, 202, 202]
+    assert [response.sequence for response in uploaded_client_data["responses"]] == [0, 1, 2, 3]
 
 
 def test_python_client_raw_events_are_persisted(uploaded_client_data: dict[str, Any]) -> None:
-    rows = _wait_for_raw_rows(uploaded_client_data["device_id"], expected_count=3)
+    rows = _wait_for_raw_rows(uploaded_client_data["device_id"], expected_count=4)
 
-    assert [row[2] for row in rows[:3]] == [0, 1, 2]
-    assert {row[1] for row in rows[:3]} == {uploaded_client_data["boot_id"]}
+    assert [row[2] for row in rows[:4]] == [0, 1, 2, 3]
+    assert {row[1] for row in rows[:4]} == {uploaded_client_data["boot_id"]}
     assert rows[0][3] == "telemetry"
     assert rows[1][3] == "status"
     assert rows[2][3] == "telemetry"
+    assert rows[3][3] == "telemetry"
     assert rows[0][4] == 1_812_345_678_000_000_000
     assert rows[1][4] == 1_812_345_679_000_000_000
     assert rows[2][4] == 1_812_345_680_000_000_000
+    assert rows[3][4] == 1_812_345_681_000_000_000
 
-    payloads = [json.loads(row[5]) for row in rows[:3]]
+    payloads = [json.loads(row[5]) for row in rows[:4]]
     assert payloads[0]["kind"] == "metric_set"
     assert payloads[1]["reboot_reason"] == "power_on"
     assert payloads[2]["kind"] == "signal_frame"
+    assert payloads[3]["signal_frame"]["encoding"] == "int16_le"
 
 
 def test_python_client_metric_rows_are_normalized(uploaded_client_data: dict[str, Any]) -> None:
@@ -264,8 +285,9 @@ def test_python_client_metric_rows_are_normalized(uploaded_client_data: dict[str
 
 
 def test_python_client_signal_frame_row_is_normalized(uploaded_client_data: dict[str, Any]) -> None:
-    rows = _wait_for_signal_frame_rows(uploaded_client_data["device_id"], expected_count=1)
-    row = rows[0]
+    rows = _wait_for_signal_frame_rows(uploaded_client_data["device_id"], expected_count=2)
+    rows_by_stream = {row[3]: row for row in rows}
+    row = rows_by_stream["python.imu.accel"]
     channels = json.loads(row[10])
 
     assert row[0:10] == (
@@ -281,3 +303,19 @@ def test_python_client_signal_frame_row_is_normalized(uploaded_client_data: dict
         1_812_345_680_000_000_000,
     )
     assert [item["key"] for item in channels] == ["accel_x", "accel_y", "accel_z"]
+
+    int16_row = rows_by_stream["python.adc.raw"]
+    int16_channels = json.loads(int16_row[10])
+    assert int16_row[0:10] == (
+        uploaded_client_data["device_id"],
+        uploaded_client_data["boot_id"],
+        3,
+        "python.adc.raw",
+        "int16_le",
+        "interleaved",
+        1_000_000,
+        3,
+        12,
+        1_812_345_681_000_000_000,
+    )
+    assert [item["key"] for item in int16_channels] == ["adc_a", "adc_b"]

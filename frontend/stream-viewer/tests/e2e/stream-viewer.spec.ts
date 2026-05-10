@@ -149,6 +149,21 @@ test("renders multiple scalar streams together without switching back to sampled
   expect([...uniquePaths].filter((path) => path.includes("dense.vibration"))).toHaveLength(2);
 });
 
+test("renders an integer encoded sampled stream returned by the query API", async ({ page }) => {
+  const seriesRequests: URL[] = [];
+  await mockQueryApi(page, seriesRequests);
+
+  await page.goto("/");
+  await page.getByTitle("Open controls").click();
+  await page.getByRole("button", { name: /dense.vibration/ }).click();
+  await page.getByRole("button", { name: /adc.current/ }).click();
+
+  await expect(page.getByRole("heading", { name: "adc.current" })).toBeVisible();
+  await expect(page.getByText("40,000 plotted points")).toBeVisible();
+  await expect(page.locator(".floating-status").getByText("current_a, current_b", { exact: true })).toBeVisible();
+  expect(seriesRequests.some((url) => url.pathname.includes("adc.current"))).toBeTruthy();
+});
+
 test("keeps string state events visible when mixed with sampled data and channel filters", async ({ page }) => {
   const seriesRequests: URL[] = [];
   await mockQueryApi(page, seriesRequests);
@@ -499,6 +514,19 @@ async function mockQueryApi(
             ],
             latest_event_time: "2026-05-03T01:00:00Z",
           },
+          {
+            key: "adc.current",
+            kind: "sampled",
+            unit: "count",
+            nominal_rate_hz: 1000,
+            encoding: "int16_le",
+            layout: "interleaved",
+            channels: [
+              { key: "current_a", unit: "count" },
+              { key: "current_b", unit: "count" },
+            ],
+            latest_event_time: "2026-05-03T01:00:00Z",
+          },
         ],
       },
     });
@@ -558,19 +586,28 @@ function scalarValue(key: string, index: number) {
 }
 
 function sampledSeries(deviceId: string, key: string, count: number) {
+  const channels = key === "adc.current"
+    ? [
+        { name: "current_a", unit: "count", phase: 0 },
+        { name: "current_b", unit: "count", phase: 1 },
+      ]
+    : [
+        { name: "accel_x", unit: "g", phase: 0 },
+        { name: "accel_y", unit: "g", phase: 1 },
+      ];
   return {
     device_id: deviceId,
     key,
     kind: "sampled",
     resolution: "62.5ms",
     mode: "samples",
-    channels: ["accel_x", "accel_y"].map((name, channelIndex) => ({
-      name,
-      unit: "g",
+    channels: channels.map((channel) => ({
+      name: channel.name,
+      unit: channel.unit,
       points: Array.from({ length: count }, (_, index) => ({
         ts: new Date(Date.UTC(2026, 4, 3, 0, 50, 0) + index * 60).toISOString(),
-        min: Math.sin(index / 30 + channelIndex) - 0.08,
-        max: Math.sin(index / 30 + channelIndex) + 0.08,
+        min: Math.sin(index / 30 + channel.phase) - 0.08,
+        max: Math.sin(index / 30 + channel.phase) + 0.08,
       })),
     })),
   };

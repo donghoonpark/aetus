@@ -88,6 +88,37 @@ with AetusIngestClient(
 
 `samples` can be row-based Python values or pre-packed `bytes` when the caller already owns a binary signal buffer.
 
+If NumPy is installed, `samples` can also be a `numpy.ndarray`. In that case the client infers the protobuf signal encoding from `dtype` when `encoding` is omitted:
+
+```python
+import numpy as np
+from aetus_ingest_client import AetusIngestClient, channel
+
+samples = np.array(
+    [
+        [120, -12],
+        [121, -10],
+        [119, -11],
+    ],
+    dtype=np.int16,
+)
+
+with AetusIngestClient(
+    base_url="http://127.0.0.1:18000",
+    device_id="python-device-001",
+    token="devtok_...",
+    boot_id="boot-python-0001",
+) as client:
+    client.send_signal_frame(
+        stream_key="adc.raw",
+        sample_interval_ns=1_000_000,
+        channels=[channel("adc_a", "count"), channel("adc_b", "count")],
+        samples=samples,
+    )
+```
+
+Supported ndarray dtypes map to signal encodings as follows: `float32 -> float32_le`, `int16 -> int16_le`, `uint16 -> uint16_le`, and `int32 -> int32_le`.
+
 ## Tests
 
 ```bash

@@ -34,8 +34,14 @@ Repository = "https://github.com/donghoonpark/aetus"
 Issues = "https://github.com/donghoonpark/aetus/issues"
 Documentation = "https://github.com/donghoonpark/aetus/tree/main/docs"
 
+[project.optional-dependencies]
+numpy = [
+    "numpy>=2.0.0",
+]
+
 [dependency-groups]
 dev = [
+    "numpy>=2.0.0",
     "psycopg[binary]>=3.2.9",
     "pytest>=8.4.1",
 ]

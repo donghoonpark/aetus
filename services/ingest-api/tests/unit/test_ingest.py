@@ -7,9 +7,11 @@ import json
 import ipaddress
 from pathlib import Path
 import sqlite3
+import struct
 import tempfile
 
 from fastapi.testclient import TestClient
+import pytest
 
 from aetus_ingest.app import create_app
 from aetus_ingest.config import Settings
@@ -747,6 +749,81 @@ def test_ingest_rejects_signal_frame_sample_length_mismatch() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "signal frame samples length mismatch: expected 48, got 47"
+
+
+@pytest.mark.parametrize(
+    ("encoding_name", "encoding", "layout", "samples", "expected_size"),
+    [
+        (
+            "int16_le",
+            ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT16_LE,
+            ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED,
+            struct.pack("<hhhh", -10, 100, -20, 200),
+            8,
+        ),
+        (
+            "uint16_le",
+            ingest_pb2.SIGNAL_SAMPLE_ENCODING_UINT16_LE,
+            ingest_pb2.SIGNAL_SAMPLE_LAYOUT_PLANAR,
+            struct.pack("<HHHH", 1000, 2000, 3000, 4000),
+            8,
+        ),
+        (
+            "int32_le",
+            ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT32_LE,
+            ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED,
+            struct.pack("<iiii", -100_000, 100_000, -100_100, 100_100),
+            16,
+        ),
+    ],
+)
+def test_ingest_accepts_supported_integer_signal_frame_encodings(
+    encoding_name: str,
+    encoding: int,
+    layout: int,
+    samples: bytes,
+    expected_size: int,
+) -> None:
+    client, publisher = make_client()
+    event = ingest_pb2.IngestEvent(
+        schema_version=1,
+        device_id="esp32c5-test-001",
+        boot_id="boot-unit-0001",
+        sequence=0,
+        event_type=ingest_pb2.EVENT_TYPE_TELEMETRY,
+        timestamp_ns=1_712_345_678_901_234_567,
+    )
+    frame = event.telemetry.signal_frame
+    frame.stream_key = f"test.{encoding_name}"
+    frame.sample_interval_ns = 5_000_000
+    frame.sample_count = 2
+    frame.encoding = encoding
+    frame.layout = layout
+    for key in ("ch0", "ch1"):
+        channel = frame.channels.add()
+        channel.key = key
+        channel.unit = "count"
+    frame.samples = samples
+
+    response = client.post(
+        "/v1/ingest",
+        content=event.SerializeToString(),
+        headers={
+            "Content-Type": "application/x-protobuf",
+            "X-Device-Id": "esp32c5-test-001",
+            "Authorization": "Bearer devtok_test_001",
+        },
+    )
+
+    assert response.status_code == 202
+    assert len(publisher.signal_frame_records) == 1
+    payload = publisher.signal_frame_records[0]["payload"]
+    assert payload["stream_key"] == f"test.{encoding_name}"
+    assert payload["encoding"] == encoding_name
+    assert payload["layout"] == ("planar" if layout == ingest_pb2.SIGNAL_SAMPLE_LAYOUT_PLANAR else "interleaved")
+    assert payload["sample_count"] == 2
+    assert base64.b64decode(payload["samples_b64"]) == samples
+    assert len(samples) == expected_size
 
 
 def test_control_devices_json_endpoints_work() -> None:

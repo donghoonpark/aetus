@@ -4,6 +4,7 @@ import math
 import struct
 
 import httpx
+import numpy as np
 import pytest
 
 from aetus_ingest_client import (
@@ -96,6 +97,76 @@ def test_pack_signal_samples_planar_int16() -> None:
     )
 
     assert packed == struct.pack("<hhhhhh", 1, 2, 3, 10, 20, 30)
+
+
+@pytest.mark.parametrize(
+    ("values", "dtype", "expected_encoding", "expected_samples"),
+    [
+        ([[-10, 100], [-20, 200]], np.dtype("<i2"), ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT16_LE, struct.pack("<hhhh", -10, 100, -20, 200)),
+        ([[10, 100], [20, 200]], np.dtype("<u2"), ingest_pb2.SIGNAL_SAMPLE_ENCODING_UINT16_LE, struct.pack("<HHHH", 10, 100, 20, 200)),
+        (
+            [[-100_000, 100_000], [-100_100, 100_100]],
+            np.dtype("<i4"),
+            ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT32_LE,
+            struct.pack("<iiii", -100_000, 100_000, -100_100, 100_100),
+        ),
+        ([[0.5, 1.5], [2.5, 3.5]], np.dtype("<f4"), ingest_pb2.SIGNAL_SAMPLE_ENCODING_FLOAT32_LE, struct.pack("<ffff", 0.5, 1.5, 2.5, 3.5)),
+    ],
+)
+def test_signal_frame_event_infers_encoding_from_numpy_dtype(
+    values: list[list[float | int]],
+    dtype: np.dtype,
+    expected_encoding: int,
+    expected_samples: bytes,
+) -> None:
+    sample_array = np.array(values, dtype=dtype)
+
+    event = build_signal_frame_event(
+        device_id=DEVICE_ID,
+        sequence=0,
+        boot_id=BOOT_ID,
+        stream_key="numpy.samples",
+        sample_interval_ns=1_000_000,
+        channels=["a", "b"],
+        samples=sample_array,
+    )
+    frame = event.telemetry.signal_frame
+
+    assert frame.encoding == expected_encoding
+    assert frame.layout == ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED
+    assert frame.sample_count == 2
+    assert frame.samples == expected_samples
+
+
+def test_signal_frame_event_packs_numpy_planar_layout() -> None:
+    values = np.array([[1, 10], [2, 20], [3, 30]], dtype=np.int16)
+
+    event = build_signal_frame_event(
+        device_id=DEVICE_ID,
+        sequence=0,
+        boot_id=BOOT_ID,
+        stream_key="numpy.planar",
+        sample_interval_ns=1_000_000,
+        channels=["a", "b"],
+        samples=values,
+        layout="planar",
+    )
+
+    assert event.telemetry.signal_frame.encoding == ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT16_LE
+    assert event.telemetry.signal_frame.samples == struct.pack("<hhhhhh", 1, 2, 3, 10, 20, 30)
+
+
+def test_signal_frame_event_rejects_unsupported_numpy_dtype() -> None:
+    with pytest.raises(ValueError, match="unsupported signal ndarray dtype"):
+        build_signal_frame_event(
+            device_id=DEVICE_ID,
+            sequence=0,
+            boot_id=BOOT_ID,
+            stream_key="bad.dtype",
+            sample_interval_ns=1_000_000,
+            channels=["a"],
+            samples=np.array([1.0, 2.0], dtype=np.float64),
+        )
 
 
 def test_pack_signal_samples_rejects_ragged_rows() -> None:

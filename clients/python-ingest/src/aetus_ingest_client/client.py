@@ -15,6 +15,7 @@ from aetus_ingest_client.generated import ingest_pb2
 
 
 SignalEncoding = Literal["float32_le", "int16_le", "uint16_le", "int32_le"]
+SignalEncodingInput = SignalEncoding | Literal["auto"]
 SignalLayout = Literal["interleaved", "planar"]
 AuthMode = Literal["bearer", "hmac"]
 MetricInput = ingest_pb2.Metric | tuple[str, Any] | tuple[str, Any, str]
@@ -33,6 +34,12 @@ ENCODING_STRUCT_FORMAT = {
     "int16_le": "<h",
     "uint16_le": "<H",
     "int32_le": "<i",
+}
+ENCODING_NUMPY_DTYPE = {
+    "float32_le": "<f4",
+    "int16_le": "<i2",
+    "uint16_le": "<u2",
+    "int32_le": "<i4",
 }
 LAYOUT_TO_PROTO = {
     "interleaved": ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED,
@@ -189,19 +196,32 @@ def _coerce_channel(item: SignalChannelSpec | str) -> ingest_pb2.SignalChannel:
 
 
 def pack_signal_samples(
-    samples: Sequence[Sequence[float | int]],
+    samples: Any,
     *,
-    encoding: SignalEncoding = "float32_le",
+    encoding: SignalEncodingInput = "auto",
     layout: SignalLayout = "interleaved",
 ) -> bytes:
     """Pack rows of channel samples into the SignalFrame byte layout."""
+    return _pack_signal_samples_with_metadata(samples, encoding=encoding, layout=layout)[0]
+
+
+def _pack_signal_samples_with_metadata(
+    samples: Any,
+    *,
+    encoding: SignalEncodingInput = "auto",
+    layout: SignalLayout = "interleaved",
+) -> tuple[bytes, int, SignalEncoding]:
     if encoding not in ENCODING_STRUCT_FORMAT:
-        raise ValueError(f"unsupported signal encoding: {encoding}")
+        if encoding != "auto":
+            raise ValueError(f"unsupported signal encoding: {encoding}")
     if layout not in LAYOUT_TO_PROTO:
         raise ValueError(f"unsupported signal layout: {layout}")
+    if _looks_like_numpy_array(samples):
+        return _pack_numpy_signal_samples(samples, encoding=encoding, layout=layout)
     if not samples:
         raise ValueError("at least one signal sample row is required")
 
+    resolved_encoding: SignalEncoding = "float32_le" if encoding == "auto" else encoding
     channel_count = len(samples[0])
     if channel_count == 0:
         raise ValueError("signal samples must contain at least one channel")
@@ -215,8 +235,61 @@ def pack_signal_samples(
         for channel_index in range(channel_count):
             ordered_values.extend(row[channel_index] for row in samples)
 
-    pack = struct.Struct(ENCODING_STRUCT_FORMAT[encoding]).pack
-    return b"".join(pack(value) for value in ordered_values)
+    pack = struct.Struct(ENCODING_STRUCT_FORMAT[resolved_encoding]).pack
+    return b"".join(pack(value) for value in ordered_values), len(samples), resolved_encoding
+
+
+def _looks_like_numpy_array(value: Any) -> bool:
+    return (
+        value.__class__.__module__.startswith("numpy")
+        and hasattr(value, "dtype")
+        and hasattr(value, "ndim")
+        and hasattr(value, "shape")
+    )
+
+
+def _pack_numpy_signal_samples(
+    samples: Any,
+    *,
+    encoding: SignalEncodingInput,
+    layout: SignalLayout,
+) -> tuple[bytes, int, SignalEncoding]:
+    import numpy as np
+
+    array = np.asarray(samples)
+    if array.ndim == 1:
+        sample_count = int(array.shape[0])
+        channel_count = 1
+        rows = array.reshape(sample_count, 1)
+    elif array.ndim == 2:
+        sample_count = int(array.shape[0])
+        channel_count = int(array.shape[1])
+        rows = array
+    else:
+        raise ValueError("signal ndarray samples must be 1D or 2D")
+    if sample_count <= 0:
+        raise ValueError("at least one signal sample row is required")
+    if channel_count <= 0:
+        raise ValueError("signal samples must contain at least one channel")
+
+    resolved_encoding = _infer_numpy_signal_encoding(array.dtype) if encoding == "auto" else encoding
+    target_dtype = np.dtype(ENCODING_NUMPY_DTYPE[resolved_encoding])
+    ordered = rows if layout == "interleaved" else rows.T
+    return np.ascontiguousarray(ordered, dtype=target_dtype).tobytes(), sample_count, resolved_encoding
+
+
+def _infer_numpy_signal_encoding(dtype: Any) -> SignalEncoding:
+    kind = dtype.kind
+    itemsize = dtype.itemsize
+    if kind == "f" and itemsize == 4:
+        return "float32_le"
+    if kind == "i" and itemsize == 2:
+        return "int16_le"
+    if kind == "u" and itemsize == 2:
+        return "uint16_le"
+    if kind == "i" and itemsize == 4:
+        return "int32_le"
+    raise ValueError(f"unsupported signal ndarray dtype: {dtype}")
 
 
 def build_signal_frame_event(
@@ -227,9 +300,9 @@ def build_signal_frame_event(
     stream_key: str,
     sample_interval_ns: int,
     channels: Sequence[SignalChannelSpec | str],
-    samples: Sequence[Sequence[float | int]] | bytes,
+    samples: Sequence[Sequence[float | int]] | bytes | Any,
     sample_count: int | None = None,
-    encoding: SignalEncoding = "float32_le",
+    encoding: SignalEncodingInput = "auto",
     layout: SignalLayout = "interleaved",
     firmware_version: int = 0,
     uptime_ms: int = 0,
@@ -242,7 +315,7 @@ def build_signal_frame_event(
         raise ValueError("sample_interval_ns must be positive")
     if not channels:
         raise ValueError("at least one signal channel is required")
-    if encoding not in ENCODING_TO_PROTO:
+    if encoding != "auto" and encoding not in ENCODING_TO_PROTO:
         raise ValueError(f"unsupported signal encoding: {encoding}")
     if layout not in LAYOUT_TO_PROTO:
         raise ValueError(f"unsupported signal layout: {layout}")
@@ -263,19 +336,27 @@ def build_signal_frame_event(
             raise ValueError("sample_count is required when samples are already packed bytes")
         packed_samples = samples
         resolved_sample_count = sample_count
+        resolved_encoding = "float32_le" if encoding == "auto" else encoding
     else:
-        if sample_count is not None and sample_count != len(samples):
+        packed_samples, resolved_sample_count, resolved_encoding = _pack_signal_samples_with_metadata(
+            samples,
+            encoding=encoding,
+            layout=layout,
+        )
+        if sample_count is not None and sample_count != resolved_sample_count:
             raise ValueError("sample_count must match the number of sample rows")
-        if samples and len(samples[0]) != len(channels):
+        if not _looks_like_numpy_array(samples) and samples and len(samples[0]) != len(channels):
             raise ValueError("sample row width must match channel count")
-        packed_samples = pack_signal_samples(samples, encoding=encoding, layout=layout)
-        resolved_sample_count = len(samples)
+        if _looks_like_numpy_array(samples):
+            inferred_channel_count = 1 if samples.ndim == 1 else int(samples.shape[1])
+            if inferred_channel_count != len(channels):
+                raise ValueError("sample row width must match channel count")
 
     frame = event.telemetry.signal_frame
     frame.stream_key = stream_key
     frame.sample_interval_ns = sample_interval_ns
     frame.sample_count = resolved_sample_count
-    frame.encoding = ENCODING_TO_PROTO[encoding]
+    frame.encoding = ENCODING_TO_PROTO[resolved_encoding]
     frame.layout = LAYOUT_TO_PROTO[layout]
     frame.channels.extend(_coerce_channel(item) for item in channels)
     frame.samples = packed_samples
@@ -452,9 +533,9 @@ class AetusIngestClient:
         stream_key: str,
         sample_interval_ns: int,
         channels: Sequence[SignalChannelSpec | str],
-        samples: Sequence[Sequence[float | int]] | bytes,
+        samples: Sequence[Sequence[float | int]] | bytes | Any,
         sample_count: int | None = None,
-        encoding: SignalEncoding = "float32_le",
+        encoding: SignalEncodingInput = "auto",
         layout: SignalLayout = "interleaved",
         uptime_ms: int = 0,
         timestamp_ns: int | None = None,

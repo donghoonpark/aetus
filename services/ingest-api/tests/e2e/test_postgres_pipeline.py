@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import subprocess
+import struct
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,7 @@ import psycopg
 import pytest
 
 from aetus_ingest.control_db import PostgresControlStore
+from aetus_ingest.generated import ingest_pb2
 from ..helpers.nanopb_mock_device import NanopbMockDevice
 
 
@@ -138,13 +140,25 @@ def _wait_for_metric_rows(device_id: str, expected_count: int, timeout: float = 
     raise RuntimeError("Timed out waiting for PostgreSQL metric rows")
 
 
-def _wait_for_signal_frame_rows(device_id: str, expected_count: int, timeout: float = 120.0) -> list[tuple]:
+def _wait_for_signal_frame_rows(
+    device_id: str,
+    expected_count: int,
+    timeout: float = 120.0,
+    *,
+    boot_id: str | None = None,
+) -> list[tuple]:
     deadline = time.time() + timeout
+    where_clause = "WHERE d.device_id = %s"
+    params: list[Any] = [device_id]
+    if boot_id is not None:
+        where_clause += " AND b.boot_id = %s"
+        params.append(boot_id)
+
     while time.time() < deadline:
         with psycopg.connect(POSTGRES_DSN) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT
                         d.device_id,
                         b.boot_id,
@@ -163,16 +177,48 @@ def _wait_for_signal_frame_rows(device_id: str, expected_count: int, timeout: fl
                     JOIN devices d ON d.device_pk = f.device_pk
                     JOIN device_boot_sessions b ON b.boot_pk = f.boot_pk
                     JOIN signal_stream_definitions sd ON sd.signal_pk = f.signal_pk
-                    WHERE d.device_id = %s
+                    {where_clause}
                     ORDER BY f.sequence DESC, f.created_at DESC
                     """,
-                    (device_id,),
+                    params,
                 )
                 rows = cur.fetchall()
                 if len(rows) >= expected_count:
                     return rows
         time.sleep(2)
     raise RuntimeError("Timed out waiting for PostgreSQL signal frame rows")
+
+
+def _build_signal_frame_event(
+    *,
+    sequence: int,
+    boot_id: str,
+    stream_key: str,
+    encoding: int,
+    layout: int,
+    samples: bytes,
+    sample_count: int,
+) -> bytes:
+    event = ingest_pb2.IngestEvent(
+        schema_version=1,
+        device_id="esp32c5-test-001",
+        boot_id=boot_id,
+        sequence=sequence,
+        event_type=ingest_pb2.EVENT_TYPE_TELEMETRY,
+        timestamp_ns=1_712_345_679_200_000_000 + sequence,
+    )
+    frame = event.telemetry.signal_frame
+    frame.stream_key = stream_key
+    frame.sample_interval_ns = 1_000_000
+    frame.sample_count = sample_count
+    frame.encoding = encoding
+    frame.layout = layout
+    for key in ("ch0", "ch1"):
+        channel = frame.channels.add()
+        channel.key = key
+        channel.unit = "count"
+    frame.samples = samples
+    return event.SerializeToString()
 
 
 @pytest.fixture(scope="module")
@@ -473,6 +519,63 @@ def test_signal_frame_uses_device_timestamp_when_available(signal_frame_result: 
     assert signal_frame[9] == 1_712_345_679_111_000_000
     assert abs(int(signal_frame[10].timestamp() * 1_000_000_000) - signal_frame[9]) < 1_000
     assert signal_frame[10] < signal_frame[11]
+
+
+def test_integer_signal_frame_encodings_are_persisted_to_postgres(e2e_stack: None) -> None:
+    del e2e_stack
+    boot_id = "boot-e2e-signal-integer-0001"
+    headers = {
+        "Content-Type": "application/x-protobuf",
+        "X-Device-Id": "esp32c5-test-001",
+        "Authorization": "Bearer devtok_test_001",
+    }
+    cases = [
+        (
+            "e2e.adc.int16",
+            ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT16_LE,
+            ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED,
+            struct.pack("<hhhh", -10, 100, -20, 200),
+            8,
+        ),
+        (
+            "e2e.adc.uint16",
+            ingest_pb2.SIGNAL_SAMPLE_ENCODING_UINT16_LE,
+            ingest_pb2.SIGNAL_SAMPLE_LAYOUT_PLANAR,
+            struct.pack("<HHHH", 1000, 2000, 3000, 4000),
+            8,
+        ),
+        (
+            "e2e.encoder.int32",
+            ingest_pb2.SIGNAL_SAMPLE_ENCODING_INT32_LE,
+            ingest_pb2.SIGNAL_SAMPLE_LAYOUT_INTERLEAVED,
+            struct.pack("<iiii", -100_000, 100_000, -100_100, 100_100),
+            16,
+        ),
+    ]
+
+    for sequence, (stream_key, encoding, layout, samples, _expected_size) in enumerate(cases):
+        response = httpx.post(
+            f"{INGEST_API_URL}/v1/ingest",
+            content=_build_signal_frame_event(
+                sequence=sequence,
+                boot_id=boot_id,
+                stream_key=stream_key,
+                encoding=encoding,
+                layout=layout,
+                samples=samples,
+                sample_count=2,
+            ),
+            headers=headers,
+            timeout=10.0,
+        )
+        assert response.status_code == 202, response.text
+
+    rows = _wait_for_signal_frame_rows("esp32c5-test-001", expected_count=3, boot_id=boot_id)
+    by_stream = {row[3]: row for row in rows}
+
+    assert by_stream["e2e.adc.int16"][4:9] == ("int16_le", "interleaved", 1_000_000, 2, 8)
+    assert by_stream["e2e.adc.uint16"][4:9] == ("uint16_le", "planar", 1_000_000, 2, 8)
+    assert by_stream["e2e.encoder.int32"][4:9] == ("int32_le", "interleaved", 1_000_000, 2, 16)
 
 
 def test_dimension_tables_deduplicate_device_boot_and_metric_keys(ingest_result: IngestResult) -> None:
