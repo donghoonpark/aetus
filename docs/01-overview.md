@@ -3,7 +3,7 @@
 ## 목적
 
 이 문서는 임베디드 기기로부터 데이터를 직접 수집하고,
-`protobuf -> FastAPI internal object -> Kafka -> PostgreSQL/TimescaleDB -> query-api -> frontend`로 이어지는 전체 데이터 스트림을 요약한다.
+`protobuf -> FastAPI internal object -> Kafka -> PostgreSQL/TimescaleDB -> query-api/anomaly-service -> frontend`로 이어지는 전체 데이터 스트림을 요약한다.
 
 초기에는 수집/적재 경로를 중심으로 설계했지만, 현재 구조는 저장된 시계열을 운영자가 조회하고 시각화하는 read path까지 포함한다.
 
@@ -16,6 +16,8 @@
 - 영속 저장: `PostgreSQL / TimescaleDB`
 - 조회 API: `FastAPI` 기반 `query-api`
 - 표준 조회 프론트엔드: `Vue + Naive UI + ECharts` 기반 `stream-viewer`
+- 이상감지 서비스: Rust 기반 `services/anomaly`
+- 이상감지 운영 프론트엔드: `Vue + Naive UI` 기반 `anomaly-panel`
 - 백엔드 배포 환경: `Kubernetes`
 - `Kafka`와 `PostgreSQL`은 분리망 내 self-managed 운영 전제
 - `source IP`는 `L4` 직결 환경에서 원본이 보존된다고 가정
@@ -29,6 +31,7 @@
 - 장애 구간을 명확히 나누고 재처리 가능성을 확보한다.
 - 저장 포맷과 공개 조회 모델을 분리해 metric point와 dense signal frame을 모두 logical stream으로 노출한다.
 - 고밀도 sampled signal은 query-api에서 server-side downsampling 후 프론트엔드에 전달한다.
+- 저장된 metric/signal stream을 기반으로 DB-backed window anomaly detection을 수행할 수 있게 한다.
 - 장치 수 증가에 따라 수평 확장이 가능해야 한다.
 - `k8s` 상에서 운영 가능한 구조여야 한다.
 
@@ -68,6 +71,12 @@ flowchart TB
         OP["Operator / Dashboard"]
     end
 
+    subgraph AnomalyLayer["Anomaly / Alerting Layer"]
+        ANOM["Rust Anomaly Service"]
+        APANEL["AETUS Anomaly Panel"]
+        WH["Webhook Targets"]
+    end
+
     D1 -->|"HTTP + protobuf"| LB
     D2 --> LB
     DN --> LB
@@ -78,17 +87,22 @@ flowchart TB
     CONNECT --> PG
     SMT --> DLQ
     PG --> QUERY
+    PG --> ANOM
     QUERY --> REDIS
     QUERY --> FE
     FE --> OP
+    ANOM --> APANEL
+    APANEL --> OP
+    ANOM --> WH
 ```
 
 ## 전체 데이터 스트림
 
-현재 시스템은 두 개의 주요 경로로 나뉜다.
+현재 시스템은 세 개의 주요 경로로 나뉜다.
 
 - write path: 기기 데이터 수집, Kafka 중개, PostgreSQL/TimescaleDB 적재
 - read path: 저장된 metric/signal을 query-api가 logical stream으로 변환하고 frontend가 시각화
+- detection path: 저장된 metric/signal을 anomaly worker가 window 단위로 평가하고 event/webhook을 생성
 
 ```mermaid
 flowchart TB
@@ -109,10 +123,20 @@ flowchart TB
         Query --> Viewer["stream-viewer"]
         Viewer --> User["Operator"]
     end
+
+    subgraph Detect["Detection path"]
+        Metric --> Anomaly["aetus-anomaly worker"]
+        Signal --> Anomaly
+        Anomaly --> Event["anomaly_events"]
+        Anomaly --> Webhook["webhook_outbox"]
+        Event --> AnomalyAPI["aetus-anomaly api"]
+        AnomalyAPI --> Panel["anomaly-panel"]
+    end
 ```
 
 write path는 기기가 기다려야 하는 시간을 최소화한다.
 read path는 저장된 데이터를 화면 해상도와 요청 범위에 맞춰 줄이는 역할을 한다.
+detection path는 ingest API에 부담을 주지 않고 DB 뒷단에서 재처리 가능한 방식으로 이상감지를 수행한다.
 
 ## 역할 분리
 
@@ -204,6 +228,26 @@ read path는 저장된 데이터를 화면 해상도와 요청 범위에 맞춰 
 - 세부 설정은 drawer 안에 숨겨 기본 화면은 chart 중심으로 유지
 - 브라우저는 chart renderer 역할에 집중하고, downsampling은 query-api가 담당
 
+### Anomaly Service
+
+- `services/anomaly`의 Rust multi-command binary
+- `aetus-anomaly api`: detector job, event, webhook endpoint 관리 API
+- `aetus-anomaly worker`: PostgreSQL/TimescaleDB window 조회 후 detector 실행
+- `aetus-anomaly dispatcher`: webhook outbox 발송, retry, dead-letter 처리
+- 현재 PoC는 scalar metric threshold detector를 구현
+- 장기적으로 sampled signal feature detector와 ML/rule hybrid detector를 같은 job/event model 위에 추가
+
+관련 상세 문서:
+
+- [[11-anomaly-detection-service]]
+
+### Anomaly Panel
+
+- `frontend/anomaly-panel`의 portable Vue component
+- `anomalyServerUrl`, admin token만으로 다른 운영 콘솔에 이식 가능
+- detector job, recent event, webhook endpoint 상태를 한 화면에서 조회
+- threshold job 생성 UI 제공
+
 ## 데이터 흐름
 
 ```mermaid
@@ -216,6 +260,8 @@ sequenceDiagram
     participant PG as PostgreSQL
     participant Query as Query API
     participant FE as Stream Viewer
+    participant Anom as Anomaly Service
+    participant Panel as Anomaly Panel
 
     Device->>API: HTTP POST /v1/ingest (protobuf)
     API->>API: Auth + protobuf decode + normalize
@@ -234,6 +280,10 @@ sequenceDiagram
     Query->>PG: Read metric points or signal frames
     Query->>Query: Decode / downsample / cache
     Query-->>FE: chart-ready JSON
+    Anom->>PG: Read metric/signal window
+    Anom->>PG: Upsert anomaly_scores / anomaly_events
+    Panel->>Anom: GET /v1/anomaly/events
+    Anom-->>Panel: anomaly events
 ```
 
 ## 저장 모델과 조회 모델의 분리
@@ -317,8 +367,16 @@ flowchart TB
             QSvc["ClusterIP Service"]
         end
 
-        subgraph NS6["namespace: frontend"]
+        subgraph NS6["namespace: anomaly"]
+            ANAPI["anomaly-api container"]
+            ANWORK["anomaly-worker container"]
+            ANDISP["anomaly-dispatcher container"]
+            ASvc["ClusterIP Service"]
+        end
+
+        subgraph NS7["namespace: frontend"]
             VIEW["stream-viewer host app"]
+            APV["anomaly-panel host app"]
         end
     end
 
@@ -328,5 +386,9 @@ flowchart TB
     PGB --> PG1
     QAPI --> PGB
     QAPI --> RDS
+    ANAPI --> PGB
+    ANWORK --> PGB
+    ANDISP --> PGB
     VIEW --> QSvc
+    APV --> ASvc
 ```

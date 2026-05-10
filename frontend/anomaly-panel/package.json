@@ -1,0 +1,38 @@
+{
+  "name": "@aetus/anomaly-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/aetus-anomaly-panel.umd.cjs",
+  "module": "./dist/aetus-anomaly-panel.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./dist/aetus-anomaly-panel.js",
+      "require": "./dist/aetus-anomaly-panel.umd.cjs"
+    },
+    "./style.css": "./dist/aetus-anomaly-panel.css"
+  },
+  "files": [
+    "dist",
+    "src/index.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "lucide-vue-next": "^1.0.0",
+    "naive-ui": "^2.40.3",
+    "vue": "^3.5.18"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3"
+  }
+}

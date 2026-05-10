@@ -21,6 +21,8 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 COMPOSE_FILE = ROOT_DIR / "compose" / "e2e-compose.yml"
 INGEST_API_URL = "http://127.0.0.1:18000"
 KAFKA_CONNECT_URL = "http://127.0.0.1:18083"
+ANOMALY_API_URL = "http://127.0.0.1:18002"
+ANOMALY_ADMIN_TOKEN = "e2e-anomaly-admin-token"
 POSTGRES_DSN = "postgresql://aetus:aetus@127.0.0.1:15432/aetus"
 
 
@@ -148,6 +150,7 @@ def e2e_stack() -> None:
     try:
         _wait_for_http(f"{INGEST_API_URL}/v1/healthz")
         _wait_for_http(f"{KAFKA_CONNECT_URL}/")
+        _wait_for_http(f"{ANOMALY_API_URL}/v1/healthz")
         yield
     finally:
         _docker_compose("down", "-v", "--remove-orphans")
@@ -319,3 +322,53 @@ def test_python_client_signal_frame_row_is_normalized(uploaded_client_data: dict
         1_812_345_681_000_000_000,
     )
     assert [item["key"] for item in int16_channels] == ["adc_a", "adc_b"]
+
+
+def test_python_client_data_can_trigger_anomaly_detection(uploaded_client_data: dict[str, Any]) -> None:
+    rows = _wait_for_metric_rows(uploaded_client_data["device_id"], expected_count=3)
+    assert {row[4] for row in rows} >= {"temperature"}
+
+    headers = {"x-aetus-admin-token": ANOMALY_ADMIN_TOKEN}
+    create_response = httpx.post(
+        f"{ANOMALY_API_URL}/v1/anomaly/jobs",
+        headers=headers,
+        json={
+            "job_key": "python-client-temperature-high",
+            "enabled": True,
+            "device_selector": {"devices": [uploaded_client_data["device_id"]]},
+            "stream_selector": {"streams": ["temperature"]},
+            "detector_type": "threshold",
+            "detector_config": {"operator": "gt", "threshold": 20.0},
+            "window_seconds": 60,
+            "step_seconds": 60,
+            "severity": "warning",
+        },
+        timeout=10.0,
+    )
+    assert create_response.status_code == 200, create_response.text
+    job_id = create_response.json()["job_id"]
+
+    run_response = httpx.post(
+        f"{ANOMALY_API_URL}/v1/anomaly/jobs/{job_id}/run",
+        headers=headers,
+        timeout=20.0,
+    )
+    assert run_response.status_code == 200, run_response.text
+    assert run_response.json()["events_created"] >= 1
+
+    event_response = httpx.get(
+        f"{ANOMALY_API_URL}/v1/anomaly/events",
+        headers=headers,
+        params={"limit": 10},
+        timeout=10.0,
+    )
+    assert event_response.status_code == 200, event_response.text
+    events = event_response.json()
+    matching = [
+        event
+        for event in events
+        if event["device_id"] == uploaded_client_data["device_id"] and event["stream_key"] == "temperature"
+    ]
+    assert matching
+    assert matching[0]["score"] == 22.75
+    assert matching[0]["threshold"] == 20.0

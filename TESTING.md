@@ -13,6 +13,10 @@ uv run pytest tests/unit -q
 cd ../query-api
 uv run pytest tests/unit -q
 
+cd ../anomaly
+cargo fmt --check
+cargo test
+
 cd ../../clients/python-ingest
 uv run pytest tests/unit -q
 
@@ -39,6 +43,8 @@ cd ../rust-ingest
 AETUS_RUST_E2E_BUILD=1 cargo test --test e2e_pipeline -- --test-threads=1
 ```
 
+The Python ingest client E2E suite also covers the anomaly PoC path: a real client uploads metric data, the compose stack persists it to PostgreSQL, a threshold job is created through `anomaly-api`, and `/v1/anomaly/events` is verified after a manual detector run.
+
 Tear down manually if a run is interrupted:
 
 ```bash
@@ -62,6 +68,15 @@ The ingest control panel currently has build coverage:
 cd frontend/ingest-control-panel
 npm ci
 npm run build
+```
+
+The anomaly panel mocks the anomaly API contract and covers job/event/webhook rendering plus threshold job creation:
+
+```bash
+cd frontend/anomaly-panel
+npm ci
+npm run build
+npm run test:e2e
 ```
 
 ## Firmware Build Tests
@@ -116,10 +131,15 @@ For ingest or protobuf changes:
 - Add client SDK tests if the public client API changes.
 - Add Query API and stream viewer tests if the change affects stream consumption.
 
+For anomaly detection changes:
+
+- Add Rust unit tests for detector math, webhook signing, retry, and worker planning.
+- Add Docker E2E when the DB schema, repository, or detector execution path changes.
+- Add anomaly-panel Playwright coverage when operator-facing API or state rendering changes.
+
 For firmware changes:
 
 - Add host-level compile or unit coverage where possible.
 - Add ESP-IDF build coverage for examples/test apps.
 - Use QEMU for runtime memory/ownership behavior when practical.
 - Use HIL for Wi-Fi, provisioning, and physical device upload behavior.
-

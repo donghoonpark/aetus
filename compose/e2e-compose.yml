@@ -160,5 +160,43 @@ services:
     ports:
       - "18001:8000"
 
+  anomaly-api:
+    build:
+      context: ../services/anomaly
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AETUS_POSTGRES_DSN: ${AETUS_POSTGRES_DSN:-postgresql://aetus:aetus@postgres:5432/aetus}
+      AETUS_ANOMALY_ADMIN_TOKEN: ${AETUS_ANOMALY_ADMIN_TOKEN:-e2e-anomaly-admin-token}
+      AETUS_ANOMALY_HOST: 0.0.0.0
+      AETUS_ANOMALY_PORT: 8000
+    ports:
+      - "18002:8000"
+    command: ["aetus-anomaly", "api"]
+
+  anomaly-worker:
+    build:
+      context: ../services/anomaly
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AETUS_POSTGRES_DSN: ${AETUS_POSTGRES_DSN:-postgresql://aetus:aetus@postgres:5432/aetus}
+      AETUS_ANOMALY_WORKER_ID: e2e-anomaly-worker
+      AETUS_ANOMALY_POLL_INTERVAL_SECONDS: 2
+    command: ["aetus-anomaly", "worker"]
+
+  anomaly-dispatcher:
+    build:
+      context: ../services/anomaly
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AETUS_POSTGRES_DSN: ${AETUS_POSTGRES_DSN:-postgresql://aetus:aetus@postgres:5432/aetus}
+      AETUS_ANOMALY_POLL_INTERVAL_SECONDS: 2
+    command: ["aetus-anomaly", "dispatcher"]
+
 volumes:
   ingest-control-data:

@@ -130,6 +130,28 @@ flowchart TB
 - `device_metric_points`
 - `device_signal_frames`
 
+### 1-2. Client SDKs to Anomaly Detection
+
+```mermaid
+flowchart TB
+    PySDK["clients/python-ingest\nAetusIngestClient"] --> Ingest["ingest-api"]
+    Ingest --> Kafka["Kafka"]
+    Kafka --> Connect["Kafka Connect"]
+    Connect --> PG["PostgreSQL / TimescaleDB"]
+    PG --> Anomaly["aetus-anomaly worker"]
+    Anomaly --> Events["anomaly_events"]
+    Test["E2E test"] --> API["aetus-anomaly api"]
+    API --> Events
+```
+
+검증 내용:
+
+- 실제 Python client upload가 `device_metric_points`에 적재됨
+- anomaly API로 threshold job 생성
+- `/v1/anomaly/jobs/{job_id}/run`으로 detector 수동 실행
+- score/event row 생성
+- `/v1/anomaly/events`에서 device/stream/score/threshold 확인
+
 ### 2. PostgreSQL to Query API
 
 ```mermaid
@@ -164,6 +186,25 @@ flowchart LR
 - sampled stream 렌더링
 - scalar stream 전환
 - ECharts canvas 생성
+
+### 4. Anomaly API Contract to Frontend Component
+
+```mermaid
+flowchart TB
+    MockAPI["mocked anomaly-api route"] --> Component["AetusAnomalyPanel"]
+    Component --> Jobs["job table"]
+    Component --> Events["event table"]
+    Component --> Webhooks["webhook table"]
+```
+
+검증 내용:
+
+- `anomalyServerUrl` prop만으로 API 경로 구성
+- `x-aetus-admin-token` forwarding
+- detection job 목록 렌더링
+- recent event score/threshold 렌더링
+- webhook endpoint 목록 렌더링
+- threshold job 생성 request contract
 
 ## 수동 또는 별도 실행 루프
 
@@ -213,11 +254,13 @@ HIL은 실기기, Wi-Fi, BLE provisioning, GPIO LED, HMAC upload, power mode 같
 - cache key가 `device_id`, `stream_key`, `from`, `to`, `max_points` 변화에 따라 섞이지 않는지 더 직접적인 테스트가 필요하다.
 - Kafka broker 자체 중단 시 ingest-api가 `503`으로 빠르게 실패하고 recovery 후 다시 수락하는 장애 주입 E2E가 필요하다. 현재는 Kafka Connect sink 장애/복구를 먼저 커버한다.
 - PostgreSQL 중단 시 Kafka Connect task 상태, backlog 유지, DB 복구 후 적재 재개를 확인하는 장애 주입 E2E가 필요하다.
+- anomaly webhook dispatcher의 5xx retry, timeout retry, max attempts dead-letter DB-backed E2E가 필요하다. 현재는 signing/backoff unit과 API/worker pipeline E2E를 먼저 커버한다.
 
 ### P2
 
 - `seed_dense_query_data.py`는 CLI help와 수동 실행 위주다. 작은 규모의 deterministic seed unit 또는 integration test가 있으면 좋다.
 - `ingest-control-panel`은 build만 있고 브라우저 e2e가 없다.
+- anomaly service는 scalar threshold PoC를 커버하지만 sampled signal feature detector, worker lease, event resolve/ack 상태 전이 테스트는 아직 후속이다.
 - firmware portable component는 host-side C/C++ unit test가 거의 없다. ESP-IDF 없이 검증 가능한 string copy, queue policy, HMAC signing input construction 같은 순수 로직은 분리하면 테스트 가능하다.
 - signal frame sample memory pool은 static/FreeRTOS heap backend와 기본 release stats를 갖췄다. `signal-frame-contract` compile test는 유지하고, 이후에는 upload success release, retry ownership 유지, final drop release를 ESP-IDF Unity 또는 host-testable module로 더 촘촘히 보강해야 한다.
 - HIL 결과를 사람이 읽는 로그에 의존한다. 장기적으로는 HIL pytest marker와 장치 포트/env 기반 수동 test runner가 있으면 좋다.

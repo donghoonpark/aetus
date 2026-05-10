@@ -12,6 +12,7 @@ on:
       - "services/**/Dockerfile"
       - "services/ingest-api/**"
       - "services/query-api/**"
+      - "services/anomaly/**"
       - "services/kafka/**"
       - "services/kafka-connect/**"
       - "services/postgres/**"
@@ -41,6 +42,8 @@ jobs:
             context: services/ingest-api
           - image: query-api
             context: services/query-api
+          - image: anomaly
+            context: services/anomaly
           - image: kafka
             context: services/kafka
           - image: kafka-connect

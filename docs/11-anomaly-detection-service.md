@@ -2,7 +2,7 @@
 
 ## 목적
 
-이 문서는 AETUS에 window 기반 이상감지와 webhook 알림 기능을 추가하기 위한 구현 계획을 정리한다.
+이 문서는 AETUS에 window 기반 이상감지와 webhook 알림 기능을 추가하기 위한 설계와 현재 PoC 구현 상태를 정리한다.
 
 핵심 목표:
 
@@ -47,6 +47,18 @@ flowchart TB
 Pod 내부 IPC는 필수로 설계하지 않는다.
 worker 상태 표시가 필요하면 DB heartbeat row와 Prometheus metrics를 우선 사용하고, local IPC는 편의 기능으로만 둔다.
 
+현재 PoC 구현 범위:
+
+- `services/anomaly`: Rust `aetus-anomaly api|worker|dispatcher|run-once` binary
+- `services/postgres/initdb/20-anomaly.sql`: anomaly job/event/score/webhook schema
+- `compose/e2e-compose.yml`: anomaly API, worker, dispatcher container 추가
+- `frontend/anomaly-panel`: portable Vue/Naive UI control panel
+- `clients/python-ingest/tests/e2e/test_pipeline.py`: 실제 Python ingest client가 데이터를 보낸 뒤 anomaly job을 생성하고 event 생성을 검증
+- `.github/workflows/ci.yml`: anomaly service unit test와 anomaly panel build/e2e 추가
+- `.github/workflows/container-images.yml`: `aetus-anomaly` GHCR image build/publish 대상 추가
+
+PoC의 detector는 scalar metric threshold에 집중한다. sampled signal feature 기반 detector, worker lease, event resolve/ack API, Prometheus metrics는 후속 확장 영역이다.
+
 ## 왜 DB 뒷단인가
 
 window 기반 이상감지는 과거 구간 조회, late-arrival 처리, 재처리, detector version 변경, backfill이 중요하다.
@@ -86,48 +98,24 @@ flowchart TB
 
 ## 서비스 구조
 
-권장 디렉터리:
+현재 구현 디렉터리:
 
 ```text
 services/
   anomaly/
     Dockerfile
     Cargo.toml
-    migrations/
+    README.md
     src/
       main.rs
       config.rs
-      error.rs
-      api/
-        mod.rs
-        routes.rs
-        schemas.rs
-        auth.rs
-        openapi.rs
-      repository/
-        mod.rs
-        jobs.rs
-        events.rs
-        webhooks.rs
-        streams.rs
-      detector/
-        mod.rs
-        threshold.rs
-        rms.rs
-        peak.rs
-        missing_data.rs
-      worker/
-        mod.rs
-        lease.rs
-        planner.rs
-      webhook/
-        mod.rs
-        signing.rs
-        retry.rs
-      metrics.rs
-    tests/
-      unit/
-      e2e/
+      api.rs
+      detector.rs
+      dispatcher.rs
+      models.rs
+      repository.rs
+      webhook.rs
+      worker.rs
 frontend/
   anomaly-panel/
 ```
@@ -138,7 +126,7 @@ Rust stack:
 - `tokio`: async runtime
 - `sqlx`: PostgreSQL access and migrations
 - `serde` / `serde_json`: JSONB config, API payload, webhook payload
-- `utoipa` / `utoipa-swagger-ui`: OpenAPI schema and docs UI
+- `utoipa` / `utoipa-swagger-ui`: OpenAPI schema 준비용 의존성
 - `tower-http`: CORS, tracing, compression, request middleware
 - `reqwest`: webhook delivery
 - `tracing`: structured logs
@@ -187,7 +175,9 @@ Deployment: anomaly
 
 초기에는 하나의 Pod로 묶어 운영 단순성을 우선한다.
 
-## DB Schema 초안
+## DB Schema
+
+현재 PoC schema는 normalized telemetry table을 읽되 anomaly 결과 table은 `device_id`, `stream_key`, `channel_key` 텍스트 값을 직접 보관한다. 이는 운영자 조회와 webhook payload 생성이 단순하고, 감지 결과 row 수가 원본 telemetry보다 훨씬 적다는 판단 때문이다. 장기적으로 고카디널리티/대규모 score 보관이 필요해지면 `device_pk`, `metric_pk`, `signal_pk` FK 기반으로 전환할 수 있다.
 
 ### anomaly_jobs
 
@@ -251,10 +241,10 @@ window별 score.
 CREATE TABLE anomaly_scores (
     score_id BIGSERIAL PRIMARY KEY,
     job_id BIGINT NOT NULL REFERENCES anomaly_jobs(job_id),
-    device_pk BIGINT NOT NULL REFERENCES devices(device_pk),
-    signal_pk BIGINT NULL REFERENCES signal_stream_definitions(signal_pk),
-    metric_pk BIGINT NULL REFERENCES metric_definitions(metric_pk),
+    device_id TEXT NOT NULL,
+    stream_key TEXT NOT NULL,
     channel_key TEXT NULL,
+    channel_key_norm TEXT NOT NULL DEFAULT '',
     window_start TIMESTAMPTZ NOT NULL,
     window_end TIMESTAMPTZ NOT NULL,
     score DOUBLE PRECISION NOT NULL,
@@ -263,15 +253,17 @@ CREATE TABLE anomaly_scores (
     detector_type TEXT NOT NULL,
     detector_version TEXT NOT NULL,
     details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (job_id, device_pk, COALESCE(signal_pk, 0), COALESCE(metric_pk, 0), COALESCE(channel_key, ''), window_start, window_end)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX uq_anomaly_scores_window
+    ON anomaly_scores(job_id, device_id, stream_key, channel_key_norm, window_start, window_end);
 ```
 
 주의:
 
-- PostgreSQL unique expression은 직접 위 형태로 만들 수 없으므로 실제 migration에서는 generated column 또는 expression index로 조정한다.
-- metric stream과 sampled stream을 같은 table에서 다루기 위해 `signal_pk`/`metric_pk`를 nullable로 둔다.
+- `channel_key_norm`은 nullable `channel_key`를 안정적으로 unique key에 포함하기 위한 normalizing column이다.
+- 현재 PoC는 metric threshold detector를 먼저 구현했지만 schema는 stream/channel 단위 score를 보관할 수 있게 열려 있다.
 
 ### anomaly_events
 
@@ -281,10 +273,10 @@ CREATE TABLE anomaly_scores (
 CREATE TABLE anomaly_events (
     event_id UUID PRIMARY KEY,
     job_id BIGINT NOT NULL REFERENCES anomaly_jobs(job_id),
-    device_pk BIGINT NOT NULL REFERENCES devices(device_pk),
-    signal_pk BIGINT NULL REFERENCES signal_stream_definitions(signal_pk),
-    metric_pk BIGINT NULL REFERENCES metric_definitions(metric_pk),
+    device_id TEXT NOT NULL,
+    stream_key TEXT NOT NULL,
     channel_key TEXT NULL,
+    channel_key_norm TEXT NOT NULL DEFAULT '',
     event_start TIMESTAMPTZ NOT NULL,
     event_end TIMESTAMPTZ NOT NULL,
     severity TEXT NOT NULL,
@@ -299,6 +291,9 @@ CREATE TABLE anomaly_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX uq_anomaly_events_start
+    ON anomaly_events(job_id, device_id, stream_key, channel_key_norm, event_start);
 ```
 
 event merge 정책:
@@ -535,25 +530,25 @@ Base path: `/v1/anomaly`
 
 | Endpoint | Method | 설명 |
 | --- | --- | --- |
-| `/healthz` | GET | liveness |
-| `/readyz` | GET | DB 연결 및 worker 상태 |
-| `/jobs` | GET | detector job 목록 |
-| `/jobs` | POST | detector job 생성 |
-| `/jobs/{job_id}` | GET | detector job 상세 |
-| `/jobs/{job_id}` | PATCH | enable/disable, config 수정 |
-| `/jobs/{job_id}/run` | POST | 수동 backfill/run |
-| `/events` | GET | anomaly event 검색 |
-| `/events/{event_id}` | GET | event 상세 |
-| `/events/{event_id}` | PATCH | ack/close/mute 상태 변경 |
-| `/webhooks/endpoints` | GET | webhook endpoint 목록 |
-| `/webhooks/endpoints` | POST | endpoint 생성 |
-| `/webhooks/endpoints/{endpoint_id}` | PATCH | enable/disable/config 수정 |
-| `/webhooks/deliveries` | GET | delivery 로그 조회 |
-| `/webhooks/outbox/{outbox_id}/retry` | POST | dead-letter/pending 재시도 |
+| `/v1/healthz` | GET | liveness, 구현됨 |
+| `/v1/readyz` | GET | DB 연결 확인, 구현됨 |
+| `/jobs` | GET | detector job 목록, 구현됨 |
+| `/jobs` | POST | detector job 생성/upsert, 구현됨 |
+| `/jobs/{job_id}/run` | POST | 특정 job 수동 1회 실행, 구현됨 |
+| `/events` | GET | anomaly event 최근 목록, 구현됨 |
+| `/webhooks/endpoints` | GET | webhook endpoint 목록, 구현됨 |
+| `/webhooks/endpoints` | POST | endpoint 생성/upsert, 구현됨 |
+| `/jobs/{job_id}` | GET | detector job 상세, 미구현 |
+| `/jobs/{job_id}` | PATCH | enable/disable, config 수정, 미구현 |
+| `/events/{event_id}` | GET | event 상세, 미구현 |
+| `/events/{event_id}` | PATCH | ack/close/mute 상태 변경, 미구현 |
+| `/webhooks/endpoints/{endpoint_id}` | PATCH | enable/disable/config 수정, 미구현 |
+| `/webhooks/deliveries` | GET | delivery 로그 조회, 미구현 |
+| `/webhooks/outbox/{outbox_id}/retry` | POST | dead-letter/pending 재시도, 미구현 |
 
 인증:
 
-- 초기 구현은 internal admin token 또는 query JWT와 유사한 HS256 JWT 중 하나로 시작한다.
+- 현재 구현은 `x-aetus-admin-token` header 기반 internal admin token으로 시작한다.
 - 장기적으로는 host application이 operator auth를 담당하고 anomaly API에는 internal token/JWT만 전달한다.
 - device token, bootstrap token, ingest HMAC secret은 anomaly frontend/API에 노출하지 않는다.
 

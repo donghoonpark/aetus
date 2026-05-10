@@ -25,6 +25,8 @@
   ·
   <a href="frontend/stream-viewer">Stream Viewer</a>
   ·
+  <a href="frontend/anomaly-panel">Anomaly Panel</a>
+  ·
   <a href="CONTRIBUTING.md">Contributing</a>
   ·
   <a href="SECURITY.md">Security</a>
@@ -64,7 +66,9 @@ flowchart TB
     Ingest -->|"raw, metric, signal events"| Kafka["Kafka topics"]
     Kafka -->|"JDBC Sink"| Storage["PostgreSQL / TimescaleDB<br/>raw short-retention + normalized time-series"]
     Storage --> Query["Query API<br/>logical streams, downsample, drill-down"]
+    Storage --> Anomaly["Rust anomaly service<br/>window detector + webhook outbox"]
     Query --> Viewer["Vue stream viewer<br/>multi-stream time navigation"]
+    Anomaly --> AnomalyPanel["Vue anomaly panel<br/>jobs, events, webhooks"]
     Ingest --> Control["Vue control panel<br/>provisioning + health"]
 
     Admin["Admin / provisioning"] --> Ingest
@@ -101,6 +105,8 @@ Detailed Kafka topic, staging table, trigger, and retention design lives in `doc
 - ESP32-C5 hardware-in-the-loop upload firmware
 - Python ingest client with optional NumPy ndarray signal frame packing and dtype inference
 - Rust ingest client with protobuf event builders and signal frame packing
+- Rust anomaly service PoC with threshold jobs, event storage, and webhook outbox
+- Vue 3 + Naive UI anomaly control panel component
 
 ## Current Reference Clients
 
@@ -128,9 +134,11 @@ firmware/
 frontend/
   ingest-control-panel/     # Portable Vue/Naive UI control panel
   stream-viewer/            # Portable Vue/Naive UI/ECharts stream viewer
+  anomaly-panel/            # Portable Vue/Naive UI anomaly control panel
 services/
   ingest-api/               # FastAPI ingest/provisioning/control service
   query-api/                # FastAPI logical stream query and downsampling service
+  anomaly/                  # Rust anomaly API, detector worker, webhook dispatcher
   kafka/                    # Self-managed Kafka image
   kafka-connect/            # JDBC sink image and connector configs
   postgres/                 # PostgreSQL/TimescaleDB schema
@@ -150,6 +158,7 @@ Useful local endpoints:
 
 - Ingest API: `http://127.0.0.1:18000`
 - Query API: `http://127.0.0.1:18001`
+- Anomaly API: `http://127.0.0.1:18002`
 - Kafka Connect: `http://127.0.0.1:18083`
 - PostgreSQL: `127.0.0.1:15432`
 
@@ -164,6 +173,7 @@ Published container images are available from GitHub Container Registry after th
 
 - `ghcr.io/donghoonpark/aetus-ingest-api:<tag>`
 - `ghcr.io/donghoonpark/aetus-query-api:<tag>`
+- `ghcr.io/donghoonpark/aetus-anomaly:<tag>`
 - `ghcr.io/donghoonpark/aetus-kafka:<tag>`
 - `ghcr.io/donghoonpark/aetus-kafka-connect:<tag>`
 - `ghcr.io/donghoonpark/aetus-postgres:<tag>`
@@ -313,9 +323,11 @@ The stream viewer consumes that logical stream contract. Host applications pass 
 
 ## Anomaly Detection Plan
 
-AETUS plans to add anomaly detection as a DB-backed Rust service, separate from ingest and query paths. The proposed `services/anomaly` boundary combines an anomaly API, window-based detector worker, and webhook dispatcher in one Rust codebase with one multi-command binary, while allowing separate runtime containers inside one initial Pod.
+AETUS includes an initial DB-backed Rust anomaly service, separate from ingest and query paths. The `services/anomaly` boundary combines an anomaly API, window-based detector worker, and webhook dispatcher in one Rust codebase with one multi-command binary. The current PoC detects scalar metric threshold crossings, stores score/event rows, and can enqueue signed webhook deliveries.
 
-See [docs/11-anomaly-detection-service.md](docs/11-anomaly-detection-service.md) for the implementation plan.
+The portable `frontend/anomaly-panel` component can be embedded into operator UIs by passing an anomaly API URL and admin token.
+
+See [docs/11-anomaly-detection-service.md](docs/11-anomaly-detection-service.md) for the design, current implementation status, and follow-up detector roadmap.
 
 ## Security Posture
 
