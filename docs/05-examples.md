@@ -116,10 +116,10 @@ async def ingest(
     if not event.boot_id:
         raise HTTPException(status_code=400, detail="boot_id required")
 
-    # TODO: apply in-memory rate limit here
-    # TODO: allow `sequence = 0` because each boot session starts from 0
+    # Production implementation applies source/device in-memory rate limiting here.
+    # `sequence = 0` is valid because each boot session starts from 0.
     # NOTE: in proto3, uint64 defaults to 0, so "missing sequence" and first event are not distinguishable
-    # TODO: if device is allowlisted, use a relaxed limit instead of a full bypass
+    # Allowlisted devices should use a relaxed limit rather than a full bypass.
 
     normalized = {
         "schema_version": event.schema_version,
@@ -134,7 +134,7 @@ async def ingest(
         "payload": normalize_payload(event),
     }
 
-    # TODO: publish `normalized` to Kafka topic `device.raw.v1`
+    # Production implementation publishes `normalized` to Kafka topic `device.raw.v1`.
 
     return {
         "status": "accepted",
@@ -167,10 +167,10 @@ async def provision(
     if not authorization:
         raise HTTPException(status_code=401, detail="missing bootstrap authorization")
 
-    # TODO: verify single public bootstrap token
-    # TODO: apply in-memory limiter: 1 request / 10 seconds per source IP + hardware_id
-    # TODO: verify source IP device-network allowlist + hardware_id from SQLite
-    # TODO: create or lookup device registry record in SQLite
+    # Production implementation verifies the single public bootstrap token.
+    # It applies an in-memory limiter: 1 request / 10 seconds per source IP + hardware_id.
+    # It verifies source IP device-network allowlist + hardware_id from the control DB.
+    # It creates or looks up the device registry record in the control DB.
     device_id = "esp32c5-001"
     access_token = "devtok_xxxxx"
 

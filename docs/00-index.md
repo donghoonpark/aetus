@@ -15,6 +15,7 @@
 11. [[09-testing-and-e2e-coverage]]
 12. [[10-client-packaging]]
 13. [[open-decisions]]
+14. [[../TESTING|TESTING]]
 
 ## 문서 맵
 
@@ -30,7 +31,8 @@
 - [[08-query-api-and-frontend]]: signal query API, downsampling, 표준 프론트엔드 컴포넌트, 시각화 서비스 분리 방안
 - [[09-testing-and-e2e-coverage]]: 펌웨어, ingest, Kafka, DB, query-api, frontend까지의 검증 루프와 남은 테스트 구멍
 - [[10-client-packaging]]: Python/Rust ingest client의 PyPI/crates.io 배포 준비, 검증, 릴리스 절차
-- [[open-decisions]]: 아직 합의가 필요한 기술 결정사항
+- [[open-decisions]]: release-blocking open decision 여부와 post-0.1 검토 항목
+- [[../TESTING|TESTING]]: 로컬, Docker E2E, firmware build, QEMU, HIL 테스트 실행 기준
 
 ## 빠른 요약
 

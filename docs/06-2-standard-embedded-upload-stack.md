@@ -347,7 +347,7 @@ static void sensor_task(void *arg)
 
 과거 정적 pool backend (`AETUS_SIGNAL_SAMPLE_POOL_STATIC`, `CONFIG_AETUS_STATIC_SIGNAL_SAMPLE_POOL_BLOCKS`)는 제거되었다. heap-only로 단순화하면서 코드와 Kconfig 옵션을 통합했다.
 
-후속 TODO:
+후속 작업:
 
 - PSRAM 사용 시 sample pool은 `MALLOC_CAP_SPIRAM`, queue descriptor와 작은 control block은 내부 RAM에 두는 capability-aware backend를 추가한다.
 - zero-copy/borrowed buffer API는 별도 고급 API로만 제공하고 lifetime 책임을 명확히 문서화한다.

@@ -24,6 +24,10 @@
   <a href="frontend/ingest-control-panel">Control Panel</a>
   ·
   <a href="frontend/stream-viewer">Stream Viewer</a>
+  ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+  ·
+  <a href="SECURITY.md">Security</a>
 </p>
 
 <p align="center">
@@ -165,6 +169,8 @@ uv run pytest -q
 The default test suite covers unit tests plus Docker-based E2E pipeline checks. QEMU and real-device HIL paths are intentionally separated because they are heavier and environment-specific.
 
 The compose E2E suite also includes a fault-injection path: Kafka Connect is stopped, ingest still accepts data into Kafka, PostgreSQL writes are observed as delayed, Kafka Connect is restarted, and the Kafka backlog is verified in PostgreSQL.
+
+See [TESTING.md](TESTING.md) for the complete test matrix, including frontend, client SDK, firmware build, QEMU, and HIL paths.
 
 ### 3. Run the control panel
 
@@ -309,6 +315,12 @@ AETUS currently targets restricted device networks, not direct public-internet e
 ## Project Status
 
 AETUS embedded ingest and backend ingest paths are close to product freeze for restricted-network deployments. Query/visualization, public-internet hardening, and long-running fleet operations remain active areas.
+
+0.1 public readiness:
+
+- Embedded ingest, backend ingest, normalized PostgreSQL storage, and Python/Rust clients are suitable for restricted-network evaluation.
+- Query API is feature-closed for the current stream-viewer contract, including JWT-based read authorization, but richer dashboard composition remains alpha.
+- Public-internet deployment requires additional infrastructure hardening beyond the defaults in this repository.
 
 Known gaps:
 

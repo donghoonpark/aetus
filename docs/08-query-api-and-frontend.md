@@ -13,6 +13,34 @@
 - raw frame 저장과 시각화용 조회 모델을 분리한다
 - 브라우저는 chart renderer 역할에 집중하고, downsampling은 서버가 담당한다
 
+## 0.1 closure 기준
+
+현재 구현 기준으로 Query API는 다음 범위에서 0.1 기능으로 닫을 수 있다.
+
+- ingest API와 분리된 `services/query-api` deployment
+- `POST /v1/auth/token` 기반 short-lived query JWT 발급
+- `HS256` shared secret 기반 JWT 검증
+- `scope`, `devices`, `streams`, `max_range_seconds`, `max_points` claim 제한
+- device 검색, stream 목록, series, summary, raw frame drill-down endpoint
+- scalar metric과 sampled signal frame을 `stream` 모델로 통합 노출
+- sampled stream의 raw/min-max envelope 응답
+- Redis optional cache와 gzip 응답 압축
+- `frontend/stream-viewer`의 `authToken` / `tokenProvider` 기반 JWT 전달
+- 단위/E2E/Playwright 테스트로 인증, 권한 제한, 다중 stream, scalar/sampled/string stream 소비 검증
+
+0.1에서 닫지 않는 범위:
+
+- built-in user login UI
+- refresh token 발급
+- 즉시 token revoke
+- SSO/OIDC 연동
+- `RS256`/`ES256` + JWKS 검증
+- Grafana 호환 datasource plugin
+- 사용자별 dashboard 저장/공유 기능
+
+따라서 공개 저장소 전환 전 Query API의 release-blocking 추가 구현은 없다.
+다만 실제 운영 배포에서는 `AETUS_QUERY_JWT_SECRET`, `AETUS_QUERY_ADMIN_TOKEN`, CORS origin, Redis 사용 여부를 명시적으로 설정해야 한다.
+
 ## 왜 별도 query-api가 필요한가
 
 ingest API와 stream query는 부하 특성이 다르다.
