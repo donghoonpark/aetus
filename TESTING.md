@@ -43,7 +43,7 @@ cd ../rust-ingest
 AETUS_RUST_E2E_BUILD=1 cargo test --test e2e_pipeline -- --test-threads=1
 ```
 
-The Python ingest client E2E suite also covers the anomaly PoC path: a real client uploads metric data, the compose stack persists it to PostgreSQL, a threshold job is created through `anomaly-api`, and `/v1/anomaly/events` is verified after a manual detector run.
+The Python ingest client E2E suite also covers anomaly paths: a real client uploads metric and signal-frame data, the compose stack persists it to PostgreSQL, detector jobs are created through `anomaly-api`, and `/v1/anomaly/events` is verified after manual detector runs. Covered anomaly variants include scalar threshold, signal-frame channel peak detection, and string telemetry as an event anchor.
 
 Tear down manually if a run is interrupted:
 
@@ -135,6 +135,7 @@ For anomaly detection changes:
 
 - Add Rust unit tests for detector math, webhook signing, retry, and worker planning.
 - Add Docker E2E when the DB schema, repository, or detector execution path changes.
+- Add client E2E when detector behavior depends on real ingest payload shapes such as signal frames or string telemetry anchors.
 - Add anomaly-panel Playwright coverage when operator-facing API or state rendering changes.
 
 For firmware changes:

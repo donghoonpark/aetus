@@ -13,7 +13,7 @@ aetus-anomaly run-once
 
 The PoC implements:
 
-- Threshold detector over scalar metric streams in `device_metric_points`.
+- Rule-based detectors over scalar metric streams and decoded signal-frame channels.
 - Job/event/score tables in PostgreSQL.
 - Webhook endpoint, outbox, delivery log, HMAC signing, retry/dead-letter dispatcher.
 - Axum API for jobs, events, webhook endpoints, and manual job run.
@@ -73,4 +73,37 @@ curl -X POST http://127.0.0.1:18002/v1/anomaly/jobs \
 
 ## Boundaries
 
-The current detector reads scalar values from `device_metric_points`. Signal-frame feature detectors, worker leases, event acknowledgement/resolution APIs, and Prometheus metrics are intentionally left as follow-up work.
+Implemented detector types:
+
+- `threshold`
+- `range`
+- `mean_threshold`
+- `rms_threshold`
+- `peak_abs_threshold`
+- `stddev_threshold`
+- `delta_threshold`
+- `missing_data`
+- `flatline`
+
+Signal frames are decoded from `device_signal_frames.samples` into channel-specific numeric windows. Use `stream_selector.channels` to limit channels and `detector_config.max_points` to cap samples loaded per channel.
+
+Event-anchored windows are supported through `detector_config.anchor`. The anchor stream can be numeric, bool, or string telemetry. String anchors are useful for state-machine events such as `machine_state == "RUN"`:
+
+```json
+{
+  "detector_type": "rms_threshold",
+  "detector_config": {
+    "threshold": 0.5,
+    "max_points": 10000,
+    "anchor": {
+      "stream": "machine_state",
+      "value_string": "RUN",
+      "pre_seconds": 0,
+      "post_seconds": 10,
+      "max_events": 1
+    }
+  }
+}
+```
+
+Worker leases, event acknowledgement/resolution APIs, Prometheus metrics, and cached signal-frame feature reuse remain follow-up work.

@@ -33,14 +33,80 @@ impl Selector {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ThresholdConfig {
+pub struct DetectorConfig {
+    #[serde(default)]
     pub threshold: f64,
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub baseline: Option<f64>,
+    #[serde(default)]
+    pub min_count: Option<usize>,
+    #[serde(default)]
+    pub max_count: Option<usize>,
     #[serde(default = "default_operator")]
     pub operator: String,
+    #[serde(default = "default_max_points")]
+    pub max_points: usize,
+    #[serde(default)]
+    pub anchor: Option<WindowAnchorConfig>,
+}
+
+impl Default for DetectorConfig {
+    fn default() -> Self {
+        Self {
+            threshold: 0.0,
+            min: None,
+            max: None,
+            baseline: None,
+            min_count: None,
+            max_count: None,
+            operator: default_operator(),
+            max_points: default_max_points(),
+            anchor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct WindowAnchorConfig {
+    pub stream: String,
+    #[serde(default = "default_anchor_pre_seconds")]
+    pub pre_seconds: i32,
+    #[serde(default = "default_anchor_post_seconds")]
+    pub post_seconds: i32,
+    #[serde(default = "default_anchor_max_events")]
+    pub max_events: usize,
+    #[serde(default)]
+    pub value_string: Option<String>,
+    #[serde(default)]
+    pub value_bool: Option<bool>,
+    #[serde(default)]
+    pub value_int: Option<i64>,
+    #[serde(default)]
+    pub value_double: Option<f64>,
 }
 
 fn default_operator() -> String {
     "gt".to_string()
+}
+
+pub fn default_max_points() -> usize {
+    50_000
+}
+
+fn default_anchor_pre_seconds() -> i32 {
+    0
+}
+
+fn default_anchor_post_seconds() -> i32 {
+    10
+}
+
+fn default_anchor_max_events() -> usize {
+    16
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -149,4 +215,14 @@ pub struct DetectionResult {
     pub score: f64,
     pub threshold: f64,
     pub details: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct NumericWindow {
+    pub source_kind: String,
+    pub channel_key: Option<String>,
+    pub window_start: DateTime<Utc>,
+    pub window_end: DateTime<Utc>,
+    pub points: Vec<MetricPoint>,
+    pub truncated: bool,
 }

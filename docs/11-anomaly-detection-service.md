@@ -57,7 +57,7 @@ worker 상태 표시가 필요하면 DB heartbeat row와 Prometheus metrics를 �
 - `.github/workflows/ci.yml`: anomaly service unit test와 anomaly panel build/e2e 추가
 - `.github/workflows/container-images.yml`: `aetus-anomaly` GHCR image build/publish 대상 추가
 
-PoC의 detector는 scalar metric threshold에 집중한다. sampled signal feature 기반 detector, worker lease, event resolve/ack API, Prometheus metrics는 후속 확장 영역이다.
+PoC의 detector는 scalar metric과 decoded signal-frame channel window를 모두 처리한다. 현재는 raw signal frame sample을 window 내에서 직접 로드하되 `detector_config.max_points`로 channel별 최대 포인트 수를 제한한다. worker lease, event resolve/ack API, Prometheus metrics, signal feature cache 재사용은 후속 확장 영역이다.
 
 ## 왜 DB 뒷단인가
 
@@ -367,15 +367,17 @@ CREATE TABLE webhook_deliveries (
 
 초기 detector는 rule-based로 시작한다.
 
-지원 후보:
+구현된 detector:
 
 - `threshold`: scalar 또는 channel value가 threshold 초과
 - `range`: 값이 min/max 범위를 벗어남
-- `delta`: 이전 window 평균 대비 변화량 초과
-- `rms_threshold`: sampled signal RMS 초과
-- `peak_abs_threshold`: sampled signal peak abs 초과
-- `stddev_threshold`: sampled signal 변동성 초과
+- `mean_threshold`: window 평균값이 threshold 초과/미만
+- `rms_threshold`: RMS 초과/미만
+- `peak_abs_threshold`: 절대 peak 초과/미만
+- `stddev_threshold`: window 변동성 초과/미만
+- `delta_threshold`: window 첫 값과 마지막 값의 변화량 초과/미만
 - `missing_data`: 특정 stream의 데이터 공백 감지
+- `flatline`: 충분한 sample이 있는데 값 범위가 너무 작음
 
 Detector interface:
 
@@ -408,7 +410,23 @@ anomaly service 내부 repository가 DB에서 읽은 값을 detector 친화적�
 
 ### sampled stream
 
-우선순위:
+현재 PoC:
+
+1. `device_signal_frames.samples`를 query-api와 동일한 encoding/layout 규칙으로 decode
+2. channel별 `NumericWindow`로 변환
+3. `stream_selector.channels`가 있으면 해당 channel만 처리
+4. `detector_config.max_points`를 초과하면 channel window를 truncate하고 event details에 `truncated=true` 기록
+
+지원 encoding/layout:
+
+- `float32_le`
+- `int16_le`
+- `uint16_le`
+- `int32_le`
+- `interleaved`
+- `planar`
+
+후속 최적화 우선순위:
 
 1. `signal_frame_features`에 필요한 window/channel feature가 있으면 사용
 2. 없으면 `device_signal_frames.samples`를 query-api와 동일한 decoder로 decode
@@ -422,6 +440,42 @@ anomaly service 내부 repository가 DB에서 읽은 값을 detector 친화적�
 - batch/window 처리에서 HTTP overhead를 피함
 - detector가 feature cache를 직접 생성/재사용 가능
 - query-api 장애가 감지 worker에 전파되지 않음
+
+### event-anchored window
+
+일반 window는 latest timestamp 기준으로 `window_seconds`만큼 과거를 읽는다.
+event-anchored window는 별도 anchor stream의 event timestamp를 기준으로 target stream의 window를 잡는다.
+
+예:
+
+- `machine_state == "RUN"` 이후 10초 동안 `motor.vibration` RMS 검사
+- `door_open == true` 전후 3초 동안 IMU peak 검사
+- `temperature` metric 수신 후 5초 동안 signal frame peak 검사
+
+설정 예:
+
+```json
+{
+  "detector_type": "rms_threshold",
+  "stream_selector": {
+    "streams": ["motor.vibration"],
+    "channels": ["accel_x"]
+  },
+  "detector_config": {
+    "threshold": 0.5,
+    "max_points": 10000,
+    "anchor": {
+      "stream": "machine_state",
+      "value_string": "RUN",
+      "pre_seconds": 0,
+      "post_seconds": 10,
+      "max_events": 1
+    }
+  }
+}
+```
+
+anchor filter는 `value_string`, `value_bool`, `value_int`, `value_double`를 지원한다. filter를 생략하면 해당 anchor stream의 최신 event timestamp를 사용한다.
 
 ## Worker 알고리즘
 
@@ -620,8 +674,9 @@ Stream drill-down:
 ### Phase 2: detector worker v1
 
 - job lease/state 구현
-- metric threshold detector
-- sampled RMS/peak detector
+- metric/signal numeric window loader 구현됨
+- threshold/range/mean/RMS/peak/stddev/delta/missing-data/flatline detector 구현됨
+- event-anchored window 구현됨
 - score/event upsert
 - event merge/resolve 기본 정책
 
@@ -695,7 +750,8 @@ Integration:
 E2E:
 
 - metric threshold event
-- sampled RMS event
+- signal frame event
+- string telemetry anchored signal-frame event
 - webhook delivery success/retry/dead-letter
 - anomaly API event query
 - anomaly-panel rendering

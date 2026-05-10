@@ -189,6 +189,7 @@ def uploaded_client_data(provisioned_device: dict[str, Any]) -> dict[str, Any]:
                 ("temperature", 22.75, "celsius"),
                 ("battery_mv", 4012, "mV"),
                 ("motion_detected", True),
+                ("machine_state", "RUN"),
             ],
             timestamp_ns=1_812_345_678_000_000_000,
         )
@@ -267,7 +268,7 @@ def test_python_client_raw_events_are_persisted(uploaded_client_data: dict[str, 
 
 
 def test_python_client_metric_rows_are_normalized(uploaded_client_data: dict[str, Any]) -> None:
-    rows = _wait_for_metric_rows(uploaded_client_data["device_id"], expected_count=3)
+    rows = _wait_for_metric_rows(uploaded_client_data["device_id"], expected_count=4)
 
     by_key = {row[4]: row for row in rows}
     assert by_key["temperature"][0:8] == (
@@ -284,6 +285,7 @@ def test_python_client_metric_rows_are_normalized(uploaded_client_data: dict[str
     assert by_key["battery_mv"][8] == 4012
     assert by_key["motion_detected"][6] == "bool"
     assert by_key["motion_detected"][9] is True
+    assert by_key["machine_state"][6] == "string"
     assert {row[10] for row in rows} == {1_812_345_678_000_000_000}
 
 
@@ -372,3 +374,111 @@ def test_python_client_data_can_trigger_anomaly_detection(uploaded_client_data: 
     assert matching
     assert matching[0]["score"] == 22.75
     assert matching[0]["threshold"] == 20.0
+
+
+def test_python_client_signal_frame_can_trigger_event_anchored_anomaly(
+    uploaded_client_data: dict[str, Any],
+) -> None:
+    rows = _wait_for_signal_frame_rows(uploaded_client_data["device_id"], expected_count=2)
+    assert {row[3] for row in rows} >= {"python.imu.accel"}
+
+    headers = {"x-aetus-admin-token": ANOMALY_ADMIN_TOKEN}
+    create_response = httpx.post(
+        f"{ANOMALY_API_URL}/v1/anomaly/jobs",
+        headers=headers,
+        json={
+            "job_key": "python-client-imu-peak-after-temperature",
+            "enabled": True,
+            "device_selector": {"devices": [uploaded_client_data["device_id"]]},
+            "stream_selector": {"streams": ["python.imu.accel"], "channels": ["accel_z"]},
+            "detector_type": "peak_abs_threshold",
+            "detector_config": {
+                "operator": "gt",
+                "threshold": 1.1,
+                "max_points": 1000,
+                "anchor": {
+                    "stream": "temperature",
+                    "value_string": None,
+                    "pre_seconds": 0,
+                    "post_seconds": 5,
+                    "max_events": 1,
+                },
+            },
+            "window_seconds": 60,
+            "step_seconds": 60,
+            "severity": "warning",
+        },
+        timeout=10.0,
+    )
+    assert create_response.status_code == 200, create_response.text
+    job_id = create_response.json()["job_id"]
+
+    run_response = httpx.post(
+        f"{ANOMALY_API_URL}/v1/anomaly/jobs/{job_id}/run",
+        headers=headers,
+        timeout=20.0,
+    )
+    assert run_response.status_code == 200, run_response.text
+    assert run_response.json()["events_created"] >= 1
+
+    event_response = httpx.get(
+        f"{ANOMALY_API_URL}/v1/anomaly/events",
+        headers=headers,
+        params={"limit": 20},
+        timeout=10.0,
+    )
+    assert event_response.status_code == 200, event_response.text
+    events = event_response.json()
+    matching = [
+        event
+        for event in events
+        if event["device_id"] == uploaded_client_data["device_id"]
+        and event["stream_key"] == "python.imu.accel"
+        and event["channel_key"] == "accel_z"
+    ]
+    assert matching
+    assert matching[0]["score"] == pytest.approx(1.2, abs=0.0001)
+    assert matching[0]["threshold"] == 1.1
+
+
+def test_string_metric_can_anchor_signal_frame_detection(uploaded_client_data: dict[str, Any]) -> None:
+    rows = _wait_for_metric_rows(uploaded_client_data["device_id"], expected_count=4)
+    assert any(row[4] == "machine_state" and row[6] == "string" for row in rows)
+
+    headers = {"x-aetus-admin-token": ANOMALY_ADMIN_TOKEN}
+    create_response = httpx.post(
+        f"{ANOMALY_API_URL}/v1/anomaly/jobs",
+        headers=headers,
+        json={
+            "job_key": "python-client-imu-rms-after-run-state",
+            "enabled": True,
+            "device_selector": {"devices": [uploaded_client_data["device_id"]]},
+            "stream_selector": {"streams": ["python.imu.accel"], "channels": ["accel_x"]},
+            "detector_type": "rms_threshold",
+            "detector_config": {
+                "threshold": 0.5,
+                "max_points": 1000,
+                "anchor": {
+                    "stream": "machine_state",
+                    "value_string": "RUN",
+                    "pre_seconds": 0,
+                    "post_seconds": 5,
+                    "max_events": 1,
+                },
+            },
+            "window_seconds": 60,
+            "step_seconds": 60,
+            "severity": "warning",
+        },
+        timeout=10.0,
+    )
+    assert create_response.status_code == 200, create_response.text
+    job_id = create_response.json()["job_id"]
+
+    run_response = httpx.post(
+        f"{ANOMALY_API_URL}/v1/anomaly/jobs/{job_id}/run",
+        headers=headers,
+        timeout=20.0,
+    )
+    assert run_response.status_code == 200, run_response.text
+    assert run_response.json()["events_created"] >= 1

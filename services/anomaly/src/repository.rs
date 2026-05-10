@@ -1,9 +1,9 @@
-use crate::detectors::threshold;
 use crate::models::{
-    CreateJobRequest, EventResponse, JobResponse, MetricPoint, WebhookEndpointRequest,
-    WebhookEndpointResponse,
+    CreateJobRequest, EventResponse, JobResponse, MetricPoint, NumericWindow,
+    WebhookEndpointRequest, WebhookEndpointResponse, WindowAnchorConfig,
 };
 use chrono::{DateTime, Duration, Utc};
+use serde::Deserialize;
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -33,12 +33,15 @@ pub struct EventInsert {
     pub job_id: i64,
     pub device_id: String,
     pub stream_key: String,
+    pub channel_key: Option<String>,
     pub window_start: DateTime<Utc>,
     pub window_end: DateTime<Utc>,
     pub severity: String,
     pub score: f64,
     pub threshold: f64,
     pub details: Value,
+    pub detector_type: String,
+    pub detector_version: String,
 }
 
 #[derive(Debug, Clone)]
@@ -157,12 +160,90 @@ impl Repository {
         Ok(rows.into_iter().map(job_record).collect())
     }
 
-    pub async fn metric_window(
+    pub async fn numeric_windows(
+        &self,
+        device_id: &str,
+        stream_key: &str,
+        channels: &[String],
+        window_seconds: i32,
+        max_points: usize,
+    ) -> anyhow::Result<Vec<NumericWindow>> {
+        let metric = self
+            .metric_window(device_id, stream_key, window_seconds, max_points)
+            .await?;
+        if !metric.points.is_empty() {
+            return Ok(vec![metric]);
+        }
+        self.signal_windows(device_id, stream_key, channels, window_seconds, max_points)
+            .await
+    }
+
+    pub async fn numeric_windows_between(
+        &self,
+        device_id: &str,
+        stream_key: &str,
+        channels: &[String],
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+        max_points: usize,
+    ) -> anyhow::Result<Vec<NumericWindow>> {
+        let metric = self
+            .metric_window_between(device_id, stream_key, window_start, window_end, max_points)
+            .await?;
+        if !metric.points.is_empty() {
+            return Ok(vec![metric]);
+        }
+        self.signal_windows_between(
+            device_id,
+            stream_key,
+            channels,
+            window_start,
+            window_end,
+            max_points,
+        )
+        .await
+    }
+
+    pub async fn anchor_event_times(
+        &self,
+        device_id: &str,
+        anchor: &WindowAnchorConfig,
+    ) -> anyhow::Result<Vec<DateTime<Utc>>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT p.event_time
+            FROM device_metric_points p
+            JOIN devices d ON d.device_pk = p.device_pk
+            JOIN metric_definitions md ON md.metric_pk = p.metric_pk
+            WHERE d.device_id = $1
+              AND md.metric_key = $2
+              AND ($4::text IS NULL OR p.value_string = $4)
+              AND ($5::boolean IS NULL OR p.value_bool = $5)
+              AND ($6::bigint IS NULL OR p.value_int = $6)
+              AND ($7::double precision IS NULL OR p.value_double = $7)
+            ORDER BY p.event_time DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(device_id)
+        .bind(&anchor.stream)
+        .bind(anchor.max_events as i64)
+        .bind(&anchor.value_string)
+        .bind(anchor.value_bool)
+        .bind(anchor.value_int)
+        .bind(anchor.value_double)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|row| row.get("event_time")).collect())
+    }
+
+    async fn metric_window(
         &self,
         device_id: &str,
         stream_key: &str,
         window_seconds: i32,
-    ) -> anyhow::Result<(DateTime<Utc>, DateTime<Utc>, Vec<MetricPoint>)> {
+        max_points: usize,
+    ) -> anyhow::Result<NumericWindow> {
         let latest_row = sqlx::query(
             r#"
             SELECT MAX(p.event_time) AS latest_event_time
@@ -186,9 +267,28 @@ impl Repository {
             latest_row.try_get::<Option<DateTime<Utc>>, _>("latest_event_time")?
         else {
             let now = Utc::now();
-            return Ok((now, now, Vec::new()));
+            return Ok(NumericWindow {
+                source_kind: "metric".to_string(),
+                channel_key: None,
+                window_start: now,
+                window_end: now,
+                points: Vec::new(),
+                truncated: false,
+            });
         };
         let window_start = window_end - Duration::seconds(window_seconds as i64);
+        self.metric_window_between(device_id, stream_key, window_start, window_end, max_points)
+            .await
+    }
+
+    async fn metric_window_between(
+        &self,
+        device_id: &str,
+        stream_key: &str,
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+        max_points: usize,
+    ) -> anyhow::Result<NumericWindow> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -211,6 +311,117 @@ impl Repository {
                 OR p.value_bool IS NOT NULL
               )
             ORDER BY p.event_time ASC
+            LIMIT $5
+            "#,
+        )
+        .bind(device_id)
+        .bind(stream_key)
+        .bind(window_start)
+        .bind(window_end)
+        .bind(max_points as i64 + 1)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut points = rows
+            .into_iter()
+            .filter_map(|row| {
+                let event_time: DateTime<Utc> = row.get("event_time");
+                let value: Option<f64> = row.get("value");
+                value.map(|value| MetricPoint { event_time, value })
+            })
+            .collect::<Vec<_>>();
+        let truncated = points.len() > max_points;
+        points.truncate(max_points);
+        Ok(NumericWindow {
+            source_kind: "metric".to_string(),
+            channel_key: None,
+            window_start,
+            window_end,
+            points,
+            truncated,
+        })
+    }
+
+    async fn signal_windows(
+        &self,
+        device_id: &str,
+        stream_key: &str,
+        selected_channels: &[String],
+        window_seconds: i32,
+        max_points: usize,
+    ) -> anyhow::Result<Vec<NumericWindow>> {
+        let latest_row = sqlx::query(
+            r#"
+            SELECT MAX(
+                f.event_time + make_interval(
+                    secs => (
+                        f.sample_interval_ns::double precision
+                        * GREATEST(f.sample_count - 1, 0)::double precision
+                    ) / 1000000000.0
+                )
+            ) AS latest_event_time
+            FROM device_signal_frames f
+            JOIN devices d ON d.device_pk = f.device_pk
+            JOIN signal_stream_definitions sd ON sd.signal_pk = f.signal_pk
+            WHERE d.device_id = $1
+              AND sd.stream_key = $2
+            "#,
+        )
+        .bind(device_id)
+        .bind(stream_key)
+        .fetch_one(&self.pool)
+        .await?;
+        let Some(window_end) =
+            latest_row.try_get::<Option<DateTime<Utc>>, _>("latest_event_time")?
+        else {
+            return Ok(Vec::new());
+        };
+        let window_start = window_end - Duration::seconds(window_seconds as i64);
+        self.signal_windows_between(
+            device_id,
+            stream_key,
+            selected_channels,
+            window_start,
+            window_end,
+            max_points,
+        )
+        .await
+    }
+
+    async fn signal_windows_between(
+        &self,
+        device_id: &str,
+        stream_key: &str,
+        selected_channels: &[String],
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+        max_points: usize,
+    ) -> anyhow::Result<Vec<NumericWindow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                f.event_time,
+                f.sample_interval_ns,
+                f.sample_count,
+                f.samples,
+                sd.encoding,
+                sd.layout,
+                sd.channels_json
+            FROM device_signal_frames f
+            JOIN devices d ON d.device_pk = f.device_pk
+            JOIN signal_stream_definitions sd ON sd.signal_pk = f.signal_pk
+            WHERE d.device_id = $1
+              AND sd.stream_key = $2
+              AND f.event_time <= $4
+              AND (
+                f.event_time >= $3
+                OR f.event_time + make_interval(
+                    secs => (
+                        f.sample_interval_ns::double precision
+                        * GREATEST(f.sample_count - 1, 0)::double precision
+                    ) / 1000000000.0
+                ) >= $3
+              )
+            ORDER BY f.event_time ASC
             "#,
         )
         .bind(device_id)
@@ -219,25 +430,39 @@ impl Repository {
         .bind(window_end)
         .fetch_all(&self.pool)
         .await?;
-        let points = rows
-            .into_iter()
-            .filter_map(|row| {
-                let event_time: DateTime<Utc> = row.get("event_time");
-                let value: Option<f64> = row.get("value");
-                value.map(|value| MetricPoint { event_time, value })
-            })
-            .collect();
-        Ok((window_start, window_end, points))
+
+        let mut windows = Vec::<NumericWindow>::new();
+        for row in rows {
+            let channels_json: String = row.get("channels_json");
+            let frame = SignalFrameRow {
+                event_time: row.get("event_time"),
+                sample_interval_ns: row.get("sample_interval_ns"),
+                sample_count: row.get("sample_count"),
+                samples: row.get("samples"),
+                encoding: row.get("encoding"),
+                layout: row.get("layout"),
+                channels: serde_json::from_str(&channels_json)?,
+            };
+            append_signal_frame_points(
+                &mut windows,
+                frame,
+                selected_channels,
+                window_start,
+                window_end,
+                max_points,
+            )?;
+        }
+        Ok(windows)
     }
 
     pub async fn upsert_detection_event(&self, event: EventInsert) -> anyhow::Result<Uuid> {
         sqlx::query(
             r#"
             INSERT INTO anomaly_scores(
-                job_id, device_id, stream_key, channel_key, window_start, window_end,
+                job_id, device_id, stream_key, channel_key, channel_key_norm, window_start, window_end,
                 score, threshold, severity, detector_type, detector_version, details_json
             )
-            VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,'threshold',$9,$10)
+            VALUES ($1,$2,$3,$4,COALESCE($4,''),$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (job_id, device_id, stream_key, channel_key_norm, window_start, window_end)
             DO UPDATE SET
                 score = EXCLUDED.score,
@@ -249,17 +474,26 @@ impl Repository {
         .bind(event.job_id)
         .bind(&event.device_id)
         .bind(&event.stream_key)
+        .bind(&event.channel_key)
         .bind(event.window_start)
         .bind(event.window_end)
         .bind(event.score)
         .bind(event.threshold)
         .bind(&event.severity)
-        .bind(threshold::DETECTOR_VERSION)
+        .bind(&event.detector_type)
+        .bind(&event.detector_version)
         .bind(&event.details)
         .execute(&self.pool)
         .await?;
 
-        let title = format!("{} anomaly on {}", event.stream_key, event.device_id);
+        let title = if let Some(channel_key) = &event.channel_key {
+            format!(
+                "{}:{} anomaly on {}",
+                event.stream_key, channel_key, event.device_id
+            )
+        } else {
+            format!("{} anomaly on {}", event.stream_key, event.device_id)
+        };
         let summary = format!(
             "threshold rule crossed: score {:.3}, threshold {:.3}",
             event.score, event.threshold
@@ -267,10 +501,10 @@ impl Repository {
         let row = sqlx::query(
             r#"
             INSERT INTO anomaly_events(
-                job_id, device_id, stream_key, channel_key, event_start, event_end,
+                job_id, device_id, stream_key, channel_key, channel_key_norm, event_start, event_end,
                 severity, status, score, threshold, title, summary, details_json
             )
-            VALUES ($1,$2,$3,NULL,$4,$5,$6,'open',$7,$8,$9,$10,$11)
+            VALUES ($1,$2,$3,$4,COALESCE($4,''),$5,$6,$7,'open',$8,$9,$10,$11,$12)
             ON CONFLICT (job_id, device_id, stream_key, channel_key_norm, event_start)
             DO UPDATE SET
                 event_end = GREATEST(anomaly_events.event_end, EXCLUDED.event_end),
@@ -286,6 +520,7 @@ impl Repository {
         .bind(event.job_id)
         .bind(&event.device_id)
         .bind(&event.stream_key)
+        .bind(&event.channel_key)
         .bind(event.window_start)
         .bind(event.window_end)
         .bind(&event.severity)
@@ -556,6 +791,128 @@ impl Repository {
         .await?;
         Ok(())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ChannelDef {
+    key: String,
+    #[serde(rename = "unit")]
+    _unit: Option<String>,
+    scale: Option<f64>,
+    offset: Option<f64>,
+}
+
+struct SignalFrameRow {
+    event_time: DateTime<Utc>,
+    sample_interval_ns: i64,
+    sample_count: i32,
+    samples: Vec<u8>,
+    encoding: String,
+    layout: String,
+    channels: Vec<ChannelDef>,
+}
+
+fn append_signal_frame_points(
+    windows: &mut Vec<NumericWindow>,
+    frame: SignalFrameRow,
+    selected_channels: &[String],
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    max_points: usize,
+) -> anyhow::Result<()> {
+    if frame.sample_count <= 0 || frame.channels.is_empty() {
+        return Ok(());
+    }
+    let width = sample_width_bytes(&frame.encoding)?;
+    let expected = frame.sample_count as usize * frame.channels.len() * width;
+    if frame.samples.len() != expected {
+        anyhow::bail!(
+            "signal frame sample size mismatch: expected {}, got {}",
+            expected,
+            frame.samples.len()
+        );
+    }
+    if !matches!(frame.layout.as_str(), "interleaved" | "planar") {
+        anyhow::bail!("unsupported signal layout: {}", frame.layout);
+    }
+
+    for channel in &frame.channels {
+        if !selected_channels.is_empty()
+            && !selected_channels.iter().any(|item| item == &channel.key)
+        {
+            continue;
+        }
+        if !windows
+            .iter()
+            .any(|window| window.channel_key.as_deref() == Some(channel.key.as_str()))
+        {
+            windows.push(NumericWindow {
+                source_kind: "signal_frame".to_string(),
+                channel_key: Some(channel.key.clone()),
+                window_start,
+                window_end,
+                points: Vec::new(),
+                truncated: false,
+            });
+        }
+    }
+
+    for sample_index in 0..frame.sample_count as usize {
+        let event_time = frame.event_time
+            + Duration::microseconds((sample_index as i64 * frame.sample_interval_ns) / 1000);
+        if event_time < window_start || event_time > window_end {
+            continue;
+        }
+        for (channel_index, channel) in frame.channels.iter().enumerate() {
+            if !selected_channels.is_empty()
+                && !selected_channels.iter().any(|item| item == &channel.key)
+            {
+                continue;
+            }
+            let Some(window) = windows
+                .iter_mut()
+                .find(|window| window.channel_key.as_deref() == Some(channel.key.as_str()))
+            else {
+                continue;
+            };
+            if window.points.len() >= max_points {
+                window.truncated = true;
+                continue;
+            }
+            let value_index = if frame.layout == "interleaved" {
+                sample_index * frame.channels.len() + channel_index
+            } else {
+                channel_index * frame.sample_count as usize + sample_index
+            };
+            let mut value = decode_sample(&frame.samples, value_index * width, &frame.encoding)?;
+            if let Some(scale) = channel.scale {
+                value *= scale;
+            }
+            if let Some(offset) = channel.offset {
+                value += offset;
+            }
+            window.points.push(MetricPoint { event_time, value });
+        }
+    }
+    Ok(())
+}
+
+fn sample_width_bytes(encoding: &str) -> anyhow::Result<usize> {
+    match encoding {
+        "float32_le" | "int32_le" => Ok(4),
+        "int16_le" | "uint16_le" => Ok(2),
+        _ => anyhow::bail!("unsupported signal encoding: {}", encoding),
+    }
+}
+
+fn decode_sample(samples: &[u8], offset: usize, encoding: &str) -> anyhow::Result<f64> {
+    Ok(match encoding {
+        "float32_le" => f32::from_le_bytes(samples[offset..offset + 4].try_into()?) as f64,
+        "int16_le" => i16::from_le_bytes(samples[offset..offset + 2].try_into()?) as f64,
+        "uint16_le" => u16::from_le_bytes(samples[offset..offset + 2].try_into()?) as f64,
+        "int32_le" => i32::from_le_bytes(samples[offset..offset + 4].try_into()?) as f64,
+        _ => anyhow::bail!("unsupported signal encoding: {}", encoding),
+    })
 }
 
 fn job_response(row: sqlx::postgres::PgRow) -> JobResponse {

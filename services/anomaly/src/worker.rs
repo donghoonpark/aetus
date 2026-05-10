@@ -1,5 +1,5 @@
-use crate::detectors::threshold;
-use crate::models::ThresholdConfig;
+use crate::detectors;
+use crate::models::{DetectorConfig, NumericWindow};
 use crate::repository::{selector_from_value, EventInsert, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -27,7 +27,7 @@ pub async fn run_detection_once(
         }
         summary.jobs_scanned += 1;
 
-        if job.detector_type != threshold::DETECTOR_TYPE {
+        if !detectors::is_supported(&job.detector_type) {
             summary.skipped_jobs += 1;
             warn!(job_id = job.job_id, detector_type = %job.detector_type, "unsupported detector type");
             continue;
@@ -46,46 +46,97 @@ pub async fn run_detection_once(
             continue;
         }
 
-        let threshold_config: ThresholdConfig =
-            serde_json::from_value(job.detector_config.clone())?;
+        let detector_config: DetectorConfig = serde_json::from_value(job.detector_config.clone())?;
         for device_id in &devices {
             for stream_key in &streams {
-                let (window_start, window_end, points) = repo
-                    .metric_window(device_id, stream_key, job.window_seconds)
-                    .await?;
-                if points.is_empty() {
-                    continue;
-                }
-                summary.windows_scanned += 1;
-                let result = threshold::evaluate(&points, &threshold_config);
-                if !result.crossed {
-                    repo.update_job_state_success(job.job_id, window_end)
-                        .await?;
-                    continue;
-                }
+                let windows = if let Some(anchor) = &detector_config.anchor {
+                    let anchor_times = repo.anchor_event_times(device_id, anchor).await?;
+                    let mut anchored_windows = Vec::new();
+                    for anchor_time in anchor_times {
+                        let window_start =
+                            anchor_time - chrono::Duration::seconds(anchor.pre_seconds as i64);
+                        let window_end =
+                            anchor_time + chrono::Duration::seconds(anchor.post_seconds as i64);
+                        anchored_windows.extend(
+                            repo.numeric_windows_between(
+                                device_id,
+                                stream_key,
+                                &stream_selector.channels,
+                                window_start,
+                                window_end,
+                                detector_config.max_points,
+                            )
+                            .await?,
+                        );
+                    }
+                    anchored_windows
+                } else {
+                    repo.numeric_windows(
+                        device_id,
+                        stream_key,
+                        &stream_selector.channels,
+                        job.window_seconds,
+                        detector_config.max_points,
+                    )
+                    .await?
+                };
 
-                repo.upsert_detection_event(EventInsert {
-                    job_id: job.job_id,
-                    device_id: device_id.clone(),
-                    stream_key: stream_key.clone(),
-                    window_start,
-                    window_end,
-                    severity: job.severity.clone(),
-                    score: result.score,
-                    threshold: result.threshold,
-                    details: json!({
-                        "detector": threshold::DETECTOR_TYPE,
-                        "job_key": job.job_key,
-                        "window_seconds": job.window_seconds,
-                        "step_seconds": job.step_seconds,
-                        "lookback_seconds": job.lookback_seconds,
-                        "result": result.details,
-                    }),
-                })
-                .await?;
-                repo.update_job_state_success(job.job_id, window_end)
+                let windows = if windows.is_empty()
+                    && job.detector_type == detectors::missing_data::DETECTOR_TYPE
+                {
+                    let now = chrono::Utc::now();
+                    vec![NumericWindow {
+                        source_kind: "missing".to_string(),
+                        channel_key: None,
+                        window_start: now - chrono::Duration::seconds(job.window_seconds as i64),
+                        window_end: now,
+                        points: Vec::new(),
+                        truncated: false,
+                    }]
+                } else {
+                    windows
+                };
+
+                for window in windows {
+                    summary.windows_scanned += 1;
+                    let result =
+                        detectors::evaluate(&job.detector_type, &window.points, &detector_config)?;
+                    if !result.crossed {
+                        repo.update_job_state_success(job.job_id, window.window_end)
+                            .await?;
+                        continue;
+                    }
+
+                    repo.upsert_detection_event(EventInsert {
+                        job_id: job.job_id,
+                        device_id: device_id.clone(),
+                        stream_key: stream_key.clone(),
+                        channel_key: window.channel_key.clone(),
+                        window_start: window.window_start,
+                        window_end: window.window_end,
+                        severity: job.severity.clone(),
+                        score: result.score,
+                        threshold: result.threshold,
+                        detector_type: job.detector_type.clone(),
+                        detector_version: detectors::DETECTOR_VERSION.to_string(),
+                        details: json!({
+                            "detector": job.detector_type,
+                            "job_key": job.job_key,
+                            "window_seconds": job.window_seconds,
+                            "step_seconds": job.step_seconds,
+                            "lookback_seconds": job.lookback_seconds,
+                            "source_kind": window.source_kind,
+                            "channel_key": window.channel_key,
+                            "truncated": window.truncated,
+                            "anchor": detector_config.anchor,
+                            "result": result.details,
+                        }),
+                    })
                     .await?;
-                summary.events_created += 1;
+                    repo.update_job_state_success(job.job_id, window.window_end)
+                        .await?;
+                    summary.events_created += 1;
+                }
             }
         }
     }

@@ -1,10 +1,9 @@
-use crate::models::{DetectionResult, MetricPoint, ThresholdConfig};
+use crate::models::{DetectionResult, DetectorConfig, MetricPoint};
 use serde_json::json;
 
 pub const DETECTOR_TYPE: &str = "threshold";
-pub const DETECTOR_VERSION: &str = "1.0.0";
 
-pub fn evaluate(points: &[MetricPoint], config: &ThresholdConfig) -> DetectionResult {
+pub fn evaluate(points: &[MetricPoint], config: &DetectorConfig) -> DetectionResult {
     let uses_lower_bound = matches!(config.operator.as_str(), "lt" | "lte");
     let score = if uses_lower_bound {
         points
@@ -23,17 +22,16 @@ pub fn evaluate(points: &[MetricPoint], config: &ThresholdConfig) -> DetectionRe
         "lte" => score <= config.threshold,
         _ => score > config.threshold,
     };
-    DetectionResult {
+    crate::detectors::result(
+        DETECTOR_TYPE,
         crossed,
-        score: if score.is_finite() { score } else { 0.0 },
-        threshold: config.threshold,
-        details: json!({
+        score,
+        config.threshold,
+        points,
+        json!({
             "operator": config.operator,
-            "point_count": points.len(),
-            "first_point_time": points.first().map(|point| point.event_time),
-            "last_point_time": points.last().map(|point| point.event_time),
         }),
-    }
+    )
 }
 
 #[cfg(test)]
@@ -56,9 +54,10 @@ mod tests {
 
         let result = evaluate(
             &points,
-            &ThresholdConfig {
+            &DetectorConfig {
                 threshold: 50.0,
                 operator: "gt".to_string(),
+                ..DetectorConfig::default()
             },
         );
 
@@ -75,9 +74,10 @@ mod tests {
 
         let result = evaluate(
             &points,
-            &ThresholdConfig {
+            &DetectorConfig {
                 threshold: 50.0,
                 operator: "gt".to_string(),
+                ..DetectorConfig::default()
             },
         );
 
@@ -99,9 +99,10 @@ mod tests {
 
         let result = evaluate(
             &points,
-            &ThresholdConfig {
+            &DetectorConfig {
                 threshold: 5.0,
                 operator: "lt".to_string(),
+                ..DetectorConfig::default()
             },
         );
 
