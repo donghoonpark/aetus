@@ -44,12 +44,12 @@
         <aside class="job-card">
           <div class="section-title">
             <PlusCircle :size="18" />
-            <h2>Create threshold job</h2>
+            <h2>Create detector job</h2>
           </div>
           <form class="job-form" @submit.prevent="createJob">
             <label>
               Job key
-              <input v-model.trim="draft.jobKey" required placeholder="temperature-high" />
+              <input v-model.trim="draft.jobKey" required :placeholder="selectedDetector.exampleJobKey" />
             </label>
             <label>
               Device ID
@@ -57,8 +57,21 @@
             </label>
             <label>
               Stream key
-              <input v-model.trim="draft.streamKey" required placeholder="temperature" />
+              <input v-model.trim="draft.streamKey" required :placeholder="selectedDetector.exampleStream" />
             </label>
+            <label>
+              Channels
+              <input v-model.trim="draft.channels" placeholder="accel_x, accel_y (optional)" />
+            </label>
+            <label>
+              Detector
+              <select v-model="draft.detectorType">
+                <option v-for="detector in detectorOptions" :key="detector.type" :value="detector.type">
+                  {{ detector.label }}
+                </option>
+              </select>
+            </label>
+            <p class="detector-help">{{ selectedDetector.description }}</p>
             <div class="form-row">
               <label>
                 Operator
@@ -71,7 +84,67 @@
               </label>
               <label>
                 Threshold
-                <input v-model.number="draft.threshold" required type="number" step="0.001" />
+                <input v-model.number="draft.threshold" type="number" step="0.001" />
+              </label>
+            </div>
+            <div v-if="selectedDetector.fields.includes('range')" class="form-row">
+              <label>
+                Min
+                <input v-model.number="draft.min" type="number" step="0.001" />
+              </label>
+              <label>
+                Max
+                <input v-model.number="draft.max" type="number" step="0.001" />
+              </label>
+            </div>
+            <div v-if="selectedDetector.fields.includes('baseline')" class="form-row">
+              <label>
+                Baseline
+                <input v-model.number="draft.baseline" type="number" step="0.001" />
+              </label>
+              <label>
+                Tolerance
+                <input v-model.number="draft.tolerance" type="number" step="0.001" />
+              </label>
+            </div>
+            <div v-if="selectedDetector.fields.includes('ewma')" class="form-row">
+              <label>
+                EWMA alpha
+                <input v-model.number="draft.alpha" type="number" min="0.001" max="1" step="0.001" />
+              </label>
+              <label>
+                Baseline
+                <input v-model.number="draft.baseline" type="number" step="0.001" />
+              </label>
+            </div>
+            <div v-if="selectedDetector.fields.includes('stuck')" class="form-row">
+              <label>
+                Expected value
+                <input v-model.number="draft.expectedValue" type="number" step="0.001" />
+              </label>
+              <label>
+                Tolerance
+                <input v-model.number="draft.tolerance" type="number" step="0.001" />
+              </label>
+            </div>
+            <div v-if="selectedDetector.fields.includes('count')" class="form-row">
+              <label>
+                Min count
+                <input v-model.number="draft.minCount" type="number" min="0" />
+              </label>
+              <label>
+                Max count
+                <input v-model.number="draft.maxCount" type="number" min="0" />
+              </label>
+            </div>
+            <div v-if="selectedDetector.fields.includes('fft')" class="form-row">
+              <label>
+                Target frequency Hz
+                <input v-model.number="draft.targetFrequencyHz" type="number" min="0" step="0.001" />
+              </label>
+              <label>
+                FFT sample limit
+                <input v-model.number="draft.fftSampleLimit" type="number" min="8" />
               </label>
             </div>
             <div class="form-row">
@@ -87,6 +160,40 @@
                   <option value="critical">critical</option>
                 </select>
               </label>
+            </div>
+            <label class="checkbox-row">
+              <input v-model="draft.anchorEnabled" type="checkbox" />
+              Use event anchor
+            </label>
+            <div v-if="draft.anchorEnabled" class="anchor-box">
+              <label>
+                Anchor stream
+                <input v-model.trim="draft.anchorStream" placeholder="machine_state" />
+              </label>
+              <div class="form-row">
+                <label>
+                  String value
+                  <input v-model.trim="draft.anchorValueString" placeholder="RUN" />
+                </label>
+                <label>
+                  Bool value
+                  <select v-model="draft.anchorValueBool">
+                    <option value="">any</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </label>
+              </div>
+              <div class="form-row">
+                <label>
+                  Pre seconds
+                  <input v-model.number="draft.anchorPreSeconds" type="number" min="0" />
+                </label>
+                <label>
+                  Post seconds
+                  <input v-model.number="draft.anchorPostSeconds" type="number" min="0" />
+                </label>
+              </div>
             </div>
             <button class="primary-button" type="submit" :disabled="creating">
               <ShieldCheck :size="18" />
@@ -239,17 +346,169 @@ const creating = ref(false);
 const error = ref("");
 let intervalId: number | undefined;
 
+const detectorOptions = [
+  {
+    type: "threshold",
+    label: "Threshold",
+    description: "Simple upper or lower bound for scalar metrics and decoded signal channels.",
+    fields: [] as string[],
+    exampleJobKey: "temperature-high",
+    exampleStream: "temperature",
+  },
+  {
+    type: "range",
+    label: "Range",
+    description: "Flags values outside a normal min/max operating range.",
+    fields: ["range"],
+    exampleJobKey: "pressure-out-of-range",
+    exampleStream: "pressure",
+  },
+  {
+    type: "mean_threshold",
+    label: "Mean threshold",
+    description: "Detects sustained high or low average over the selected window.",
+    fields: [] as string[],
+    exampleJobKey: "current-mean-high",
+    exampleStream: "motor.current",
+  },
+  {
+    type: "rms_threshold",
+    label: "RMS threshold",
+    description: "Useful for vibration, current waveform energy, and dense signal frames.",
+    fields: [] as string[],
+    exampleJobKey: "vibration-rms-high",
+    exampleStream: "motor.vibration",
+  },
+  {
+    type: "peak_abs_threshold",
+    label: "Peak abs threshold",
+    description: "Detects shock, spikes, and transient high absolute values.",
+    fields: [] as string[],
+    exampleJobKey: "imu-shock",
+    exampleStream: "imu.accel",
+  },
+  {
+    type: "stddev_threshold",
+    label: "Stddev threshold",
+    description: "Detects unstable, noisy, or highly variable windows.",
+    fields: [] as string[],
+    exampleJobKey: "noise-high",
+    exampleStream: "sensor.noise",
+  },
+  {
+    type: "delta_threshold",
+    label: "Delta threshold",
+    description: "Uses absolute difference between the first and last window values.",
+    fields: [] as string[],
+    exampleJobKey: "tank-level-jump",
+    exampleStream: "tank.level",
+  },
+  {
+    type: "rate_of_change",
+    label: "Rate of change",
+    description: "Time-normalized change rate for fast rise/fall detection.",
+    fields: [] as string[],
+    exampleJobKey: "temperature-rise-fast",
+    exampleStream: "temperature",
+  },
+  {
+    type: "zscore_threshold",
+    label: "Z-score",
+    description: "Detects outliers relative to a device-specific baseline and sigma.",
+    fields: ["baseline"],
+    exampleJobKey: "current-zscore",
+    exampleStream: "motor.current",
+  },
+  {
+    type: "ewma_deviation",
+    label: "EWMA deviation",
+    description: "Tracks drift and sudden deviation from an exponential moving average.",
+    fields: ["ewma"],
+    exampleJobKey: "pressure-drift",
+    exampleStream: "pressure",
+  },
+  {
+    type: "missing_data",
+    label: "Missing data",
+    description: "Flags windows with too few samples or events.",
+    fields: ["count"],
+    exampleJobKey: "heartbeat-missing",
+    exampleStream: "heartbeat",
+  },
+  {
+    type: "flatline",
+    label: "Flatline",
+    description: "Detects values that barely move across enough samples.",
+    fields: ["count"],
+    exampleJobKey: "sensor-flatline",
+    exampleStream: "adc.raw",
+  },
+  {
+    type: "stuck_at",
+    label: "Stuck at",
+    description: "Detects values stuck near an expected saturation or error value.",
+    fields: ["stuck", "count"],
+    exampleJobKey: "adc-saturated",
+    exampleStream: "adc.raw",
+  },
+  {
+    type: "duty_cycle",
+    label: "Duty cycle",
+    description: "Measures ON ratio for bool or numeric state streams.",
+    fields: ["baseline"],
+    exampleJobKey: "pump-duty-high",
+    exampleStream: "pump.enabled",
+  },
+  {
+    type: "event_sequence",
+    label: "Event sequence",
+    description: "Checks whether an anchored window has too few or too many events.",
+    fields: ["count"],
+    exampleJobKey: "state-event-count",
+    exampleStream: "machine_state",
+  },
+  {
+    type: "fft_threshold",
+    label: "FFT threshold",
+    description: "Naive DFT magnitude check for target or dominant vibration frequencies.",
+    fields: ["fft"],
+    exampleJobKey: "motor-frequency-energy",
+    exampleStream: "motor.vibration",
+  },
+];
+
 const draft = reactive({
   jobKey: "temperature-high",
   deviceId: "python-client-e2e",
   streamKey: "temperature",
+  channels: "",
+  detectorType: "threshold",
   operator: "gt",
   threshold: 50,
+  min: undefined as number | undefined,
+  max: undefined as number | undefined,
+  baseline: undefined as number | undefined,
+  tolerance: undefined as number | undefined,
+  alpha: undefined as number | undefined,
+  expectedValue: undefined as number | undefined,
+  minCount: undefined as number | undefined,
+  maxCount: undefined as number | undefined,
+  targetFrequencyHz: undefined as number | undefined,
+  fftSampleLimit: 2048,
   windowSeconds: 60,
   severity: "warning",
+  anchorEnabled: false,
+  anchorStream: "",
+  anchorValueString: "",
+  anchorValueBool: "",
+  anchorPreSeconds: 0,
+  anchorPostSeconds: 10,
 });
 
 const openEventCount = computed(() => events.value.filter((event) => event.status === "open").length);
+const selectedDetector = computed(
+  () => detectorOptions.find((detector) => detector.type === draft.detectorType) ?? detectorOptions[0],
+);
 
 function headers() {
   return props.authToken ? { "x-aetus-admin-token": props.authToken } : {};
@@ -292,6 +551,35 @@ async function createJob() {
   creating.value = true;
   error.value = "";
   try {
+    const detectorConfig = compactConfig({
+      operator: draft.operator,
+      threshold: draft.threshold,
+      min: draft.min,
+      max: draft.max,
+      baseline: draft.baseline,
+      tolerance: draft.tolerance,
+      alpha: draft.alpha,
+      expected_value: draft.expectedValue,
+      min_count: draft.minCount,
+      max_count: draft.maxCount,
+      target_frequency_hz: draft.targetFrequencyHz,
+      fft_sample_limit: selectedDetector.value.fields.includes("fft") ? draft.fftSampleLimit : undefined,
+      anchor: draft.anchorEnabled
+        ? compactConfig({
+            stream: draft.anchorStream,
+            value_string: draft.anchorValueString || undefined,
+            value_bool:
+              draft.anchorValueBool === "true" ? true : draft.anchorValueBool === "false" ? false : undefined,
+            pre_seconds: draft.anchorPreSeconds,
+            post_seconds: draft.anchorPostSeconds,
+            max_events: 1,
+          })
+        : undefined,
+    });
+    const channels = draft.channels
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
     await request<JobResponse>("/v1/anomaly/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -299,12 +587,9 @@ async function createJob() {
         job_key: draft.jobKey,
         enabled: true,
         device_selector: { devices: [draft.deviceId] },
-        stream_selector: { streams: [draft.streamKey] },
-        detector_type: "threshold",
-        detector_config: {
-          operator: draft.operator,
-          threshold: draft.threshold,
-        },
+        stream_selector: compactConfig({ streams: [draft.streamKey], channels: channels.length ? channels : undefined }),
+        detector_type: draft.detectorType,
+        detector_config: detectorConfig,
         window_seconds: draft.windowSeconds,
         step_seconds: draft.windowSeconds,
         severity: draft.severity,
@@ -316,6 +601,12 @@ async function createJob() {
   } finally {
     creating.value = false;
   }
+}
+
+function compactConfig<T extends Record<string, unknown>>(source: T) {
+  return Object.fromEntries(
+    Object.entries(source).filter(([, value]) => value !== undefined && value !== null && value !== ""),
+  );
 }
 
 function selectorLabel(job: JobResponse) {
@@ -511,6 +802,14 @@ button {
   gap: 16px;
 }
 
+.detector-help {
+  border-radius: 16px;
+  padding: 12px;
+  color: #52627a;
+  background: rgba(91, 157, 255, 0.1);
+  font-size: 0.84rem;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -523,6 +822,25 @@ label {
   color: #647086;
   font-size: 0.82rem;
   font-weight: 800;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.anchor-box {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #dce8f7;
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(247, 251, 255, 0.86);
 }
 
 input,

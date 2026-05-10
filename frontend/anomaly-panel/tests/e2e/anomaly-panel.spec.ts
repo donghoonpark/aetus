@@ -25,7 +25,7 @@ test("creates a threshold job and refreshes the table", async ({ page }) => {
   await page.getByLabel("Job key").fill("rpm-high");
   await page.getByLabel("Device ID").fill("motor-001");
   await page.getByLabel("Stream key").fill("motor.rpm");
-  await page.getByLabel("Threshold").fill("2800");
+  await page.getByRole("spinbutton", { name: "Threshold" }).fill("2800");
   await page.getByRole("button", { name: "Create job" }).click();
 
   await expect(page.getByText("rpm-high")).toBeVisible();
