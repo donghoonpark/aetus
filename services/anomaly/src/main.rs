@@ -1,6 +1,6 @@
 mod api;
 mod config;
-mod detector;
+mod detectors;
 mod dispatcher;
 mod models;
 mod repository;

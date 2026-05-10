@@ -1,9 +1,10 @@
 use crate::models::{DetectionResult, MetricPoint, ThresholdConfig};
 use serde_json::json;
 
-pub const THRESHOLD_DETECTOR_VERSION: &str = "1.0.0";
+pub const DETECTOR_TYPE: &str = "threshold";
+pub const DETECTOR_VERSION: &str = "1.0.0";
 
-pub fn evaluate_threshold(points: &[MetricPoint], config: &ThresholdConfig) -> DetectionResult {
+pub fn evaluate(points: &[MetricPoint], config: &ThresholdConfig) -> DetectionResult {
     let uses_lower_bound = matches!(config.operator.as_str(), "lt" | "lte");
     let score = if uses_lower_bound {
         points
@@ -41,7 +42,7 @@ mod tests {
     use chrono::Utc;
 
     #[test]
-    fn threshold_crosses_when_max_exceeds_limit() {
+    fn crosses_when_max_exceeds_limit() {
         let points = vec![
             MetricPoint {
                 event_time: Utc::now(),
@@ -53,7 +54,7 @@ mod tests {
             },
         ];
 
-        let result = evaluate_threshold(
+        let result = evaluate(
             &points,
             &ThresholdConfig {
                 threshold: 50.0,
@@ -66,13 +67,13 @@ mod tests {
     }
 
     #[test]
-    fn threshold_does_not_cross_when_values_stay_below_limit() {
+    fn does_not_cross_when_values_stay_below_limit() {
         let points = vec![MetricPoint {
             event_time: Utc::now(),
             value: 49.0,
         }];
 
-        let result = evaluate_threshold(
+        let result = evaluate(
             &points,
             &ThresholdConfig {
                 threshold: 50.0,
@@ -84,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_bound_threshold_uses_minimum_score() {
+    fn lower_bound_uses_minimum_score() {
         let points = vec![
             MetricPoint {
                 event_time: Utc::now(),
@@ -96,7 +97,7 @@ mod tests {
             },
         ];
 
-        let result = evaluate_threshold(
+        let result = evaluate(
             &points,
             &ThresholdConfig {
                 threshold: 5.0,

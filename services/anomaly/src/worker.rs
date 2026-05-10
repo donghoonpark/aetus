@@ -1,4 +1,4 @@
-use crate::detector::evaluate_threshold;
+use crate::detectors::threshold;
 use crate::models::ThresholdConfig;
 use crate::repository::{selector_from_value, EventInsert, Repository};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ pub async fn run_detection_once(
         }
         summary.jobs_scanned += 1;
 
-        if job.detector_type != "threshold" {
+        if job.detector_type != threshold::DETECTOR_TYPE {
             summary.skipped_jobs += 1;
             warn!(job_id = job.job_id, detector_type = %job.detector_type, "unsupported detector type");
             continue;
@@ -46,7 +46,8 @@ pub async fn run_detection_once(
             continue;
         }
 
-        let threshold: ThresholdConfig = serde_json::from_value(job.detector_config.clone())?;
+        let threshold_config: ThresholdConfig =
+            serde_json::from_value(job.detector_config.clone())?;
         for device_id in &devices {
             for stream_key in &streams {
                 let (window_start, window_end, points) = repo
@@ -56,7 +57,7 @@ pub async fn run_detection_once(
                     continue;
                 }
                 summary.windows_scanned += 1;
-                let result = evaluate_threshold(&points, &threshold);
+                let result = threshold::evaluate(&points, &threshold_config);
                 if !result.crossed {
                     repo.update_job_state_success(job.job_id, window_end)
                         .await?;
@@ -73,7 +74,7 @@ pub async fn run_detection_once(
                     score: result.score,
                     threshold: result.threshold,
                     details: json!({
-                        "detector": "threshold",
+                        "detector": threshold::DETECTOR_TYPE,
                         "job_key": job.job_key,
                         "window_seconds": job.window_seconds,
                         "step_seconds": job.step_seconds,

@@ -110,7 +110,9 @@ services/
       main.rs
       config.rs
       api.rs
-      detector.rs
+      detectors/
+        mod.rs
+        threshold.rs
       dispatcher.rs
       models.rs
       repository.rs

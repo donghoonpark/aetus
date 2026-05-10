@@ -1,4 +1,4 @@
-use crate::detector::THRESHOLD_DETECTOR_VERSION;
+use crate::detectors::threshold;
 use crate::models::{
     CreateJobRequest, EventResponse, JobResponse, MetricPoint, WebhookEndpointRequest,
     WebhookEndpointResponse,
@@ -254,7 +254,7 @@ impl Repository {
         .bind(event.score)
         .bind(event.threshold)
         .bind(&event.severity)
-        .bind(THRESHOLD_DETECTOR_VERSION)
+        .bind(threshold::DETECTOR_VERSION)
         .bind(&event.details)
         .execute(&self.pool)
         .await?;
