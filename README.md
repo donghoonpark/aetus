@@ -313,7 +313,7 @@ The stream viewer consumes that logical stream contract. Host applications pass 
 
 ## Anomaly Detection Plan
 
-AETUS plans to add anomaly detection as a DB-backed service, separate from ingest and query paths. The proposed `services/anomaly` boundary combines an anomaly API, window-based detector worker, and webhook dispatcher in one service codebase, while allowing separate runtime containers inside one initial Pod.
+AETUS plans to add anomaly detection as a DB-backed Rust service, separate from ingest and query paths. The proposed `services/anomaly` boundary combines an anomaly API, window-based detector worker, and webhook dispatcher in one Rust codebase with one multi-command binary, while allowing separate runtime containers inside one initial Pod.
 
 See [docs/11-anomaly-detection-service.md](docs/11-anomaly-detection-service.md) for the implementation plan.
 

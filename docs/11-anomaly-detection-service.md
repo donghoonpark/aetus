@@ -14,22 +14,23 @@
 
 ## 결론
 
-anomaly 기능은 `services/anomaly`라는 하나의 서비스 코드베이스로 둔다.
+anomaly 기능은 `services/anomaly`라는 하나의 Rust 서비스 코드베이스로 둔다.
 
 단, 런타임 역할은 분리한다.
 
-- `anomaly-api`: panel/API용 설정 및 조회
-- `anomaly-worker`: window 기반 detector 실행
-- `webhook-dispatcher`: webhook outbox 발송/retry/dead-letter 처리
+- `aetus-anomaly api`: panel/API용 설정 및 조회
+- `aetus-anomaly worker`: window 기반 detector 실행
+- `aetus-anomaly dispatcher`: webhook outbox 발송/retry/dead-letter 처리
 
 초기 운영은 하나의 Kubernetes Pod 안에서 여러 container로 구성한다.
+각 container는 같은 Docker image와 같은 Rust binary를 사용하고 command만 다르게 실행한다.
 
 ```mermaid
 flowchart TB
     subgraph Pod["anomaly pod"]
-        API["anomaly-api container"]
-        Worker["anomaly-worker container"]
-        Dispatcher["webhook-dispatcher container"]
+        API["aetus-anomaly api"]
+        Worker["aetus-anomaly worker"]
+        Dispatcher["aetus-anomaly dispatcher"]
     end
 
     API --> DB["PostgreSQL / TimescaleDB"]
@@ -67,15 +68,15 @@ flowchart TB
     Kafka --> Connect["Kafka Connect"]
     Connect --> Storage["PostgreSQL / TimescaleDB"]
 
-    Storage --> Worker["anomaly-worker"]
+    Storage --> Worker["aetus-anomaly worker"]
     Worker --> Events["anomaly_events"]
     Worker --> Scores["anomaly_scores"]
     Worker --> Outbox["webhook_outbox"]
 
-    Outbox --> Dispatcher["webhook-dispatcher"]
+    Outbox --> Dispatcher["aetus-anomaly dispatcher"]
     Dispatcher --> External["Slack / MES / ERP / custom API"]
 
-    API["anomaly-api"] --> Events
+    API["aetus-anomaly api"] --> Events
     API --> Jobs["anomaly_jobs"]
     API --> Webhooks["webhook_endpoints"]
     Panel["anomaly-panel"] --> API
@@ -91,18 +92,39 @@ flowchart TB
 services/
   anomaly/
     Dockerfile
-    pyproject.toml
-    src/aetus_anomaly/
-      api.py
-      main.py
-      config.py
-      repository.py
-      detector.py
-      worker.py
-      webhook.py
-      webhook_dispatcher.py
-      schemas.py
-      metrics.py
+    Cargo.toml
+    migrations/
+    src/
+      main.rs
+      config.rs
+      error.rs
+      api/
+        mod.rs
+        routes.rs
+        schemas.rs
+        auth.rs
+        openapi.rs
+      repository/
+        mod.rs
+        jobs.rs
+        events.rs
+        webhooks.rs
+        streams.rs
+      detector/
+        mod.rs
+        threshold.rs
+        rms.rs
+        peak.rs
+        missing_data.rs
+      worker/
+        mod.rs
+        lease.rs
+        planner.rs
+      webhook/
+        mod.rs
+        signing.rs
+        retry.rs
+      metrics.rs
     tests/
       unit/
       e2e/
@@ -110,14 +132,28 @@ frontend/
   anomaly-panel/
 ```
 
-초기에는 Python/FastAPI 기반으로 구현한다.
+Rust stack:
 
-이유:
+- `axum`: HTTP API server
+- `tokio`: async runtime
+- `sqlx`: PostgreSQL access and migrations
+- `serde` / `serde_json`: JSONB config, API payload, webhook payload
+- `utoipa` / `utoipa-swagger-ui`: OpenAPI schema and docs UI
+- `tower-http`: CORS, tracing, compression, request middleware
+- `reqwest`: webhook delivery
+- `tracing`: structured logs
+- `metrics` or `prometheus-client`: Prometheus metrics
+- `clap`: multi-command binary
 
-- 기존 `ingest-api`, `query-api`와 운영/테스트 패턴이 같음
-- DB-backed batch/window 처리에 충분함
-- rule detector와 ML detector를 모두 붙이기 쉬움
-- webhook dispatcher 구현이 단순함
+전체 Rust로 가는 이유:
+
+- worker의 signal frame decode, window scan, RMS/stddev/peak 계산이 CPU와 메모리 효율에 민감하다
+- API, worker, dispatcher가 같은 DB model과 config type을 공유할 수 있다
+- 단일 binary를 `api`, `worker`, `dispatcher` subcommand로 실행해 배포 artifact가 단순해진다
+- webhook dispatcher도 async HTTP/retry/timeout 처리에 Rust와 Tokio가 잘 맞는다
+- 장기적으로 ML/rule detector를 trait 기반으로 확장하기 쉽다
+
+FastAPI 스타일의 OpenAPI/validation 편의성은 `utoipa`, `serde`, request type validation helper로 보완한다.
 
 ## Pod 구성
 
@@ -127,11 +163,11 @@ frontend/
 Deployment: anomaly
   Pod:
     container: anomaly-api
-      command: uvicorn aetus_anomaly.api:create_app --factory
+      command: aetus-anomaly api
     container: anomaly-worker
-      command: python -m aetus_anomaly.worker
+      command: aetus-anomaly worker
     container: webhook-dispatcher
-      command: python -m aetus_anomaly.webhook_dispatcher
+      command: aetus-anomaly dispatcher
 ```
 
 공통 env:
@@ -145,9 +181,9 @@ Deployment: anomaly
 
 스케일 아웃 기준:
 
-- detector job 수가 증가하면 `anomaly-worker`만 별도 Deployment로 분리
-- webhook backlog가 증가하면 `webhook-dispatcher`만 별도 Deployment로 분리
-- API 부하가 증가하면 `anomaly-api`만 별도 Deployment로 분리
+- detector job 수가 증가하면 `aetus-anomaly worker` container만 별도 Deployment로 분리
+- webhook backlog가 증가하면 `aetus-anomaly dispatcher` container만 별도 Deployment로 분리
+- API 부하가 증가하면 `aetus-anomaly api` container만 별도 Deployment로 분리
 
 초기에는 하나의 Pod로 묶어 운영 단순성을 우선한다.
 
@@ -346,13 +382,12 @@ CREATE TABLE webhook_deliveries (
 
 Detector interface:
 
-```python
-class Detector:
-    detector_type: str
-    detector_version: str
-
-    def evaluate(self, window: WindowData, config: dict) -> DetectionResult:
-        ...
+```rust
+pub trait Detector: Send + Sync {
+    fn detector_type(&self) -> &'static str;
+    fn detector_version(&self) -> &'static str;
+    fn evaluate(&self, window: &WindowData, config: &DetectorConfig) -> anyhow::Result<DetectionResult>;
+}
 ```
 
 `WindowData`는 query-api 응답 JSON을 그대로 재사용하지 않는다.
@@ -428,9 +463,9 @@ Detector는 외부 HTTP를 직접 호출하지 않는다.
 
 ```mermaid
 sequenceDiagram
-    participant Worker as anomaly-worker
+    participant Worker as aetus-anomaly worker
     participant DB as PostgreSQL
-    participant Dispatcher as webhook-dispatcher
+    participant Dispatcher as aetus-anomaly dispatcher
     participant Target as Webhook target
 
     Worker->>DB: "anomaly_events upsert"
@@ -568,15 +603,20 @@ Stream drill-down:
 
 ### Phase 1: anomaly service skeleton
 
-- `services/anomaly` FastAPI app 추가
-- settings/config/repository/health endpoint
+- `services/anomaly` Rust crate 추가
+- `aetus-anomaly api|worker|dispatcher` subcommand 추가
+- `axum` 기반 health/ready endpoint
+- config/repository/error/metrics skeleton 추가
+- `utoipa` OpenAPI skeleton 추가
 - Dockerfile 추가
 - compose에 `anomaly-api`, `anomaly-worker`, `webhook-dispatcher` 추가
 - GHCR workflow matrix에 `anomaly` image 추가
 
 검증:
 
-- unit test
+- `cargo fmt --check`
+- `cargo clippy`
+- `cargo test`
 - compose health check
 - image build
 
@@ -680,7 +720,7 @@ E2E:
 - `webhook_outbox`: delivered row 30일, dead-letter row 90일
 
 TimescaleDB 사용 시 `anomaly_scores`는 hypertable 후보다.
-plain PostgreSQL에서는 k8s CronJob 또는 anomaly-worker periodic cleanup으로 삭제한다.
+plain PostgreSQL에서는 k8s CronJob 또는 `aetus-anomaly worker` periodic cleanup으로 삭제한다.
 
 ## 운영 Metrics
 
@@ -705,4 +745,3 @@ Prometheus 후보:
 - 초기 detector는 rule-based로 시작한다.
 - ML detector는 같은 job/window/event 모델 위에 추가한다.
 - 프론트엔드는 portable panel로 제공하고 host app이 stream-viewer와 조합한다.
-
