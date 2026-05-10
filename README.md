@@ -160,6 +160,16 @@ The compose stack seeds a development device:
 
 By default the ingest control plane uses SQLite at `/data/control.db` and writes hourly online backups to `/data/control-backups` in the same compose volume. For multi-pod operation, set `AETUS_CONTROL_DB_BACKEND=postgres` and keep control tables in a separate PostgreSQL schema such as `control`.
 
+Published container images are available from GitHub Container Registry after the image workflow runs:
+
+- `ghcr.io/donghoonpark/aetus-ingest-api:<tag>`
+- `ghcr.io/donghoonpark/aetus-query-api:<tag>`
+- `ghcr.io/donghoonpark/aetus-kafka:<tag>`
+- `ghcr.io/donghoonpark/aetus-kafka-connect:<tag>`
+- `ghcr.io/donghoonpark/aetus-postgres:<tag>`
+
+The workflow publishes `main`, `sha-<commit>`, release tag, and `latest` tags. Pull requests build images without pushing them.
+
 ### 2. Run backend tests
 
 ```bash
