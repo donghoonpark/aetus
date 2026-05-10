@@ -138,6 +138,23 @@ def test_signal_frame_event_infers_encoding_from_numpy_dtype(
     assert frame.samples == expected_samples
 
 
+def test_signal_frame_event_downcasts_numpy_float64_with_warning() -> None:
+    with pytest.warns(RuntimeWarning, match="downcast to float32_le"):
+        event = build_signal_frame_event(
+            device_id=DEVICE_ID,
+            sequence=0,
+            boot_id=BOOT_ID,
+            stream_key="numpy.float64",
+            sample_interval_ns=1_000_000,
+            channels=["a", "b"],
+            samples=np.array([[0.5, 1.5], [2.5, 3.5]], dtype=np.float64),
+        )
+
+    frame = event.telemetry.signal_frame
+    assert frame.encoding == ingest_pb2.SIGNAL_SAMPLE_ENCODING_FLOAT32_LE
+    assert frame.samples == struct.pack("<ffff", 0.5, 1.5, 2.5, 3.5)
+
+
 def test_signal_frame_event_packs_numpy_planar_layout() -> None:
     values = np.array([[1, 10], [2, 20], [3, 30]], dtype=np.int16)
 
@@ -165,7 +182,7 @@ def test_signal_frame_event_rejects_unsupported_numpy_dtype() -> None:
             stream_key="bad.dtype",
             sample_interval_ns=1_000_000,
             channels=["a"],
-            samples=np.array([1.0, 2.0], dtype=np.float64),
+            samples=np.array([1, 2], dtype=np.uint32),
         )
 
 

@@ -117,7 +117,7 @@ with AetusIngestClient(
     )
 ```
 
-Supported ndarray dtypes map to signal encodings as follows: `float32 -> float32_le`, `int16 -> int16_le`, `uint16 -> uint16_le`, and `int32 -> int32_le`.
+Supported ndarray dtypes map to signal encodings as follows: `float32 -> float32_le`, `int16 -> int16_le`, `uint16 -> uint16_le`, and `int32 -> int32_le`. `float64` arrays are accepted, but the client emits a `RuntimeWarning` and downcasts them to `float32_le` before upload to keep the signal frame wire format compact.
 
 ## Tests
 

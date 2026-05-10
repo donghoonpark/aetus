@@ -8,6 +8,7 @@ import struct
 from time import time_ns
 from typing import Any, Literal
 from uuid import uuid4
+import warnings
 
 import httpx
 
@@ -282,6 +283,14 @@ def _infer_numpy_signal_encoding(dtype: Any) -> SignalEncoding:
     kind = dtype.kind
     itemsize = dtype.itemsize
     if kind == "f" and itemsize == 4:
+        return "float32_le"
+    if kind == "f" and itemsize == 8:
+        warnings.warn(
+            "float64 signal ndarray samples are downcast to float32_le; "
+            "pass samples.astype('float32') to make this explicit",
+            RuntimeWarning,
+            stacklevel=3,
+        )
         return "float32_le"
     if kind == "i" and itemsize == 2:
         return "int16_le"
