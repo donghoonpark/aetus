@@ -96,7 +96,11 @@ void app_main(void)
         (unsigned)AETUS_RANDOM_STREAM_INTERVAL_MS
     );
     ESP_ERROR_CHECK(aetus_start(&config));
-    ESP_ERROR_CHECK(aetus_sync_rtc(pdMS_TO_TICKS(30000)));
+
+    esp_err_t rtc_err = aetus_sync_rtc(pdMS_TO_TICKS(30000));
+    if (rtc_err != ESP_OK) {
+        ESP_LOGW(TAG, "RTC sync failed (non-fatal): %s", esp_err_to_name(rtc_err));
+    }
 
     xTaskCreate(producer_task, "aetus_producer", 4096, NULL, 4, NULL);
 }
