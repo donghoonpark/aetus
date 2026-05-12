@@ -325,6 +325,58 @@ static bool test_time_failure_survives(void)
     return pass;
 }
 
+static bool test_http_failure_retries_without_advancing_sequence(void)
+{
+    aetus_test_runtime_hooks_t hooks_before;
+    aetus_test_runtime_hooks_t hooks_after_fail;
+    aetus_test_runtime_hooks_t hooks_after_success;
+    aetus_test_get_runtime_hooks(&hooks_before);
+
+    uint64_t sequence_before = aetus_test_get_sequence();
+    size_t pending_before = aetus_test_get_pending_queue_count();
+
+    apply_hooks(ESP_FAIL, ESP_OK, false);
+    esp_err_t enqueue_err = enqueue_dynamic_telemetry(9100U, pdMS_TO_TICKS(100));
+    esp_err_t flush_fail_err = aetus_flush(pdMS_TO_TICKS(10000));
+    uint64_t sequence_after_fail = aetus_test_get_sequence();
+    size_t pending_after_fail = aetus_test_get_pending_queue_count();
+    aetus_test_get_runtime_hooks(&hooks_after_fail);
+
+    apply_hooks(ESP_OK, ESP_OK, false);
+    esp_err_t flush_success_err = aetus_flush(pdMS_TO_TICKS(10000));
+    uint64_t sequence_after_success = aetus_test_get_sequence();
+    size_t pending_after_success = aetus_test_get_pending_queue_count();
+    aetus_test_get_runtime_hooks(&hooks_after_success);
+
+    bool pass =
+        enqueue_err == ESP_OK &&
+        flush_fail_err == ESP_OK &&
+        flush_success_err == ESP_OK &&
+        sequence_after_fail == sequence_before &&
+        pending_after_fail == pending_before + 1U &&
+        hooks_after_fail.fake_post_count == hooks_before.fake_post_count + 1U &&
+        sequence_after_success == sequence_before + 1U &&
+        pending_after_success == pending_before &&
+        hooks_after_success.fake_post_count == hooks_before.fake_post_count + 2U;
+
+    printf(
+        "AETUS_RUNTIME_HTTP_FAIL_STATS enqueue=%s flush_fail=%s flush_success=%s seq_before=%llu seq_after_fail=%llu seq_after_success=%llu pending_before=%u pending_after_fail=%u pending_after_success=%u post_delta_fail=%lu post_delta_total=%lu\n",
+        esp_err_to_name(enqueue_err),
+        esp_err_to_name(flush_fail_err),
+        esp_err_to_name(flush_success_err),
+        (unsigned long long)sequence_before,
+        (unsigned long long)sequence_after_fail,
+        (unsigned long long)sequence_after_success,
+        (unsigned)pending_before,
+        (unsigned)pending_after_fail,
+        (unsigned)pending_after_success,
+        (unsigned long)(hooks_after_fail.fake_post_count - hooks_before.fake_post_count),
+        (unsigned long)(hooks_after_success.fake_post_count - hooks_before.fake_post_count)
+    );
+    print_result("HTTP_FAIL_RETRY", pass);
+    return pass;
+}
+
 void app_main(void)
 {
     printf("AETUS_RUNTIME_APP_MAIN\n");
@@ -351,6 +403,7 @@ void app_main(void)
     all_pass = test_signal_enqueue_failure_release() && all_pass;
     all_pass = test_concurrency_stress() && all_pass;
     all_pass = test_time_failure_survives() && all_pass;
+    all_pass = test_http_failure_retries_without_advancing_sequence() && all_pass;
 
     print_result("ALL", all_pass);
     printf("AETUS_RUNTIME_TEST_DONE\n");

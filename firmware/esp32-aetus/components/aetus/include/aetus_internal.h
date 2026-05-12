@@ -49,4 +49,6 @@ esp_err_t aetus_test_copy_telemetry_to_queue_item(
 void aetus_test_release_queue_item(aetus_queue_item_t *item);
 void aetus_test_set_runtime_hooks(const aetus_test_runtime_hooks_t *hooks);
 void aetus_test_get_runtime_hooks(aetus_test_runtime_hooks_t *hooks);
+size_t aetus_test_get_pending_queue_count(void);
+uint64_t aetus_test_get_sequence(void);
 #endif
