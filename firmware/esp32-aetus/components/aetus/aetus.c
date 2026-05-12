@@ -801,6 +801,7 @@ static esp_err_t parse_unix_time_ns(const char *body, uint64_t *unix_time_ns)
     return ESP_OK;
 }
 
+#ifndef CONFIG_AETUS_TEST_NO_NETWORK
 static esp_err_t perform_http_request(
     esp_http_client_handle_t client,
     int *status_code,
@@ -829,6 +830,7 @@ static esp_err_t perform_http_request(
     }
     return ESP_OK;
 }
+#endif
 
 static esp_err_t fetch_server_time_ns(aetus_ctx_t *ctx, uint64_t *unix_time_ns)
 {
