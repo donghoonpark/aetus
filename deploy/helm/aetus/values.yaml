@@ -1,0 +1,192 @@
+# Minimal AETUS Helm values.
+#
+# Defaults favor a small single-node development deployment:
+# - Kafka and Kafka Connect run in-cluster as single replicas.
+# - PostgreSQL is external by default, so production data can live on a VM,
+#   physical server, managed DB, or separately operated StatefulSet.
+# - Redis runs in-cluster because the query cache is disposable.
+
+global:
+  imageRegistry: ghcr.io/donghoonpark
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  nameOverride: ""
+  fullnameOverride: ""
+
+secrets:
+  create: true
+  existingSecret: ""
+  bootstrapToken: bootstrap_shared_token
+  deviceTokens: "esp32c5-test-001=devtok_test_001"
+  adminPassword: ""
+  queryJwtSecret: "change-me-query-jwt-secret-with-at-least-32-bytes"
+  queryAdminToken: "change-me-query-admin-token"
+  anomalyAdminToken: "change-me-anomaly-admin-token"
+  postgresPassword: aetus
+  postgresDsn: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+postgres:
+  enabled: false
+  image:
+    repository: aetus-postgres
+    tag: main
+  external:
+    host: postgres.example.internal
+    port: 5432
+    database: aetus
+    username: aetus
+    # Set secrets.postgresDsn for full control, or set this password for the
+    # generated postgresql:// URL. For production, prefer secrets.existingSecret.
+    password: ""
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+kafka:
+  enabled: true
+  image:
+    repository: aetus-kafka
+    tag: main
+  external:
+    bootstrapServers: ""
+  clusterId: MkU3OEVBNTcwNTJENDM2Qk
+  logDir: /tmp/kraft-combined-logs
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 768Mi
+
+kafkaConnect:
+  enabled: true
+  image:
+    repository: aetus-kafka-connect
+    tag: main
+  groupId: aetus-connect
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 768Mi
+
+connectorInit:
+  enabled: true
+  image: curlimages/curl:8.12.1
+  backoffLimit: 12
+
+redis:
+  enabled: true
+  image: redis:7.4-alpine
+  external:
+    url: ""
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+ingest:
+  enabled: true
+  replicas: 1
+  image:
+    repository: aetus-ingest-api
+    tag: main
+  service:
+    type: ClusterIP
+    port: 8000
+  publisherBackend: kafka
+  hmac:
+    enabled: true
+    required: false
+  allowedSourceCidrs: 0.0.0.0/0
+  allowlistDeviceIds: ""
+  allowedHardwareIds: esp32c5-a1b2c3d4e5f6
+  controlDb:
+    # sqlite is fine for one small ingest pod. Use postgres before scaling replicas.
+    backend: sqlite
+    path: /data/control.db
+    schema: control
+    backupDir: /data/control-backups
+    backupIntervalSeconds: 3600
+    backupRetentionCount: 48
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+query:
+  enabled: true
+  replicas: 1
+  image:
+    repository: aetus-query-api
+    tag: main
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+anomaly:
+  enabled: true
+  image:
+    repository: aetus-anomaly
+    tag: main
+  api:
+    replicas: 1
+    service:
+      type: ClusterIP
+      port: 8000
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+  worker:
+    replicas: 1
+    pollIntervalSeconds: 5
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+  dispatcher:
+    replicas: 1
+    pollIntervalSeconds: 5
+    resources:
+      requests:
+        cpu: 25m
+        memory: 96Mi
+      limits:
+        memory: 192Mi
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    ingest: ingest.aetus.local
+    query: query.aetus.local
+    anomaly: anomaly.aetus.local
+  tls: []

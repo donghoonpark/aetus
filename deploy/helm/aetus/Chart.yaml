@@ -1,0 +1,17 @@
+apiVersion: v2
+name: aetus
+description: Minimal Kubernetes deployment for AETUS edge telemetry ingestion, query, and anomaly services.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - telemetry
+  - iot
+  - kafka
+  - postgresql
+  - timeseries
+home: https://github.com/donghoonpark/aetus
+sources:
+  - https://github.com/donghoonpark/aetus
+maintainers:
+  - name: AETUS maintainers

@@ -1,0 +1,36 @@
+# Example: all-in-one development install.
+# Not intended as a highly available production database layout.
+
+global:
+  imageRegistry: ghcr.io/donghoonpark
+  imagePullPolicy: IfNotPresent
+
+postgres:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 8Gi
+
+secrets:
+  bootstrapToken: bootstrap_shared_token
+  deviceTokens: "esp32c5-test-001=devtok_test_001"
+  queryJwtSecret: "dev-query-jwt-secret-with-at-least-32-bytes"
+  queryAdminToken: "dev-query-admin-token"
+  anomalyAdminToken: "dev-anomaly-admin-token"
+  postgresPassword: aetus
+
+ingest:
+  replicas: 1
+  controlDb:
+    backend: sqlite
+
+query:
+  replicas: 1
+
+anomaly:
+  api:
+    replicas: 1
+  worker:
+    replicas: 1
+  dispatcher:
+    replicas: 1

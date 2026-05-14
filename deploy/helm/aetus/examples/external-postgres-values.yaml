@@ -1,0 +1,35 @@
+# Example: use GHCR AETUS images and connect to PostgreSQL/TimescaleDB
+# running on a VM, physical machine, or separately managed DB platform.
+
+global:
+  imageRegistry: ghcr.io/donghoonpark
+  imagePullPolicy: IfNotPresent
+
+postgres:
+  enabled: false
+
+secrets:
+  create: true
+  bootstrapToken: bootstrap_shared_token
+  deviceTokens: "esp32c5-test-001=devtok_test_001"
+  queryJwtSecret: "replace-with-32-byte-minimum-query-jwt-secret"
+  queryAdminToken: "replace-query-admin-token"
+  anomalyAdminToken: "replace-anomaly-admin-token"
+  postgresPassword: "replace-postgres-password"
+  postgresDsn: "postgresql://aetus:replace-postgres-password@10.0.0.10:5432/aetus"
+
+ingest:
+  replicas: 1
+  controlDb:
+    backend: sqlite
+
+query:
+  replicas: 1
+
+anomaly:
+  api:
+    replicas: 1
+  worker:
+    replicas: 1
+  dispatcher:
+    replicas: 1

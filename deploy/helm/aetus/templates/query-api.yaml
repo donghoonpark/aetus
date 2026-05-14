@@ -1,0 +1,80 @@
+{{- if .Values.query.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aetus.fullname" . }}-query-api
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: query-api
+spec:
+  type: {{ .Values.query.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.query.service.port }}
+      targetPort: http
+  selector:
+    {{- include "aetus.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: query-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aetus.fullname" . }}-query-api
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: query-api
+spec:
+  replicas: {{ .Values.query.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aetus.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: query-api
+  template:
+    metadata:
+      labels:
+        {{- include "aetus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: query-api
+    spec:
+      serviceAccountName: {{ include "aetus.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: query-api
+          image: {{ include "aetus.image" (list . .Values.query.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: AETUS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: postgres-dsn
+            - name: AETUS_QUERY_REDIS_URL
+              value: {{ include "aetus.redisUrl" . | quote }}
+            - name: AETUS_QUERY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: query-jwt-secret
+            - name: AETUS_QUERY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: query-admin-token
+            - name: AETUS_HOST
+              value: 0.0.0.0
+            - name: AETUS_PORT
+              value: "8000"
+          readinessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.query.resources | nindent 12 }}
+{{- end }}

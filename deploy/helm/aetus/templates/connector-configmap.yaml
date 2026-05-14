@@ -1,0 +1,73 @@
+{{- if and .Values.kafkaConnect.enabled .Values.connectorInit.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aetus.fullname" . }}-connector-configs
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: connector-init
+data:
+  raw-device-events-sink.json: |
+    {
+      "name": "raw-device-events-sink",
+      "config": {
+        "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "device.raw.v1",
+        "connection.url": "${PG_CONNECTION_URL}",
+        "connection.user": "${PG_CONNECTION_USER}",
+        "connection.password": "${PG_CONNECTION_PASSWORD}",
+        "auto.create": "false",
+        "insert.mode": "upsert",
+        "pk.mode": "record_value",
+        "pk.fields": "device_id,boot_id,sequence",
+        "table.name.format": "raw_device_events",
+        "delete.enabled": "false",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "true"
+      }
+    }
+  metric-ingest-staging-sink.json: |
+    {
+      "name": "metric-ingest-staging-sink",
+      "config": {
+        "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "device.metric.v1",
+        "connection.url": "${PG_CONNECTION_URL}",
+        "connection.user": "${PG_CONNECTION_USER}",
+        "connection.password": "${PG_CONNECTION_PASSWORD}",
+        "auto.create": "false",
+        "insert.mode": "upsert",
+        "pk.mode": "record_value",
+        "pk.fields": "request_id,metric_index",
+        "table.name.format": "metric_ingest_staging",
+        "delete.enabled": "false",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "true"
+      }
+    }
+  signal-frame-ingest-staging-sink.json: |
+    {
+      "name": "signal-frame-ingest-staging-sink",
+      "config": {
+        "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "device.signal_frame.v1",
+        "connection.url": "${PG_CONNECTION_URL}",
+        "connection.user": "${PG_CONNECTION_USER}",
+        "connection.password": "${PG_CONNECTION_PASSWORD}",
+        "auto.create": "false",
+        "insert.mode": "upsert",
+        "pk.mode": "record_value",
+        "pk.fields": "request_id",
+        "table.name.format": "signal_frame_ingest_staging",
+        "delete.enabled": "false",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "true"
+      }
+    }
+{{- end }}

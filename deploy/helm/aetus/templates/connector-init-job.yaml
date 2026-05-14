@@ -1,0 +1,70 @@
+{{- if and .Values.kafkaConnect.enabled .Values.connectorInit.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "aetus.fullname" . }}-connector-init
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: connector-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.connectorInit.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "aetus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: connector-init
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: connector-init
+          image: {{ .Values.connectorInit.image | quote }}
+          env:
+            - name: KAFKA_CONNECT_URL
+              value: {{ include "aetus.kafkaConnectUrl" . | quote }}
+            - name: PG_CONNECTION_URL
+              value: {{ include "aetus.postgresJdbcUrl" . | quote }}
+            - name: PG_CONNECTION_USER
+              value: {{ include "aetus.postgresUser" . | quote }}
+            - name: PG_CONNECTION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: postgres-password
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              until curl -fsS "$KAFKA_CONNECT_URL/" >/dev/null; do
+                sleep 2
+              done
+              for config in /config/connectors/*.json; do
+                tmp="$(mktemp)"
+                sed \
+                  -e "s|\${PG_CONNECTION_URL}|${PG_CONNECTION_URL}|g" \
+                  -e "s|\${PG_CONNECTION_USER}|${PG_CONNECTION_USER}|g" \
+                  -e "s|\${PG_CONNECTION_PASSWORD}|${PG_CONNECTION_PASSWORD}|g" \
+                  "$config" > "$tmp"
+                name="$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -1)"
+                curl -fsS -X DELETE "$KAFKA_CONNECT_URL/connectors/$name" >/dev/null 2>&1 || true
+                curl -fsS -X POST "$KAFKA_CONNECT_URL/connectors" \
+                  -H 'Content-Type: application/json' \
+                  --data @"$tmp"
+                rm -f "$tmp"
+              done
+          volumeMounts:
+            - name: connector-configs
+              mountPath: /config/connectors
+              readOnly: true
+      volumes:
+        - name: connector-configs
+          configMap:
+            name: {{ include "aetus.fullname" . }}-connector-configs
+{{- end }}

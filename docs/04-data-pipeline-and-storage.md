@@ -333,6 +333,7 @@ signal frame 적재 테이블:
 - readiness/liveness probe
 - 초기에는 단일 pod + `SQLite` 제어 DB로 시작 가능
 - 다중 pod 또는 호출량 증가 시 제어 DB를 `PostgreSQL` control schema로 전환하고 pod를 추가 할당
+- 샘플 Helm chart에서는 `ingest-api` Deployment/Service로 제공하며 GHCR 이미지를 기본 사용
 
 ### Kafka Connect
 
@@ -340,6 +341,7 @@ signal frame 적재 테이블:
 - JDBC Sink connector 설정으로 PostgreSQL 적재
 - connector task 수를 topic partition 수와 연동
 - 에러 토픽 및 retry 정책을 설정으로 관리
+- 샘플 Helm chart에서는 `connector-init` Job이 raw/metric/signal frame JDBC Sink connector를 등록
 
 ### Kafka
 
@@ -347,6 +349,7 @@ signal frame 적재 테이블:
 
 - 분리망 내부의 self-managed Kafka
 - `k8s` 내부 StatefulSet/Operator 기반 또는 내부 전용 VM/플랫폼 기반 운영
+- 샘플 Helm chart는 최소 리소스 확인용 single-node KRaft Deployment를 제공
 
 운영 고려 사항:
 
@@ -361,6 +364,7 @@ signal frame 적재 테이블:
 
 - 분리망 내부 VM 기반 self-managed TimescaleDB/PostgreSQL
 - 개발 환경은 `timescale/timescaledb:latest-pg17` 이미지 사용
+- 샘플 Helm chart는 외부 PostgreSQL DSN 연결을 기본 경로로 두며, `postgres.enabled=true`일 때만 in-cluster dev StatefulSet을 생성
 
 운영 고려 사항:
 
@@ -573,4 +577,5 @@ flowchart TD
 5. `device_id + boot_id + sequence`로 중복 전송을 구분
 6. raw는 짧게 보관하고, metric/signal frame은 각각 `device_metric_points`, `device_signal_frames` hypertable에 장기 보관
 7. FastAPI control DB는 초기 `SQLite + 주기 백업`, 다중 pod 또는 고부하 시 `PostgreSQL` control schema로 전환
-8. `k8s`에는 API와 Kafka Connect를 올리고, Kafka와 PostgreSQL은 분리망 내 self-managed로 운영
+8. `k8s` 배포 샘플은 `deploy/helm/aetus`를 사용하고, GHCR 이미지를 기본으로 pull한다
+9. PostgreSQL은 외부 VM/물리 머신/별도 DB 플랫폼을 기본 운영 경로로 두며, 작은 개발 클러스터에서는 chart의 in-cluster PostgreSQL을 선택적으로 켠다

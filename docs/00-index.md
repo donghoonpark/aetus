@@ -15,8 +15,9 @@
 11. [[09-testing-and-e2e-coverage]]
 12. [[10-client-packaging]]
 13. [[11-anomaly-detection-service]]
-14. [[open-decisions]]
-15. [[../TESTING|TESTING]]
+14. [[12-kubernetes-helm]]
+15. [[open-decisions]]
+16. [[../TESTING|TESTING]]
 
 ## 문서 맵
 
@@ -33,6 +34,7 @@
 - [[09-testing-and-e2e-coverage]]: 펌웨어, ingest, Kafka, DB, query-api, frontend까지의 검증 루프와 남은 테스트 구멍
 - [[10-client-packaging]]: Python/Rust ingest client의 PyPI/crates.io 배포 준비, 검증, 릴리스 절차
 - [[11-anomaly-detection-service]]: DB-backed window anomaly detection, webhook outbox, anomaly panel 구현 계획
+- [[12-kubernetes-helm]]: GHCR 이미지 기반 최소 리소스 Helm 배포, 외부 PostgreSQL/TimescaleDB 매핑, 운영 옵션
 - [[open-decisions]]: release-blocking open decision 여부와 post-0.1 검토 항목
 - [[../TESTING|TESTING]]: 로컬, Docker E2E, firmware build, QEMU, HIL 테스트 실행 기준
 
@@ -54,6 +56,7 @@
 - signal visualization은 ingest API와 분리된 `query-api`에서 고정 `x4` rollup tier, `Redis` cache, `JSON + gzip/br` 압축 응답을 사용하는 방향을 기본안으로 둔다
 - 조회용 표준 프론트엔드는 `frontend/stream-viewer`의 `@aetus/stream-viewer` Vue 컴포넌트로 제공하며, query-api URL만 지정해 이식할 수 있다
 - 이상감지는 ingest/query와 분리된 `services/anomaly` Rust 서비스로 두고, DB-backed worker + API + webhook dispatcher + portable anomaly panel 구조로 PoC를 구현했다
+- Kubernetes 배포 샘플은 `deploy/helm/aetus`에서 제공하며, GHCR 이미지를 기본으로 사용하고 PostgreSQL은 외부 VM/물리 머신 매핑을 기본 운영 경로로 열어둔다
 - bootstrap token은 단일 공용 token이며 유출/공유를 전제로 매우 가혹한 제한만 둔다
 - provisioning allowlist는 `source IP + hardware_id` 기준으로 FastAPI에서 관리한다
 - HMAC-SHA256 ingest 인증은 bearer token과 병행하는 선택 경로로 구현되어 있다

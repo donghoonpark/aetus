@@ -1,0 +1,158 @@
+{{- if .Values.anomaly.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aetus.fullname" . }}-anomaly-api
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anomaly-api
+spec:
+  type: {{ .Values.anomaly.api.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.anomaly.api.service.port }}
+      targetPort: http
+  selector:
+    {{- include "aetus.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: anomaly-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aetus.fullname" . }}-anomaly-api
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anomaly-api
+spec:
+  replicas: {{ .Values.anomaly.api.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aetus.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: anomaly-api
+  template:
+    metadata:
+      labels:
+        {{- include "aetus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: anomaly-api
+    spec:
+      serviceAccountName: {{ include "aetus.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: anomaly-api
+          image: {{ include "aetus.image" (list . .Values.anomaly.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["aetus-anomaly", "api"]
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: AETUS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: postgres-dsn
+            - name: AETUS_ANOMALY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: anomaly-admin-token
+            - name: AETUS_ANOMALY_HOST
+              value: 0.0.0.0
+            - name: AETUS_ANOMALY_PORT
+              value: "8000"
+          readinessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.anomaly.api.resources | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aetus.fullname" . }}-anomaly-worker
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anomaly-worker
+spec:
+  replicas: {{ .Values.anomaly.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aetus.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: anomaly-worker
+  template:
+    metadata:
+      labels:
+        {{- include "aetus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: anomaly-worker
+    spec:
+      serviceAccountName: {{ include "aetus.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: anomaly-worker
+          image: {{ include "aetus.image" (list . .Values.anomaly.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["aetus-anomaly", "worker"]
+          env:
+            - name: AETUS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: postgres-dsn
+            - name: AETUS_ANOMALY_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AETUS_ANOMALY_POLL_INTERVAL_SECONDS
+              value: {{ .Values.anomaly.worker.pollIntervalSeconds | quote }}
+          resources:
+            {{- toYaml .Values.anomaly.worker.resources | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aetus.fullname" . }}-anomaly-dispatcher
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anomaly-dispatcher
+spec:
+  replicas: {{ .Values.anomaly.dispatcher.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aetus.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: anomaly-dispatcher
+  template:
+    metadata:
+      labels:
+        {{- include "aetus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: anomaly-dispatcher
+    spec:
+      serviceAccountName: {{ include "aetus.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: anomaly-dispatcher
+          image: {{ include "aetus.image" (list . .Values.anomaly.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["aetus-anomaly", "dispatcher"]
+          env:
+            - name: AETUS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: postgres-dsn
+            - name: AETUS_ANOMALY_POLL_INTERVAL_SECONDS
+              value: {{ .Values.anomaly.dispatcher.pollIntervalSeconds | quote }}
+          resources:
+            {{- toYaml .Values.anomaly.dispatcher.resources | nindent 12 }}
+{{- end }}

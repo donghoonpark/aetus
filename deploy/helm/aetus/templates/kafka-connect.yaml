@@ -1,0 +1,84 @@
+{{- if .Values.kafkaConnect.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aetus.fullname" . }}-kafka-connect
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-connect
+spec:
+  ports:
+    - name: http
+      port: 8083
+      targetPort: http
+  selector:
+    {{- include "aetus.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-connect
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aetus.fullname" . }}-kafka-connect
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-connect
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aetus.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: kafka-connect
+  template:
+    metadata:
+      labels:
+        {{- include "aetus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kafka-connect
+    spec:
+      serviceAccountName: {{ include "aetus.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kafka-connect
+          image: {{ include "aetus.image" (list . .Values.kafkaConnect.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8083
+          env:
+            - name: CONNECT_BOOTSTRAP_SERVERS
+              value: {{ include "aetus.kafkaBootstrap" . | quote }}
+            - name: CONNECT_GROUP_ID
+              value: {{ .Values.kafkaConnect.groupId | quote }}
+            - name: CONNECT_CONFIG_STORAGE_TOPIC
+              value: aetus-connect-configs
+            - name: CONNECT_OFFSET_STORAGE_TOPIC
+              value: aetus-connect-offsets
+            - name: CONNECT_STATUS_STORAGE_TOPIC
+              value: aetus-connect-status
+            - name: CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR
+              value: "1"
+            - name: CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR
+              value: "1"
+            - name: CONNECT_STATUS_STORAGE_REPLICATION_FACTOR
+              value: "1"
+            - name: CONNECT_KEY_CONVERTER
+              value: org.apache.kafka.connect.storage.StringConverter
+            - name: CONNECT_VALUE_CONVERTER
+              value: org.apache.kafka.connect.json.JsonConverter
+            - name: CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE
+              value: "true"
+            - name: CONNECT_REST_ADVERTISED_HOST_NAME
+              value: {{ include "aetus.fullname" . }}-kafka-connect
+            - name: CONNECT_PLUGIN_PATH
+              value: /usr/share/confluent-hub-components
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.kafkaConnect.resources | nindent 12 }}
+{{- end }}

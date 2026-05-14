@@ -1,0 +1,128 @@
+{{- if .Values.ingest.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aetus.fullname" . }}-ingest-api
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingest-api
+spec:
+  type: {{ .Values.ingest.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.ingest.service.port }}
+      targetPort: http
+  selector:
+    {{- include "aetus.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ingest-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aetus.fullname" . }}-ingest-api
+  labels:
+    {{- include "aetus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingest-api
+spec:
+  replicas: {{ .Values.ingest.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aetus.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ingest-api
+  template:
+    metadata:
+      labels:
+        {{- include "aetus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ingest-api
+    spec:
+      serviceAccountName: {{ include "aetus.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: ingest-api
+          image: {{ include "aetus.image" (list . .Values.ingest.image) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: AETUS_PUBLISHER_BACKEND
+              value: {{ .Values.ingest.publisherBackend | quote }}
+            - name: AETUS_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: bootstrap-token
+            - name: AETUS_HMAC_AUTH_ENABLED
+              value: {{ .Values.ingest.hmac.enabled | quote }}
+            - name: AETUS_HMAC_AUTH_REQUIRED
+              value: {{ .Values.ingest.hmac.required | quote }}
+            - name: AETUS_KAFKA_BOOTSTRAP_SERVERS
+              value: {{ include "aetus.kafkaBootstrap" . | quote }}
+            - name: AETUS_KAFKA_TOPIC
+              value: device.raw.v1
+            - name: AETUS_KAFKA_METRIC_TOPIC
+              value: device.metric.v1
+            - name: AETUS_KAFKA_SIGNAL_FRAME_TOPIC
+              value: device.signal_frame.v1
+            - name: AETUS_KAFKA_CONNECT_URL
+              value: {{ include "aetus.kafkaConnectUrl" . | quote }}
+            - name: AETUS_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: postgres-dsn
+            - name: AETUS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: admin-password
+            - name: AETUS_ALLOWED_SOURCE_CIDRS
+              value: {{ .Values.ingest.allowedSourceCidrs | quote }}
+            - name: AETUS_DEVICE_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: device-tokens
+            - name: AETUS_ALLOWLIST_DEVICE_IDS
+              value: {{ .Values.ingest.allowlistDeviceIds | quote }}
+            - name: AETUS_ALLOWED_HARDWARE_IDS
+              value: {{ .Values.ingest.allowedHardwareIds | quote }}
+            - name: AETUS_CONTROL_DB_BACKEND
+              value: {{ .Values.ingest.controlDb.backend | quote }}
+            - name: AETUS_CONTROL_DB_PATH
+              value: {{ .Values.ingest.controlDb.path | quote }}
+            - name: AETUS_CONTROL_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetus.secretName" . }}
+                  key: postgres-dsn
+            - name: AETUS_CONTROL_DB_SCHEMA
+              value: {{ .Values.ingest.controlDb.schema | quote }}
+            - name: AETUS_CONTROL_DB_BACKUP_DIR
+              value: {{ .Values.ingest.controlDb.backupDir | quote }}
+            - name: AETUS_CONTROL_DB_BACKUP_INTERVAL_SECONDS
+              value: {{ .Values.ingest.controlDb.backupIntervalSeconds | quote }}
+            - name: AETUS_CONTROL_DB_BACKUP_RETENTION_COUNT
+              value: {{ .Values.ingest.controlDb.backupRetentionCount | quote }}
+            - name: AETUS_HOST
+              value: 0.0.0.0
+            - name: AETUS_PORT
+              value: "8000"
+          readinessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.ingest.resources | nindent 12 }}
+          volumeMounts:
+            - name: control-data
+              mountPath: /data
+      volumes:
+        - name: control-data
+          emptyDir: {}
+{{- end }}

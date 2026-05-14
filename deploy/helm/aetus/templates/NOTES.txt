@@ -1,0 +1,18 @@
+AETUS has been rendered.
+
+Default service endpoints inside the cluster:
+  Ingest API:  http://{{ include "aetus.fullname" . }}-ingest-api:{{ .Values.ingest.service.port }}
+  Query API:   http://{{ include "aetus.fullname" . }}-query-api:{{ .Values.query.service.port }}
+  Anomaly API: http://{{ include "aetus.fullname" . }}-anomaly-api:{{ .Values.anomaly.api.service.port }}
+
+If PostgreSQL is external, initialize the schema before ingesting data:
+  psql "$AETUS_POSTGRES_DSN" -f services/postgres/initdb/00-base.sql
+  psql "$AETUS_POSTGRES_DSN" -f services/postgres/initdb/20-anomaly.sql
+
+For TimescaleDB deployments, also apply:
+  psql "$AETUS_POSTGRES_DSN" -f services/postgres/initdb/10-timescale.sql
+
+Port-forward examples:
+  kubectl port-forward svc/{{ include "aetus.fullname" . }}-ingest-api 18000:{{ .Values.ingest.service.port }}
+  kubectl port-forward svc/{{ include "aetus.fullname" . }}-query-api 18001:{{ .Values.query.service.port }}
+  kubectl port-forward svc/{{ include "aetus.fullname" . }}-anomaly-api 18002:{{ .Values.anomaly.api.service.port }}

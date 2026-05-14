@@ -27,6 +27,8 @@
   ·
   <a href="frontend/anomaly-panel">Anomaly Panel</a>
   ·
+  <a href="deploy/helm/aetus">Helm Chart</a>
+  ·
   <a href="CONTRIBUTING.md">Contributing</a>
   ·
   <a href="SECURITY.md">Security</a>
@@ -121,6 +123,8 @@ Detailed Kafka topic, staging table, trigger, and retention design lives in `doc
 
 ```text
 compose/                    # Docker Compose stack for E2E testing
+deploy/
+  helm/aetus/               # Minimal Kubernetes Helm chart using GHCR images
 clients/
   python-ingest/            # Python protobuf ingest client SDK
   rust-ingest/              # Rust protobuf ingest client SDK
@@ -179,6 +183,18 @@ Published container images are available from GitHub Container Registry after th
 - `ghcr.io/donghoonpark/aetus-postgres:<tag>`
 
 The workflow publishes `main`, `sha-<commit>`, release tag, and `latest` tags. Pull requests build images without pushing them.
+
+### Kubernetes sample deployment
+
+The sample Helm chart uses the published GHCR images by default and keeps PostgreSQL external by default so it can map to a VM, physical database server, or separately operated TimescaleDB:
+
+```bash
+helm upgrade --install aetus ./deploy/helm/aetus \
+  --namespace aetus --create-namespace \
+  --set secrets.postgresDsn='postgresql://aetus:change-me@10.0.0.10:5432/aetus'
+```
+
+See [deploy/helm/aetus](deploy/helm/aetus) and [docs/12-kubernetes-helm.md](docs/12-kubernetes-helm.md) for external DB schema initialization, in-cluster dev PostgreSQL, and resource defaults.
 
 ### 2. Run backend tests
 

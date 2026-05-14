@@ -339,56 +339,32 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     subgraph K8S["Kubernetes Cluster"]
-        subgraph NS1["namespace: ingest"]
-            ING["fastapi-ingest deployment"]
-            HPA1["HPA"]
-            SVC1["ClusterIP Service"]
-        end
-
-        subgraph NS2["namespace: stream"]
-            K1["Kafka broker(s)"]
-            K2["Kafka operator / controller"]
-        end
-
-        subgraph NS3["namespace: processing"]
-            KC["kafka-connect deployment"]
-            HPA2["HPA"]
-        end
-
-        subgraph NS4["namespace: data"]
-            PG1["PostgreSQL primary"]
-            PGB["pgBouncer (optional)"]
-            RDS["Redis cache"]
-        end
-
-        subgraph NS5["namespace: query"]
-            QAPI["query-api deployment"]
-            HPA3["HPA"]
-            QSvc["ClusterIP Service"]
-        end
-
-        subgraph NS6["namespace: anomaly"]
-            ANAPI["anomaly-api container"]
-            ANWORK["anomaly-worker container"]
-            ANDISP["anomaly-dispatcher container"]
-            ASvc["ClusterIP Service"]
-        end
-
-        subgraph NS7["namespace: frontend"]
-            VIEW["stream-viewer host app"]
-            APV["anomaly-panel host app"]
-        end
+        ING["ingest-api Deployment + Service"]
+        K1["Kafka Deployment<br/>single-node sample or external Kafka"]
+        KC["Kafka Connect Deployment"]
+        CINIT["connector-init Job"]
+        QAPI["query-api Deployment + Service"]
+        RDS["Redis Deployment<br/>query cache"]
+        ANAPI["anomaly-api Deployment + Service"]
+        ANWORK["anomaly-worker Deployment"]
+        ANDISP["anomaly-dispatcher Deployment"]
     end
 
+    PG1["External PostgreSQL / TimescaleDB<br/>VM, physical host, managed DB<br/>or optional in-cluster dev StatefulSet"]
+    VIEW["stream-viewer host app"]
+    APV["anomaly-panel host app"]
+
     ING --> K1
-    KC --> K1
-    KC --> PGB
-    PGB --> PG1
-    QAPI --> PGB
+    K1 --> KC
+    CINIT --> KC
+    KC --> PG1
+    QAPI --> PG1
     QAPI --> RDS
-    ANAPI --> PGB
-    ANWORK --> PGB
-    ANDISP --> PGB
-    VIEW --> QSvc
-    APV --> ASvc
+    ANAPI --> PG1
+    ANWORK --> PG1
+    ANDISP --> PG1
+    VIEW --> QAPI
+    APV --> ANAPI
 ```
+
+샘플 Helm chart는 `deploy/helm/aetus`에 있으며, GHCR 이미지를 기본으로 사용한다. PostgreSQL은 외부 VM/물리 머신/별도 DB 플랫폼을 기본 운영 경로로 열어두고, 작은 개발 클러스터에서는 `postgres.enabled=true`로 in-cluster StatefulSet을 켤 수 있다.

@@ -147,17 +147,17 @@ FastAPI 스타일의 OpenAPI/validation 편의성은 `utoipa`, `serde`, request 
 
 ## Pod 구성
 
-초기 Kubernetes 구성:
+초기 Kubernetes 구성은 하나의 Rust image를 세 개의 deployment로 실행한다. API와 worker/dispatcher를 같은 Pod에 묶는 안도 가능하지만, 현재 Helm chart는 장애 격리와 replica 조절을 위해 분리 deployment를 기본으로 둔다.
 
 ```text
-Deployment: anomaly
-  Pod:
-    container: anomaly-api
-      command: aetus-anomaly api
-    container: anomaly-worker
-      command: aetus-anomaly worker
-    container: webhook-dispatcher
-      command: aetus-anomaly dispatcher
+Deployment: anomaly-api
+  command: aetus-anomaly api
+
+Deployment: anomaly-worker
+  command: aetus-anomaly worker
+
+Deployment: anomaly-dispatcher
+  command: aetus-anomaly dispatcher
 ```
 
 공통 env:
