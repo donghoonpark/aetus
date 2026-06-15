@@ -801,6 +801,37 @@ static esp_err_t parse_unix_time_ns(const char *body, uint64_t *unix_time_ns)
     return ESP_OK;
 }
 
+#ifndef CONFIG_AETUS_TEST_NO_NETWORK
+static esp_err_t perform_http_request(
+    esp_http_client_handle_t client,
+    int *status_code,
+    int *content_length
+)
+{
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        /* Leave response metadata invalid on transport failure so callers do not
+         * touch esp_http_client response accessors when no response was received.
+         */
+        if (status_code != NULL) {
+            *status_code = -1;
+        }
+        if (content_length != NULL) {
+            *content_length = -1;
+        }
+        return err;
+    }
+
+    if (status_code != NULL) {
+        *status_code = esp_http_client_get_status_code(client);
+    }
+    if (content_length != NULL) {
+        *content_length = esp_http_client_get_content_length(client);
+    }
+    return ESP_OK;
+}
+#endif
+
 static esp_err_t fetch_server_time_ns(aetus_ctx_t *ctx, uint64_t *unix_time_ns)
 {
 #ifdef CONFIG_AETUS_TEST_HOOKS
@@ -844,8 +875,8 @@ static esp_err_t fetch_server_time_ns(aetus_ctx_t *ctx, uint64_t *unix_time_ns)
     esp_http_client_set_header(client, "X-Device-Id", ctx->config.device_id);
     esp_http_client_set_header(client, "Authorization", authorization);
 
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
+    int status = -1;
+    esp_err_t err = perform_http_request(client, &status, NULL);
     esp_http_client_cleanup(client);
 
     if (err != ESP_OK) {
@@ -1115,9 +1146,9 @@ static esp_err_t post_payload(aetus_ctx_t *ctx, const uint8_t *payload, size_t p
     }
     esp_http_client_set_post_field(client, (const char *)payload, payload_size);
 
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    int content_length = esp_http_client_get_content_length(client);
+    int status = -1;
+    int content_length = -1;
+    esp_err_t err = perform_http_request(client, &status, &content_length);
     esp_http_client_cleanup(client);
 
     if (err != ESP_OK) {
@@ -1849,6 +1880,16 @@ void aetus_test_get_runtime_hooks(aetus_test_runtime_hooks_t *hooks)
         return;
     }
     *hooks = s_test_runtime_hooks;
+}
+
+size_t aetus_test_get_pending_queue_count(void)
+{
+    return s_ctx.queue == NULL ? 0U : (size_t)uxQueueMessagesWaiting(s_ctx.queue);
+}
+
+uint64_t aetus_test_get_sequence(void)
+{
+    return s_ctx.sequence;
 }
 #endif
 
